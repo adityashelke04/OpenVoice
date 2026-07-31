@@ -1,0 +1,38 @@
+# Rust
+/target
+**/target
+Cargo.lock.bak
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Python sidecar
+.venv/
+__pycache__/
+*.pyc
+
+# Models & user data (never commit weights)
+/models/
+*.bin
+*.onnx
+*.ct2
+
+# Local dev
+.env
+.env.local
+*.log
+/fixtures/audio/*.wav
+!/fixtures/audio/.gitkeep
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json

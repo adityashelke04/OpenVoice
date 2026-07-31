@@ -1,0 +1,22 @@
+[package]
+name = "ov-asr"
+description = "OpenVoice speech recognition: supervises the faster-whisper sidecar over newline-delimited JSON."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ov-core.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hound = "3.5"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

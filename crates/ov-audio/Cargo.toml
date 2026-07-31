@@ -1,0 +1,21 @@
+[package]
+name = "ov-audio"
+description = "OpenVoice audio capture: WASAPI via cpal, downmix and resample to 16 kHz mono."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ov-core.workspace = true
+tracing.workspace = true
+cpal = "0.15"
+rubato = "0.15"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

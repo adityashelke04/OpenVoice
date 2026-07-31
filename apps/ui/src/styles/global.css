@@ -1,0 +1,94 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--panel-900);
+  color: var(--legend);
+  font-family: var(--font-legend);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* The overlay window is transparent: the OS composites the capsule over whatever
+   the user is actually working in. */
+body[data-window="overlay"] {
+  background: transparent;
+  overflow: hidden;
+}
+
+/* Focus is never removed. 1px signal-green reads against every panel tone. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 1px solid var(--signal-green);
+  outline-offset: 2px;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+::selection {
+  background: var(--seam-lit);
+  color: #fff;
+}
+
+/* Scrollbars milled into the panel rather than floating over it. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--panel-900);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--panel-600);
+  border: 3px solid var(--panel-900);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--panel-500);
+}
+
+/* Development-only harness for reviewing the overlay in context. */
+.preview {
+  position: relative;
+  height: 100%;
+  background: #101418;
+  display: grid;
+  place-items: end center;
+  padding: 0 0 56px;
+}
+
+.preview-code {
+  position: absolute;
+  inset: 32px 32px auto 32px;
+  margin: 0;
+  color: #39434c;
+  font-family: var(--font-data);
+  font-size: 12px;
+  line-height: 1.7;
+  pointer-events: none;
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

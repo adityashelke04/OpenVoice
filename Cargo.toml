@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+# Crates are added here as they land, so `cargo check --workspace` is always green.
+# Planned, in order: ov-audio, ov-asr, ov-input, ov-store, ov-cli, ov-app.
+members = [
+    "crates/ov-core",
+    "crates/ov-format",
+    "crates/ov-input",
+    "crates/ov-audio",
+    "crates/ov-asr",
+    "crates/ov-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+repository = "https://github.com/adityashelke04/OpenVoice"
+authors = ["Aditya Shelke <adityashelke04@gmail.com>"]
+
+[workspace.dependencies]
+# Internal
+ov-core = { path = "crates/ov-core" }
+ov-format = { path = "crates/ov-format" }
+ov-audio = { path = "crates/ov-audio" }
+ov-asr = { path = "crates/ov-asr" }
+ov-input = { path = "crates/ov-input" }
+ov-store = { path = "crates/ov-store" }
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serde / config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Misc
+time = { version = "0.3", features = ["formatting", "macros"] }
+
+# Test-only
+insta = { version = "1", features = ["yaml"] }
+proptest = "1"
+pretty_assertions = "1"
+
+[profile.dev]
+opt-level = 1          # keep audio/DSP tolerable in debug builds
+
+[profile.dev.package."*"]
+opt-level = 3          # dependencies always optimized; huge win for ASR/DSP crates
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

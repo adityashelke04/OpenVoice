@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features
+
+      - name: Test
+        run: cargo test --workspace --all-features
+
+      - name: Docs build without warnings
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  purity:
+    name: Domain purity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # ov-core and ov-format must not depend on the OS, the filesystem, the
+      # network, an audio library, a GUI toolkit, or an async runtime. wasm32 is a
+      # target where none of those can link, so this compiles only if the hexagonal
+      # boundary is intact. See docs/adr/0001-hexagonal-architecture.md.
+      #
+      # If this job fails, do not add a feature flag to make it pass. Move the
+      # offending code into an adapter crate -- that is the whole point.
+      - name: Core crates must compile for wasm32
+        run: cargo check -p ov-core -p ov-format --target wasm32-unknown-unknown
+
+  no-network:
+    name: No network in the hot path
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # "Local-first, no telemetry" is a product promise. A promise that is only
+      # written in a README rots the first time someone adds a convenient
+      # dependency. This makes it a build failure instead.
+      - name: Assert no HTTP client outside the model downloader
+        run: bash scripts/check-no-network.sh
+
+  deny:
+    name: Licenses and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check bans licenses advisories sources
+
+  sidecar:
+    name: ASR sidecar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Lint
+        working-directory: sidecar
+        run: uvx ruff check .
+      - name: Format
+        working-directory: sidecar
+        run: uvx ruff format --check .
+      - name: Test
+        working-directory: sidecar
+        # Protocol and hint-packing tests only. Model inference is exercised
+        # nightly, not per-PR: pulling weights on every push would make CI slower
+        # than the review it is meant to support.
+        run: uv run --with pytest pytest -q

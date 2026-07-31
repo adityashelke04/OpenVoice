@@ -1,0 +1,23 @@
+[package]
+name = "ov-core"
+description = "OpenVoice domain core: session state machine, ports, events, config. No OS dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true }
+tracing.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
