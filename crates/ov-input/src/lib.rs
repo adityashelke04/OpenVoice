@@ -24,7 +24,7 @@ mod inject;
 #[cfg(windows)]
 pub use foreground::WinForeground;
 #[cfg(windows)]
-pub use hook::WinHotkeyListener;
+pub use hook::{enable_key_debug, WinHotkeyListener};
 #[cfg(windows)]
 pub use inject::{mode_for, WinTextSink};
 

@@ -40,6 +40,13 @@ struct Cli {
     #[arg(long, global = true)]
     allow_download: bool,
 
+    /// Seed the model's prompt with the vocabulary. Off by default, and measured
+    /// to make output worse: a prompt full of camelCase identifiers teaches the
+    /// model to weld ordinary spoken words together. See ov-format's dictionary
+    /// module docs for the A/B result.
+    #[arg(long, global = true)]
+    hint: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -71,6 +78,9 @@ enum Command {
     Devices,
     /// Check that the environment is ready.
     Doctor,
+    /// Print every keystroke the hook sees. Use this when dictation does nothing:
+    /// it separates "the hotkey is not reaching us" from every other cause.
+    Keytest,
 }
 
 fn main() -> std::process::ExitCode {
@@ -99,6 +109,7 @@ fn run(cli: &Cli) -> Result<(), String> {
         Command::Devices => cmd_devices(),
         Command::Doctor => cmd_doctor(cli),
         Command::Transcribe { path, profile } => cmd_transcribe(cli, path, profile),
+        Command::Keytest => cmd_keytest(),
         Command::Dictate => cmd_dictate(cli),
     }
 }
@@ -202,6 +213,52 @@ fn cmd_doctor(cli: &Cli) -> Result<(), String> {
     Ok(())
 }
 
+/* -- keytest ----------------------------------------------------------------- */
+
+fn key_name(vk: u32) -> &'static str {
+    match vk {
+        0xA2 => "LEFT CTRL",
+        0xA3 => "RIGHT CTRL  <-- the dictation key",
+        0xA0 => "LEFT SHIFT",
+        0xA1 => "RIGHT SHIFT",
+        0xA4 => "LEFT ALT",
+        0xA5 => "RIGHT ALT",
+        0x14 => "CAPS LOCK",
+        0x1B => "ESCAPE",
+        0x20 => "SPACE",
+        _ => "",
+    }
+}
+
+fn cmd_keytest() -> Result<(), String> {
+    let rx = ov_input::enable_key_debug();
+    let listener = ov_input::WinHotkeyListener::new(Config::default().chord);
+
+    // The port's own events are printed too, so this checks the whole chain:
+    // hook -> callback -> channel -> dispatch thread.
+    listener
+        .start(Arc::new(|event| println!("    >>> HOTKEY EVENT: {event:?}")))
+        .map_err(|e| format!("could not install the keyboard hook: {e}"))?;
+
+    println!("Keyboard hook installed. Press some keys — RIGHT CTRL especially.");
+    println!("Ctrl+C to quit.\n");
+
+    for (vk, down, injected) in rx {
+        let tag = if injected { " (injected)" } else { "" };
+        println!(
+            "  vk=0x{vk:02X} {:<4}{}{}",
+            if down { "down" } else { "up" },
+            tag,
+            if key_name(vk).is_empty() {
+                String::new()
+            } else {
+                format!("  {}", key_name(vk))
+            }
+        );
+    }
+    Ok(())
+}
+
 /* -- transcribe a file ------------------------------------------------------- */
 
 fn cmd_transcribe(cli: &Cli, path: &PathBuf, profile: &str) -> Result<(), String> {
@@ -216,7 +273,7 @@ fn cmd_transcribe(cli: &Cli, path: &PathBuf, profile: &str) -> Result<(), String
 
     let started = Instant::now();
     let hint = DecodeHint {
-        vocabulary: formatter.hint_terms().to_vec(),
+        vocabulary: if cli.hint { formatter.hint_terms().to_vec() } else { Vec::new() },
         language: Some("en".into()),
     };
     let transcript = transcriber
@@ -242,6 +299,7 @@ struct Runtime {
     formatters: Vec<(String, Formatter)>,
     captured: Mutex<Option<Pcm16k>>,
     paste_threshold: usize,
+    hint: bool,
     start: Instant,
 }
 
@@ -282,6 +340,7 @@ fn cmd_dictate(cli: &Cli) -> Result<(), String> {
         formatters,
         captured: Mutex::new(None),
         paste_threshold: config.paste_threshold_chars,
+        hint: cli.hint,
         start: Instant::now(),
     });
 
@@ -389,7 +448,11 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                     return;
                 };
                 let hint = DecodeHint {
-                    vocabulary: rt.formatters[0].1.hint_terms().to_vec(),
+                    vocabulary: if rt.hint {
+                        rt.formatters[0].1.hint_terms().to_vec()
+                    } else {
+                        Vec::new()
+                    },
                     language: Some("en".into()),
                 };
                 match rt.transcriber.transcribe(&audio, &hint) {

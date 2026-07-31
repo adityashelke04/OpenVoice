@@ -4,15 +4,28 @@
 //! "coup CTL", and `nginx` as "engine X". These are *phonetic* errors, so a literal
 //! `HashMap<&str, &str>` catches only the spellings someone happened to enumerate.
 //!
-//! Two mechanisms address this:
+//! This dictionary repairs the transcript after the fact, and — as of a measured
+//! A/B test on 2026-08-01 — it is the *primary* mechanism, not a safety net.
 //!
-//! 1. **This dictionary**, which repairs the transcript after the fact.
-//! 2. **Decode hints** ([`ov_core::ports::DecodeHint`]), which feed the same terms
-//!    into the model's initial prompt so it gets them right in the first place.
+//! The original design said the opposite. Feeding the same terms into Whisper's
+//! `initial_prompt` was supposed to be strictly better, on the reasoning that the
+//! decoder still has acoustic evidence that post-processing has thrown away. That
+//! reasoning was sound and the conclusion was wrong. Same audio, same model, the
+//! hint being the only difference:
 //!
-//! The second is strictly better, because the decoder still has the acoustic
-//! evidence that post-processing has thrown away. The dictionary is the safety net,
-//! not the primary mechanism.
+//! ```text
+//! with hint:     camelCaseUserProfile ==NewUserProfile open paren close paren
+//! without hint:  camel case user profile equals new user profile open paren close paren
+//! ```
+//!
+//! A prompt full of camelCase identifiers teaches the model to *write* camelCase,
+//! so it silently joins ordinary spoken words — including the very command words
+//! ("camel case", "equals") the formatter needs to see. The damage is worse than
+//! the problem it solves, because this dictionary can fix `use effect` anyway,
+//! whereas nothing downstream can recover words the model already welded together.
+//!
+//! Hints remain available for genuinely unguessable proper nouns, but they are off
+//! by default. See `ov_core::ports::DecodeHint`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -78,6 +91,18 @@ impl Dictionary {
                     continue;
                 }
                 max_words = max_words.max(norm.split(' ').count());
+
+                // Also index the space-free form. Whisper often returns an
+                // identifier already welded together but miscased -- `UseEffect`
+                // for `useEffect` -- and without this the dictionary sees one
+                // unknown token and leaves the wrong casing in place.
+                let joined = norm.replace(' ', "");
+                if joined != norm {
+                    by_phrase
+                        .entry(joined)
+                        .or_insert_with(|| e.written.clone());
+                }
+
                 // First writer wins, so earlier (user-defined) entries take
                 // precedence over later (builtin) ones.
                 by_phrase.entry(norm).or_insert_with(|| e.written.clone());
@@ -247,6 +272,17 @@ mod tests {
             d.max_words() <= 6,
             "window must stay small enough to be cheap"
         );
+    }
+
+    #[test]
+    fn resolves_identifiers_the_model_already_welded_together() {
+        // Whisper returns `UseEffect` as a single miscased token. Without the
+        // space-free index this leaves the wrong casing in the transcript.
+        let d = dict();
+        assert_eq!(d.lookup(&["useeffect".into()]), Some("useEffect"));
+        assert_eq!(d.lookup(&["usestate".into()]), Some("useState"));
+        // The spaced form still works.
+        assert_eq!(d.lookup(&["use".into(), "effect".into()]), Some("useEffect"));
     }
 
     #[test]

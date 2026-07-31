@@ -254,18 +254,37 @@ one** — retrofitting latency instrumentation into a shipped app never happens.
 Ship with `base.en` downloadable in seconds so the very first run works within 30 s
 of install, then prompt to upgrade to `large-v3-turbo` in the background.
 
-### 5.2 Decode hints — the cheapest accuracy win available
+### 5.2 Decode hints — tried, measured, and turned off
 
-Whisper accepts an `initial_prompt` (~224 tokens) that biases decoding. We populate it
-per-session with:
+> **Reversed on 2026-08-01 by measurement.** This section originally argued that
+> seeding Whisper's `initial_prompt` with the user's vocabulary was "strictly better
+> than fixing them afterwards", because the decoder still has acoustic evidence that
+> post-processing has discarded. The reasoning was sound. The result was not.
 
-1. Top-N terms from the user dictionary, ranked by recency × frequency.
-2. Terms scraped from the foreground app's window title (e.g. a filename, a repo name).
-3. A short style exemplar matching the active profile.
+A/B on identical audio and model, the hint being the only variable:
 
-This makes `kubectl`, `useMemo`, `tanstack`, and the user's own variable names come
-out right **at decode time**, which is strictly better than fixing them afterwards
-with fuzzy string replacement. Budgeted at 224 tokens with a deterministic packer.
+```text
+with hint:     camelCaseUserProfile ==NewUserProfile open paren close paren
+without hint:  camel case user profile equals new user profile open paren close paren
+```
+
+A prompt full of camelCase identifiers does not merely teach the model those words —
+it teaches it that **this speaker writes camelCase**, so it welds ordinary spoken
+words together. That destroys the voice commands ("camel case", "equals") the
+formatting pipeline depends on, and nothing downstream can recover words the model
+has already joined.
+
+The benefit it was supposed to buy is one the dictionary already delivers: `use
+effect` → `useEffect` is a post-processing fix, and a reliable one. So the mechanism
+loses on both sides of the trade.
+
+**Decision: hints are off by default.** The plumbing stays (`DecodeHint`, `--hint`)
+because genuinely unguessable proper nouns may still justify it, but it is opt-in and
+must be re-measured before it is ever made default again.
+
+**The general lesson, worth keeping:** this was a plausible, well-argued design that
+survived review and was written into three files before anyone ran it. It took one
+A/B test to overturn. Prefer the experiment to the argument.
 
 ### 5.3 Model manager
 

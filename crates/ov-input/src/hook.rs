@@ -52,8 +52,24 @@ static CHORD_DOWN: AtomicBool = AtomicBool::new(false);
 /// "system" fn` and cannot capture state.
 static TX: OnceLock<Sender<HotkeyEvent>> = OnceLock::new();
 
+/// Diagnostic tap: every key event, including injected ones, as
+/// `(virtual_key, is_down, injected)`. Used by `ov keytest` to answer the single
+/// most useful question when dictation "does nothing" — is the hook receiving
+/// keystrokes at all, or is the problem further down the pipeline?
+static DEBUG_TX: OnceLock<Sender<(u32, bool, bool)>> = OnceLock::new();
+
 /// Handle to the installed hook, kept so it can be removed on shutdown.
 static HOOK: Mutex<Option<isize>> = Mutex::new(None);
+
+/// Enable the diagnostic tap before starting the listener.
+///
+/// Returns a receiver of `(virtual_key, is_down, injected)` for every keystroke.
+/// Call this *before* [`HotkeyListener::start`].
+pub fn enable_key_debug() -> std::sync::mpsc::Receiver<(u32, bool, bool)> {
+    let (tx, rx) = channel();
+    let _ = DEBUG_TX.set(tx);
+    rx
+}
 
 /// `HotkeyListener` backed by `SetWindowsHookEx(WH_KEYBOARD_LL)`.
 #[derive(Default)]
@@ -169,18 +185,27 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     // points to a valid KBDLLHOOKSTRUCT for the duration of this call.
     let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
 
-    // Our own SendInput comes back through here. Responding to it would make the
-    // app react to its own typing.
-    if info.flags & LLKHF_INJECTED != windows::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT_FLAGS(0)
-    {
-        return CallNextHookEx(None, code, wparam, lparam);
-    }
+    let injected = info.flags
+        & windows::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT_FLAGS(LLKHF_INJECTED.0)
+        != windows::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT_FLAGS(0);
 
     let vk = info.vkCode;
     let bound = BOUND_VK.load(Ordering::Relaxed);
     let msg = wparam.0 as u32;
     let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
     let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
+
+    if let Some(tx) = DEBUG_TX.get() {
+        if is_down || is_up {
+            let _ = tx.send((vk, is_down, injected));
+        }
+    }
+
+    // Our own SendInput comes back through here. Responding to it would make the
+    // app react to its own typing.
+    if injected {
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
 
     if vk == bound {
         if is_down {

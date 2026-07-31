@@ -109,12 +109,25 @@ SLOW_LOAD_WARN_MS = 15_000
 # default fits comfortably alongside a desktop compositor and a browser, which is
 # the realistic condition this app runs under -- not a benchmark machine with an
 # idle GPU.
+# compute_type is float16 rather than int8_float16 on CUDA, from measurement on the
+# reference GPU: float16 decoded a median 623 ms against int8_float16's 661 ms and
+# loaded in half the time (3.7 s vs 7.2 s), with byte-identical transcripts. Int8
+# weights have to be dequantized every forward pass, and on a GPU that costs more
+# than the memory bandwidth it saves. `fallback_compute` is used if the larger
+# weights will not fit -- a 4 GB laptop GPU also has a desktop compositor and a
+# browser on it.
 MODEL_PRESETS: dict[str, dict[str, Any]] = {
     "base.en": {"repo": "base.en", "compute_type": "int8", "vram_mb": 0},
-    "small.en": {"repo": "small.en", "compute_type": "int8_float16", "vram_mb": 600},
+    "small.en": {
+        "repo": "small.en",
+        "compute_type": "float16",
+        "fallback_compute": "int8_float16",
+        "vram_mb": 600,
+    },
     "large-v3-turbo": {
         "repo": "deepdml/faster-whisper-large-v3-turbo-ct2",
-        "compute_type": "int8_float16",
+        "compute_type": "float16",
+        "fallback_compute": "int8_float16",
         "vram_mb": 1600,
     },
 }
@@ -176,21 +189,37 @@ class Engine:
 
         device, compute_type = self._choose_device()
         started = time.perf_counter()
-        with guard_stdout():
-            self._model = WhisperModel(
-                self.preset["repo"],
-                device=device,
-                compute_type=compute_type,
-                download_root=os.environ.get("OPENVOICE_MODEL_DIR") or None,
-            )
+        root = os.environ.get("OPENVOICE_MODEL_DIR") or None
+
+        def build(ct: str) -> Any:
+            with guard_stdout():
+                return WhisperModel(
+                    self.preset["repo"], device=device, compute_type=ct, download_root=root
+                )
+
+        try:
+            self._model = build(compute_type)
+        except Exception as exc:  # noqa: BLE001
+            fallback = self.preset.get("fallback_compute")
+            if not fallback or fallback == compute_type:
+                raise
+            # Almost always out of VRAM. Smaller weights beat no dictation.
+            log(f"{compute_type} failed ({str(exc)[:120]}); retrying with {fallback}")
+            compute_type = fallback
+            self._model = build(compute_type)
         self._resolved_device = device
         took = int((time.perf_counter() - started) * 1000)
         log(f"loaded {self.model_name} on {device}/{compute_type} in {took}ms")
         if took > SLOW_LOAD_WARN_MS:
+            # Read the environment rather than the import-time flag: --allow-download
+            # flips this after import, and reporting the stale value tells the reader
+            # the exact opposite of what happened.
+            offline = os.environ.get("HF_HUB_OFFLINE") == "1"
             log(
                 f"load took {took}ms, which is far above the ~1300ms expected from a "
-                "warm cache. The usual cause is huggingface_hub reaching the network; "
-                f"offline mode is currently {'on' if _OFFLINE else 'OFF'}."
+                "warm cache. Expected while downloading weights; otherwise the usual "
+                f"cause is huggingface_hub reaching the network (offline mode is "
+                f"{'on' if offline else 'OFF'})."
             )
 
     def _choose_device(self) -> tuple[str, str]:
