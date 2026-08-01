@@ -60,7 +60,10 @@ impl SqliteStore {
         schema::migrate(&conn)?;
 
         tracing::info!(path = %path.display(), "history store ready");
-        Ok(Self { conn: Mutex::new(conn), path })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            path,
+        })
     }
 
     /// Where the database lives, for the "open data folder" action.
@@ -230,7 +233,10 @@ impl HistoryStore for SqliteStore {
             .map_err(|e| Error::Storage(format!("search: {e}")))?;
 
         let rows = stmt
-            .query_map(params![fts_query(query), limit as i64], schema::row_to_utterance)
+            .query_map(
+                params![fts_query(query), limit as i64],
+                schema::row_to_utterance,
+            )
             .map_err(|e| Error::Storage(format!("search: {e}")))?;
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -247,7 +253,10 @@ impl HistoryStore for SqliteStore {
 
         let conn = self.conn.lock().expect("store mutex");
         let n = conn
-            .execute("DELETE FROM utterance WHERE created_at < ?1", params![cutoff as i64])
+            .execute(
+                "DELETE FROM utterance WHERE created_at < ?1",
+                params![cutoff as i64],
+            )
             .map_err(|e| Error::Storage(format!("purge: {e}")))?;
 
         if n > 0 {
@@ -278,7 +287,13 @@ fn fts_query(input: &str) -> String {
     terms
         .iter()
         .enumerate()
-        .map(|(i, t)| if i == last { format!("\"{t}\"*") } else { format!("\"{t}\"") })
+        .map(|(i, t)| {
+            if i == last {
+                format!("\"{t}\"*")
+            } else {
+                format!("\"{t}\"")
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -298,8 +313,7 @@ mod tests {
     fn store() -> SqliteStore {
         // In-memory databases are per-connection, and the store holds exactly one,
         // so this is a real database with no file to clean up.
-        let s = SqliteStore::open(":memory:").expect("open");
-        s
+        SqliteStore::open(":memory:").expect("open")
     }
 
     fn utt(text: &str, app: &str, status: &str) -> Utterance {
@@ -319,7 +333,8 @@ mod tests {
     #[test]
     fn round_trips_an_utterance() {
         let s = store();
-        s.append(&utt("hello world", "Code.exe", "delivered")).unwrap();
+        s.append(&utt("hello world", "Code.exe", "delivered"))
+            .unwrap();
 
         let rows = s.recent(10).unwrap();
         assert_eq!(rows.len(), 1);
@@ -344,8 +359,10 @@ mod tests {
     #[test]
     fn finds_text_by_word() {
         let s = store();
-        s.append(&utt("the deploy is finished", "slack.exe", "delivered")).unwrap();
-        s.append(&utt("kubectl get pods", "wt.exe", "delivered")).unwrap();
+        s.append(&utt("the deploy is finished", "slack.exe", "delivered"))
+            .unwrap();
+        s.append(&utt("kubectl get pods", "wt.exe", "delivered"))
+            .unwrap();
 
         assert_eq!(s.search("deploy", 10).unwrap().len(), 1);
         assert_eq!(s.search("kubectl", 10).unwrap().len(), 1);
@@ -355,7 +372,8 @@ mod tests {
     #[test]
     fn matches_partial_words_as_you_type() {
         let s = store();
-        s.append(&utt("the deployment finished", "slack.exe", "delivered")).unwrap();
+        s.append(&utt("the deployment finished", "slack.exe", "delivered"))
+            .unwrap();
         // A search box should respond before the word is finished.
         assert_eq!(s.search("depl", 10).unwrap().len(), 1);
     }
@@ -365,7 +383,8 @@ mod tests {
         // Bare AND, quotes and asterisks are FTS5 operators. A person typing into a
         // search box is writing words; none of these may become an error.
         let s = store();
-        s.append(&utt("meeting notes", "Notion.exe", "delivered")).unwrap();
+        s.append(&utt("meeting notes", "Notion.exe", "delivered"))
+            .unwrap();
 
         for q in ["AND", "\"", "*", "NOT OR", "a\"b", "()", "^", "meeting AND"] {
             assert!(s.search(q, 10).is_ok(), "query {q:?} must not error");
@@ -380,7 +399,8 @@ mod tests {
         let mut u = utt("", "Discord.exe", "too_short");
         u.raw_text = String::new();
         s.append(&u).unwrap();
-        s.append(&utt("real text", "Code.exe", "delivered")).unwrap();
+        s.append(&utt("real text", "Code.exe", "delivered"))
+            .unwrap();
 
         assert_eq!(s.recent(10).unwrap().len(), 1);
         assert_eq!(s.totals().unwrap().sessions, 1);
@@ -389,13 +409,19 @@ mod tests {
     #[test]
     fn totals_count_only_delivered_sessions() {
         let s = store();
-        s.append(&utt("one two three", "Code.exe", "delivered")).unwrap();
-        s.append(&utt("four five", "Code.exe", "clipboard_fallback")).unwrap();
-        s.append(&utt("ignored entirely", "Code.exe", "asr_failed")).unwrap();
+        s.append(&utt("one two three", "Code.exe", "delivered"))
+            .unwrap();
+        s.append(&utt("four five", "Code.exe", "clipboard_fallback"))
+            .unwrap();
+        s.append(&utt("ignored entirely", "Code.exe", "asr_failed"))
+            .unwrap();
 
         let t = s.totals().unwrap();
         assert_eq!(t.sessions, 2);
-        assert_eq!(t.words, 5, "failed sessions must not inflate the word count");
+        assert_eq!(
+            t.words, 5,
+            "failed sessions must not inflate the word count"
+        );
         assert_eq!(t.speaking_ms, 4000);
     }
 

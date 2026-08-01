@@ -129,7 +129,10 @@ mod tests {
         let rows = store.recent(10).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].final_text, "Second one");
-        assert_eq!(rows[0].raw_text, "second one", "raw text must survive the import");
+        assert_eq!(
+            rows[0].raw_text, "second one",
+            "raw text must survive the import"
+        );
 
         assert!(!path.exists(), "original is moved aside");
         assert!(path.with_extension("jsonl.imported").exists());
