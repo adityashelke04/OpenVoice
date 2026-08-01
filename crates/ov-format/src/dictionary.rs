@@ -98,9 +98,7 @@ impl Dictionary {
                 // unknown token and leaves the wrong casing in place.
                 let joined = norm.replace(' ', "");
                 if joined != norm {
-                    by_phrase
-                        .entry(joined)
-                        .or_insert_with(|| e.written.clone());
+                    by_phrase.entry(joined).or_insert_with(|| e.written.clone());
                 }
 
                 // First writer wins, so earlier (user-defined) entries take
@@ -282,7 +280,10 @@ mod tests {
         assert_eq!(d.lookup(&["useeffect".into()]), Some("useEffect"));
         assert_eq!(d.lookup(&["usestate".into()]), Some("useState"));
         // The spaced form still works.
-        assert_eq!(d.lookup(&["use".into(), "effect".into()]), Some("useEffect"));
+        assert_eq!(
+            d.lookup(&["use".into(), "effect".into()]),
+            Some("useEffect")
+        );
     }
 
     #[test]

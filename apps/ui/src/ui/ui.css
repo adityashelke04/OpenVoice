@@ -1,0 +1,569 @@
+/* Primitive components. Rules and reasoning live in DESIGN.md §"Component rules".
+ *
+ * Two things hold this system together and are easy to erode:
+ *   1. There are NO shadows. Depth is the surface ladder plus 1px hairlines.
+ *   2. Green appears only on live state, the record action, and focus rings. */
+
+/* ---------------------------------------------------------------- Button -- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: var(--control-h);
+  padding: 0 var(--s-4);
+  border-radius: var(--r-lg);
+  border: 1px solid transparent;
+  font: 500 14px/1 var(--font-sans);
+  white-space: nowrap;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.btn[data-size="sm"] {
+  height: var(--control-h-sm);
+  padding: 0 var(--s-3);
+  font-size: 13px;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Primary is monochrome -- the Raycast/Warp move. Spending the accent on
+   ordinary buttons would waste the only signal that matters. */
+.btn[data-variant="primary"] {
+  background: var(--ink);
+  color: var(--canvas);
+}
+.btn[data-variant="primary"]:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+.btn[data-variant="secondary"] {
+  background: var(--surface-3);
+  color: var(--ink);
+  border-color: var(--hairline-strong);
+}
+.btn[data-variant="secondary"]:hover:not(:disabled) {
+  background: var(--surface-4);
+}
+
+.btn[data-variant="ghost"] {
+  background: transparent;
+  color: var(--body);
+}
+.btn[data-variant="ghost"]:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.btn[data-variant="danger"] {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--hairline-strong);
+}
+.btn[data-variant="danger"]:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+/* The one button allowed to be green: it starts the microphone. */
+.btn[data-variant="record"] {
+  background: var(--live-soft);
+  color: var(--live);
+  border-color: var(--live-dim);
+}
+.btn[data-variant="record"]:hover:not(:disabled) {
+  border-color: var(--live);
+  background: rgb(68 214 44 / 18%);
+}
+
+/* ----------------------------------------------------------------- Input -- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.input,
+.select {
+  height: var(--control-h);
+  padding: 0 var(--s-3);
+  background: var(--surface-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  font: 400 14px/1 var(--font-sans);
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+
+.input::placeholder {
+  color: var(--faint);
+}
+
+.input:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--live);
+  box-shadow: 0 0 0 3px var(--live-ring);
+}
+
+.select {
+  appearance: none;
+  padding-right: var(--s-6);
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- Toggle -- */
+
+.toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex: none;
+  background: var(--surface-4);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-full);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-full);
+  background: var(--mute);
+  transition: transform var(--t-base) var(--ease), background var(--t-fast) var(--ease);
+}
+
+.toggle[data-on="true"] {
+  background: var(--live-soft);
+  border-color: var(--live-dim);
+}
+.toggle[data-on="true"]::after {
+  transform: translateX(16px);
+  background: var(--live);
+}
+
+/* ----------------------------------------------------------------- Badge -- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 20px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-full);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-2);
+  color: var(--mute);
+  font: 500 11px/1 var(--font-sans);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+/* Tone lives in the dot, never in the fill.
+ *
+ * Tinted pill backgrounds with matching borders — green-on-green, amber-on-amber —
+ * are the single most recognisable marker of a generated interface, and they fight
+ * the whole premise of this system: colour is supposed to mean "the microphone is
+ * open", and it cannot mean that if three other things are also coloured.
+ *
+ * The surface and the label stay neutral. A 6px dot carries the state. */
+.badge[data-tone] {
+  background: var(--surface-2);
+  border-color: var(--hairline-strong);
+  color: var(--body);
+}
+.badge[data-tone="live"] .dot {
+  background: var(--live);
+}
+.badge[data-tone="warn"] .dot {
+  background: var(--warn);
+}
+.badge[data-tone="danger"] .dot {
+  background: var(--danger);
+}
+
+/* A live dot, for the badge and the sidebar. Pulses only while recording. */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: currentColor;
+  flex: none;
+}
+
+.dot[data-pulse="true"] {
+  animation: pulse 1.6s var(--ease) infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ------------------------------------------------------------------ Card -- */
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  padding: var(--s-5);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin-bottom: var(--s-4);
+}
+
+/* -------------------------------------------------------------- Stat tile -- */
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-5);
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+}
+
+.stat-value {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.stat-unit {
+  font: 400 13px/1 var(--font-mono);
+  color: var(--mute);
+}
+
+/* ------------------------------------------------------------------- Row -- */
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--s-5);
+  align-items: start;
+  padding: var(--s-4) var(--s-5);
+  border-bottom: 1px solid var(--hairline);
+  transition: background var(--t-fast) var(--ease);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row:hover,
+.row:focus-within {
+  background: var(--surface-1);
+}
+
+.row-actions {
+  display: flex;
+  gap: var(--s-2);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+/* Revealed on hover, but always reachable by keyboard -- hover-only actions
+   that vanish for keyboard users are an accessibility failure, not a style. */
+.row:hover .row-actions,
+.row:focus-within .row-actions {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------ Tabs -- */
+
+.tabs {
+  display: inline-flex;
+  gap: var(--s-1);
+  padding: var(--s-1);
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+}
+
+.tab {
+  height: 26px;
+  padding: 0 var(--s-4);
+  border-radius: var(--r-md);
+  font: 500 13px/1 var(--font-sans);
+  color: var(--mute);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.tab:hover {
+  color: var(--body);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------------- Sidebar -- */
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--s-4);
+  border-left: 2px solid transparent;
+  color: var(--mute);
+  font: 500 13.5px/1 var(--font-sans);
+  text-align: left;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.nav-item:hover {
+  background: var(--surface-1);
+  color: var(--body);
+}
+
+.nav-item[aria-current="page"] {
+  background: var(--surface-2);
+  color: var(--ink);
+  border-left-color: var(--live);
+}
+
+/* ------------------------------------------------------------------- Kbd -- */
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--s-2);
+  background: var(--surface-3);
+  border: 1px solid var(--hairline-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  font: 500 11px/1 var(--font-mono);
+  color: var(--body);
+}
+
+/* ---------------------------------------------------------------- Notice -- */
+
+/* Same rule as the badge: one neutral surface, tone carried by a small marker.
+ *
+ * A tinted alert box is not more legible than a neutral one with a coloured dot —
+ * it is just louder, and it spends the accent budget on chrome. Every notice here
+ * reads on the same surface, so the eye compares text rather than backgrounds. */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+  font: 400 13.5px/1.5 var(--font-sans);
+  color: var(--body);
+}
+
+.notice .dot {
+  width: 7px;
+  height: 7px;
+  background: var(--mute);
+}
+.notice[data-tone="live"] .dot {
+  background: var(--live);
+}
+.notice[data-tone="warn"] .dot {
+  background: var(--warn);
+}
+.notice[data-tone="danger"] .dot {
+  background: var(--danger);
+}
+
+/* -------------------------------------------------------------- Waveform --
+ *
+ * A scrolling seismograph, not an equaliser.
+ *
+ * The difference is everything. An equaliser maps frequency bands to bars, so the
+ * bars jitter in place and the shape means nothing to a person. This holds a rolling
+ * buffer of the last ~1.5 s of loudness: the newest sample enters at the right and
+ * every older one shifts left, so a spoken syllable becomes a *shape that travels*.
+ * You can see the sentence you just said moving across the bar, which is what makes
+ * it feel connected to your voice rather than merely reactive.
+ *
+ * Bars grow from the centre line in both directions (flex `align-items: center`),
+ * giving the mirrored profile of a real waveform. */
+
+.wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Bars are a FIXED 2px wide, never flexed.
+ *
+ * An earlier version used `flex: 1`, so in a wide container each bar stretched to
+ * ~28px and a full border-radius turned it into an oval. A waveform is made of
+ * hairlines; the moment a bar is wider than it is tall at rest, it stops reading as
+ * one.
+ *
+ * Height is driven by `transform: scaleY()` rather than the height property:
+ * transforms are composited on the GPU, so this animates at 60 fps without
+ * touching layout. `transform-origin: center` gives the mirrored profile of a real
+ * waveform for free. There is deliberately NO CSS transition — JavaScript
+ * interpolates every frame, because a transition chasing a 30 Hz signal always
+ * lags and reads as mush. */
+.wave-bar {
+  flex: none;
+  width: 2px;
+  height: 100%;
+  border-radius: var(--r-full);
+  background: var(--live);
+  transform: scaleY(0.05);
+  transform-origin: center;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.wave[data-idle="true"] .wave-bar {
+  background: var(--hairline-strong);
+  transition: background var(--t-base) var(--ease);
+}
+
+/* --------------------------------------------------------------- Flow Bar --
+ *
+ * The only interface visible while dictating, so it is sized to be read in
+ * peripheral vision and ignored the rest of the time. Compact by default; it grows
+ * only while listening, and the growth is itself the signal that it heard you. */
+
+.flowbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 38px;
+  padding: 0 var(--s-4);
+  /* Nearly opaque, and no backdrop-filter.
+   *
+   * `backdrop-filter` on a transparent window samples the *window's* backdrop,
+   * not the desktop behind it — so it blurs nothing, while still forcing a
+   * compositing layer that defeats the window transparency. It was contributing
+   * to the visible rectangle. A solid fill is honest and cheaper. */
+  background: rgb(14 14 16 / 98%);
+  /* Slightly brighter than the app's hairline. This border is the pill's only
+     separation: it fills its window edge to edge, so there is no room for a
+     shadow, and it has to read against a white document as well as a dark one. */
+  border: 1px solid #34343c;
+  border-radius: var(--r-full);
+  /* No shadow.
+   *
+   * The window is now sized to the pill exactly (see Overlay.tsx). Previously it
+   * was 280x52 with a 148px pill inside, and that ~60px of window either side —
+   * kept for the shadow — is precisely the translucent rectangle that was visible
+   * around the bar. Removing the gap removes the artefact, and a shadow clipped at
+   * the window edge would read as a hard line anyway. */
+  transition:
+    border-color var(--t-base) var(--ease);
+  width: 100%;
+  overflow: hidden;
+}
+
+.flowbar[data-live="true"] {
+  border-color: var(--live-dim);
+}
+
+.flowbar-wave {
+  flex: 1;
+  height: 18px;
+  min-width: 0;
+}
+
+.flowbar-idle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.flowbar-time {
+  font: 500 12px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  flex: none;
+}
+
+.flowbar-mic {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--mute);
+  flex: none;
+  transition: background var(--t-fast) var(--ease);
+}
+
+/* No pulse.
+ *
+ * A pulsing dot next to a live waveform is two things competing to say the same
+ * thing, and any re-render restarts the animation mid-cycle — which was the
+ * visible flicker. The waveform already proves the microphone is open, far more
+ * convincingly than a blinking light. */
+.flowbar[data-live="true"] .flowbar-mic {
+  background: var(--live);
+}
+
+/* Between key-release and text landing. Neutral, not green: the microphone is
+   closed, and green must only ever mean it is open. */
+.flowbar[data-working="true"] .flowbar-mic {
+  background: var(--body);
+}
+
+/* ------------------------------------------------------------ Empty state -- */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-9) var(--s-5);
+  text-align: center;
+}
+
+/* ------------------------------------------------------------- Utilities -- */
+
+.hstack {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+.vstack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.spacer {
+  flex: 1;
+}

@@ -1,0 +1,69 @@
+# Dependency updates.
+#
+# Grouped and weekly rather than per-dependency and immediate: a pre-alpha
+# project with one maintainer drowns in PRs otherwise, and a drowned maintainer
+# merges without reading, which is worse than updating a week later.
+#
+# Security updates ignore the grouping and the schedule; GitHub raises those
+# immediately regardless of what is configured here.
+version: 2
+
+updates:
+  # ---------------------------------------------------------------- Rust
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "rust"]
+    commit-message:
+      prefix: "chore"
+      include: scope
+    groups:
+      # Tauri moves as a unit. Bumping one crate of it against an older sibling
+      # produces version-mismatch errors that look like our bug.
+      tauri:
+        patterns: ["tauri", "tauri-*", "wry", "tao"]
+      windows-bindings:
+        patterns: ["windows", "windows-*"]
+      rust-patch:
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------- Frontend
+  - package-ecosystem: npm
+    directory: "/apps/ui"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "frontend"]
+    commit-message:
+      prefix: "chore"
+      include: scope
+    groups:
+      # The Tauri JS API must stay in step with the Rust crates above; review
+      # both PRs together.
+      tauri-js:
+        patterns: ["@tauri-apps/*"]
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      build-tooling:
+        patterns: ["vite", "@vitejs/*", "typescript", "oxlint", "@types/node"]
+
+  # ---------------------------------------------------------------- Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]

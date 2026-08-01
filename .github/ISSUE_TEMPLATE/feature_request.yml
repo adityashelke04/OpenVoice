@@ -1,0 +1,69 @@
+name: Feature request
+description: Propose a capability, a formatting rule, or a change to how something behaves.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most useful proposals start from a moment where the tool got in your way,
+        not from a feature list. Describe the moment and let the design follow.
+
+        **New formatting rules are the easiest thing to land** and usually do not need
+        an issue first — a PR with the rule and two tests is often faster. See
+        [CONTRIBUTING.md](https://github.com/adityashelke04/OpenVoice/blob/main/CONTRIBUTING.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What were you doing, and where did OpenVoice stop being useful?
+      placeholder: |
+        Dictating into a SQL client, every statement comes out sentence-capitalised.
+        I retype the first word of every query.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like instead
+      description: If it is a formatting change, give exact input and exact desired output. Ambiguity here becomes a rule that fires when it should not.
+      placeholder: |
+        say:  "select star from users where id equals five"
+        want: "select * from users where id = 5"
+        not:  "Select * from users where id = 5."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Formatting rules / dictionary
+        - Hotkeys and activation
+        - Audio capture / VAD
+        - Speech recognition and models
+        - Text injection
+        - Settings and UI
+        - History and export
+        - Packaging, install, updates
+        - Platform support (macOS / Linux)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "I currently work around it by...". Knowing the workaround tells us how much the feature is actually worth.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Fit
+      description: OpenVoice is local-first with no telemetry, and the domain crates stay free of the OS, the network, and the GUI. Proposals that need any of those have to earn it.
+      options:
+        - label: This does not require network access, an account, or sending data off the machine.
+        - label: I would be willing to work on this.

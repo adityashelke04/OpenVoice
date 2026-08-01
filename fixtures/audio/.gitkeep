@@ -1,0 +1,9 @@
+Recorded audio lives here and is never committed (see .gitignore).
+
+These are working fixtures for manual ASR checks: real speech, recorded by
+whoever is developing. Committing them would put a maintainer's voice in a
+public repository forever, and they are not needed to build or test anything —
+every automated test is model-free and runs from synthetic input.
+
+Record your own with any recorder at 16 kHz mono, or point `ov` at an existing
+WAV with `--wav`.

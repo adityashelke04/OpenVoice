@@ -8,7 +8,9 @@ members = [
     "crates/ov-input",
     "crates/ov-audio",
     "crates/ov-asr",
+    "crates/ov-store",
     "crates/ov-cli",
+    "crates/ov-app",
 ]
 
 [workspace.package]
@@ -20,13 +22,20 @@ repository = "https://github.com/adityashelke04/OpenVoice"
 authors = ["Aditya Shelke <adityashelke04@gmail.com>"]
 
 [workspace.dependencies]
-# Internal
-ov-core = { path = "crates/ov-core" }
-ov-format = { path = "crates/ov-format" }
-ov-audio = { path = "crates/ov-audio" }
-ov-asr = { path = "crates/ov-asr" }
-ov-input = { path = "crates/ov-input" }
-ov-store = { path = "crates/ov-store" }
+# Internal.
+#
+# The explicit `version` on a path dependency is not redundant. Without it the
+# requirement resolves to `*`, which `cargo deny check bans` correctly flags as a
+# wildcard: a workspace where every internal edge is "any version" cannot be
+# audited. Keep these in step with `workspace.package.version` above.
+ov-core = { path = "crates/ov-core", version = "0.1.0" }
+ov-format = { path = "crates/ov-format", version = "0.1.0" }
+ov-audio = { path = "crates/ov-audio", version = "0.1.0" }
+ov-asr = { path = "crates/ov-asr", version = "0.1.0" }
+ov-input = { path = "crates/ov-input", version = "0.1.0" }
+# Not yet written. Declared here so the crate lands without a manifest change;
+# harmless while unused, because Cargo only resolves an entry a member consumes.
+ov-store = { path = "crates/ov-store", version = "0.1.0" }
 
 # Errors
 thiserror = "2"
@@ -56,9 +65,15 @@ pretty_assertions = "1"
 
 [profile.dev]
 opt-level = 1          # keep audio/DSP tolerable in debug builds
+# Line tables only, not full DWARF. Backtraces still name the function and line —
+# which is all this project has ever needed — while cutting peak linker memory and
+# target-directory size substantially. Full debuginfo across an optimised
+# dependency graph is a real cause of out-of-memory builds on a 16 GB machine.
+debug = 1
 
 [profile.dev.package."*"]
 opt-level = 3          # dependencies always optimized; huge win for ASR/DSP crates
+debug = false          # never step into a dependency; do not pay to describe them
 
 [profile.release]
 lto = "thin"

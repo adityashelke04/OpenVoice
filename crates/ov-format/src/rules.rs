@@ -25,6 +25,107 @@ pub trait Rule: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// 0. Degenerate output
+// ---------------------------------------------------------------------------
+
+/// A character repeated more than this many times is a decoding artefact.
+///
+/// Three allows a legitimate ellipsis and an emphatic `!!!`; nothing a person
+/// dictates needs four of the same character in a row.
+const MAX_CHAR_RUN: usize = 3;
+
+/// Consecutive repeats of the same phrase beyond this are a repetition loop.
+///
+/// Three is deliberately permissive — "no no no" and a genuinely repeated phrase
+/// are real speech — while still catching `Hello Hello Hello Hello Hello`.
+const MAX_WORD_RUN: usize = 3;
+
+/// Longest phrase length checked for looping.
+///
+/// Loops repeat phrases, not just words: `1, 2, 3, 4, 1, 2, 3, 4` and
+/// `good job, good job, good job` are the shape this actually takes. Checking only
+/// single tokens misses all of them.
+const MAX_NGRAM: usize = 4;
+
+/// Collapses the repetition loops and hallucinations Whisper produces.
+///
+/// The decoder is configured to avoid these (beam search, repetition penalty,
+/// compression-ratio fallback), and that is where the real fix lives. This rule
+/// exists because "mostly" is not good enough when the output goes straight into
+/// the user's editor: a single `kkkkkkkkkkkkkkkkkkkk` pasted into source code is
+/// worse than a hundred slightly-awkward transcripts.
+///
+/// It runs first, so every later rule sees sane input.
+pub struct CollapseRepeats;
+
+impl Rule for CollapseRepeats {
+    fn name(&self) -> &'static str {
+        "repeats"
+    }
+
+    fn apply(&self, doc: Doc, _ctx: &Ctx<'_>) -> Doc {
+        let mut out: Vec<Tok> = Vec::with_capacity(doc.len());
+
+        for tok in doc.toks {
+            // Squash runs of one character *inside* a token: `?????????` -> `???`.
+            out.push(match &tok {
+                Tok::Word(s) => Tok::Word(squash_chars(s)),
+                Tok::Lit(s) => Tok::Lit(squash_chars(s)),
+                other => other.clone(),
+            });
+
+            // Then, if the tail is now one repeat too many of any short phrase,
+            // drop that repeat. Done incrementally so a long loop is trimmed as it
+            // arrives rather than needing a second pass.
+            for n in 1..=MAX_NGRAM {
+                let span = n * (MAX_WORD_RUN + 1);
+                if out.len() < span {
+                    break;
+                }
+                let tail = &out[out.len() - span..];
+                let first = &tail[..n];
+                let looping = tail
+                    .chunks_exact(n)
+                    .all(|chunk| chunk.iter().zip(first).all(|(a, b)| same_text(a, b)));
+                if looping {
+                    out.truncate(out.len() - n);
+                    break;
+                }
+            }
+        }
+
+        Doc { toks: out }
+    }
+}
+
+/// Reduce any run of the same character to at most [`MAX_CHAR_RUN`].
+fn squash_chars(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last: Option<char> = None;
+    let mut run = 0usize;
+    for c in s.chars() {
+        if Some(c) == last {
+            run += 1;
+        } else {
+            last = Some(c);
+            run = 1;
+        }
+        if run <= MAX_CHAR_RUN {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn same_text(a: &Tok, b: &Tok) -> bool {
+    match (a, b) {
+        (Tok::Break, Tok::Break) => true,
+        (Tok::Break, _) | (_, Tok::Break) => false,
+        _ => a.text().eq_ignore_ascii_case(b.text()),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 1. Fillers
 // ---------------------------------------------------------------------------
 
@@ -236,7 +337,9 @@ impl Rule for VoiceCommands {
                         .toks
                         .get(i + 1)
                         .and_then(Tok::as_word_lower)
-                        .is_some_and(|w| w.chars().count() == 1 && w.chars().all(char::is_alphabetic));
+                        .is_some_and(|w| {
+                            w.chars().count() == 1 && w.chars().all(char::is_alphabetic)
+                        });
 
                 if run >= 2 || short_flag {
                     out.push(Tok::lit("-".repeat(run)));
@@ -251,7 +354,11 @@ impl Rule for VoiceCommands {
                 .iter()
                 .find(|(p, _, _)| doc.window(i, p.len()).is_some_and(|w| w == **p))
             {
-                out.push(if *tight { Tok::tight(*lit) } else { Tok::lit(*lit) });
+                out.push(if *tight {
+                    Tok::tight(*lit)
+                } else {
+                    Tok::lit(*lit)
+                });
                 i += phrase.len();
                 continue;
             }
@@ -518,6 +625,55 @@ mod tests {
     }
 
     #[test]
+    fn collapses_degenerate_character_runs() {
+        // Real output observed from the user's first working session.
+        let p = Profile::default();
+        assert_eq!(
+            run(&CollapseRepeats, &p, "?????????????????????????????Hello"),
+            "???Hello"
+        );
+        assert_eq!(run(&CollapseRepeats, &p, "kkkkkkkkkkkkkkkkkkkk"), "kkk");
+        assert_eq!(
+            run(&CollapseRepeats, &p, "wait......................."),
+            "wait..."
+        );
+    }
+
+    #[test]
+    fn collapses_repeated_word_loops() {
+        let p = Profile::default();
+        assert_eq!(
+            run(&CollapseRepeats, &p, "hello Hello Hello Hello Hello there"),
+            "hello Hello Hello there"
+        );
+        assert_eq!(
+            run(&CollapseRepeats, &p, "good job good job good job good job"),
+            "good job good job good job"
+        );
+    }
+
+    #[test]
+    fn leaves_legitimate_repetition_alone() {
+        // The guard must not "fix" speech the user actually produced.
+        let p = Profile::default();
+        assert_eq!(run(&CollapseRepeats, &p, "no no no"), "no no no");
+        assert_eq!(
+            run(&CollapseRepeats, &p, "that is very very good"),
+            "that is very very good"
+        );
+        assert_eq!(
+            run(&CollapseRepeats, &p, "wait... really?"),
+            "wait... really?"
+        );
+        assert_eq!(run(&CollapseRepeats, &p, "stop!!!"), "stop!!!");
+        // Ordinary doubled letters inside words must survive untouched.
+        assert_eq!(
+            run(&CollapseRepeats, &p, "committee address bookkeeper"),
+            "committee address bookkeeper"
+        );
+    }
+
+    #[test]
     fn light_fillers_leave_discourse_markers_alone() {
         let p = Profile {
             fillers: FillerLevel::Light,
@@ -569,13 +725,21 @@ mod tests {
         // runnable command.
         let p = Profile::terminal();
         assert_eq!(
-            run(&VoiceCommands, &p, "cube control get pods dash dash all namespaces"),
+            run(
+                &VoiceCommands,
+                &p,
+                "cube control get pods dash dash all namespaces"
+            ),
             "cube control get pods --all namespaces"
         );
         assert_eq!(run(&VoiceCommands, &p, "well dash known"), "well-known");
         // A hyphenated long flag: one dash inside the name stays a hyphen.
         assert_eq!(
-            run(&VoiceCommands, &p, "cube control get pods dash dash all dash namespaces"),
+            run(
+                &VoiceCommands,
+                &p,
+                "cube control get pods dash dash all dash namespaces"
+            ),
             "cube control get pods --all-namespaces"
         );
     }

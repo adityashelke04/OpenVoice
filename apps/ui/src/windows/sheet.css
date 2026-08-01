@@ -1,0 +1,166 @@
+/* Component sheet layout. Review surface only — not shipped in the app. */
+
+.sheet {
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--s-8) var(--s-7) var(--s-9);
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-6);
+  padding-bottom: var(--s-6);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.sheet-section {
+  padding: var(--s-7) 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.sheet-section:last-child {
+  border-bottom: none;
+}
+
+.sheet-section-head {
+  margin-bottom: var(--s-5);
+}
+
+/* Body measure capped so long explanations stay readable. */
+.sheet-note {
+  margin-top: var(--s-2);
+  max-width: 68ch;
+}
+
+/* ------------------------------------------------------------- swatches -- */
+
+.sw-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--s-4);
+}
+
+.sw {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.sw-chip {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline-strong);
+}
+
+.live-note {
+  display: flex;
+  gap: var(--s-4);
+  margin-top: var(--s-6);
+  padding: var(--s-5);
+  background: var(--surface-1);
+  border: 1px solid var(--live-dim);
+  border-radius: var(--r-xl);
+}
+
+.live-note .t-caption {
+  max-width: 62ch;
+  margin-top: var(--s-2);
+}
+
+/* ----------------------------------------------------------------- type -- */
+
+.type-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.type-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-6);
+  padding: var(--s-4) 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.type-row:last-child {
+  border-bottom: none;
+}
+
+.type-spec {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* ---------------------------------------------------------------- stats -- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--s-4);
+}
+
+/* ------------------------------------------------------------- waveform -- */
+
+.wave-demo {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin-bottom: var(--s-5);
+}
+
+.wave-row {
+  display: flex;
+  justify-content: center;
+  padding: var(--s-5);
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+}
+
+/* Shipping size: exactly the strip inside the Flow Bar. Judging a waveform at
+   three times its real size is how you end up with 28px pills. */
+.wave-actual {
+  width: 128px;
+  height: 18px;
+}
+
+/* Inspection only. Scaled with a transform so the geometry stays honest — the
+   bars are still 2px, just magnified. */
+.wave-zoom {
+  width: 128px;
+  height: 18px;
+  transform: scale(3);
+  transform-origin: center;
+  margin: 18px 0;
+}
+
+.wave-cap {
+  margin: var(--s-5) 0 var(--s-3);
+}
+
+/* -------------------------------------------------------------- flowbar -- */
+
+.bar-demo {
+  display: flex;
+  justify-content: center;
+  padding: var(--s-7) 0;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      var(--surface-1) 0 10px,
+      transparent 10px 20px
+    );
+  border-radius: var(--r-xl);
+}
+
+/* The Flow Bar itself lives in ui/ui.css — it ships in the app. Only the
+   demonstration backdrop belongs here. */

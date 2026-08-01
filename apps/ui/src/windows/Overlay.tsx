@@ -1,41 +1,151 @@
-/** The recording overlay.
+/** The Flow Bar window.
  *
- * ~280x64, frameless, always-on-top, and **non-activating**. If this window ever
- * takes focus the caret position is lost and the entire product stops working, so
- * the Tauri side sets WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW and nothing here is
- * focusable.
+ * Frameless, transparent, always on top, and non-activating (`WS_EX_NOACTIVATE`,
+ * applied on the Rust side). If this window ever takes focus, the caret in the
+ * user's editor is lost and the dictated text goes nowhere.
  *
- * It is read in peripheral vision, for about two seconds at a time, while the user's
- * attention is on their own code. That is the whole design constraint: state must
- * resolve at a glance, from shape and lamp colour, before any text is read. */
+ * `WS_EX_NOACTIVATE` prevents *focus*, not *input* — so the bar can be dragged and
+ * right-clicked while the editor keeps the caret. That is the only reason an
+ * interactive always-on-top overlay is viable for a dictation tool.
+ */
 
-import { Meter } from "../components/Panel";
-import { formatElapsed, stateLegend, stateSignal } from "../engine/useEngine";
-import type { EngineView } from "../engine/useEngine";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FlowBar } from "../ui";
+import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
 import "./overlay.css";
 
-export function Overlay({ view }: { view: EngineView }) {
-  const signal = stateSignal(view.state);
-  const visible = view.state !== "idle";
+const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+async function call(cmd: string, args?: Record<string, unknown>) {
+  if (!inTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke(cmd, args);
+}
+
+export function Overlay() {
+  const { view, levelRef } = useLiveEngine();
+  const [menu, setMenu] = useState(false);
+  const dragging = useRef(false);
+
+  const live = view.state === "listening";
+  const working = view.state === "transcribing" || view.state === "injecting";
+
+  // Persist the position after a native drag. Snapping happens in Rust so the
+  // rules live in one place rather than being split across the boundary.
+  useEffect(() => {
+    if (!inTauri()) return;
+    let un: (() => void) | undefined;
+    let timer = 0;
+
+    (async () => {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const win = getCurrentWindow();
+      un = await win.onMoved(({ payload }) => {
+        if (!dragging.current) return;
+        // Debounced: onMoved fires continuously through a drag, and only the
+        // resting place is worth storing.
+        window.clearTimeout(timer);
+        timer = window.setTimeout(async () => {
+          const scale = await win.scaleFactor();
+          call("overlay_move", { x: payload.x / scale, y: payload.y / scale });
+          dragging.current = false;
+        }, 220);
+      });
+    })();
+
+    return () => {
+      window.clearTimeout(timer);
+      un?.();
+    };
+  }, []);
+
+  const startDrag = useCallback(async (e: React.MouseEvent) => {
+    if (e.button !== 0 || !inTauri()) return;
+    setMenu(false);
+    dragging.current = true;
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().startDragging();
+  }, []);
+
+  // The window is sized to exactly what is painted, and resized whenever that
+  // changes.
+  //
+  // Two reasons, and both were bugs before:
+  //
+  //  1. Any window area not covered by the pill shows as a translucent rectangle.
+  //     Webview transparency on Windows is unreliable, so rather than depending on
+  //     it, there is simply no spare area to reveal.
+  //  2. A transparent window still swallows OS-level clicks across its whole
+  //     rectangle — `pointer-events: none` governs the webview, not the window. An
+  //     oversized window would punch a dead zone into whatever is underneath.
+  const width = menu ? 280 : live ? 218 : working ? 170 : 150;
+  const height = menu ? 226 : 40;
+
+  useEffect(() => {
+    if (!inTauri()) return;
+    (async () => {
+      const { getCurrentWindow, LogicalSize } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().setSize(new LogicalSize(width, height));
+    })();
+  }, [width, height]);
+
+  // Dismiss the menu on any outside interaction, including losing the pointer.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(false);
+    window.addEventListener("blur", close);
+    return () => window.removeEventListener("blur", close);
+  }, [menu]);
+
+  // State changes are announced. A person using a screen reader gets no benefit
+  // from a waveform, and the whole point of this window is knowing whether the
+  // microphone is open. Lost in an earlier rewrite; restored here.
+  const spoken = live
+    ? "Listening"
+    : working
+      ? "Writing your words"
+      : "Ready. Hold the shortcut to dictate.";
 
   return (
-    <div className="ov" data-visible={visible} data-signal={signal}>
-      <div className="ov-meter" aria-hidden="true">
-        <Meter level={view.level} peak={view.peak} />
+    <div className="overlay-root">
+      <span className="sr-only" role="status" aria-live="polite">
+        {spoken}
+      </span>
+      <div
+        className="overlay-hit"
+        onMouseDown={startDrag}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu((m) => !m);
+        }}
+        title="Drag to move · right-click for options"
+      >
+        <FlowBar
+          live={live}
+          levelRef={levelRef}
+          elapsed={elapsed(view.elapsedMs)}
+          hint={view.ready?.shortcut ?? "Right Ctrl"}
+          working={working}
+        />
       </div>
 
-      <div className="ov-centre">
-        {/* aria-live so a screen-reader user gets what the lamp gives a sighted one */}
-        <span className="ov-state" aria-live="polite">
-          {stateLegend(view.state)}
-        </span>
-        <span className="ov-profile">{view.profile}</span>
-      </div>
-
-      <div className="ov-right">
-        <span className="ov-time">{formatElapsed(view.elapsedMs)}</span>
-        <span className="ov-hint">RIGHT CTRL</span>
-      </div>
+      {menu && (
+        <div className="overlay-menu" role="menu">
+          <button role="menuitem" onClick={() => { call("show_hub_cmd"); setMenu(false); }}>
+            Open OpenVoice
+          </button>
+          <button role="menuitem" onClick={() => { call("paste_last"); setMenu(false); }}>
+            Paste last transcript
+          </button>
+          <div className="overlay-menu-sep" />
+          <button role="menuitem" onClick={() => { call("overlay_snooze", { minutes: 60 }); setMenu(false); }}>
+            Hide for an hour
+          </button>
+          <button role="menuitem" onClick={() => { call("overlay_always_visible", { on: false }); setMenu(false); }}>
+            Only show while dictating
+          </button>
+        </div>
+      )}
     </div>
   );
 }

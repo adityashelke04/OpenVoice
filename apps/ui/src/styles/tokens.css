@@ -1,100 +1,151 @@
-/* OpenVoice design tokens — see DESIGN.md for the direction contract.
- *
- * The world is an aviation annunciator panel: one milled ground, engraved legends,
- * and illuminated legend capsules carrying machine state. Signal colours are
- * semantic only. If an element is not reporting the state of the engine, it is
- * monochrome. */
+/* OpenVoice design tokens — see DESIGN.md for the direction contract and the
+ * reasoning behind every value. Derived from the eight design systems analysed in
+ * docs/UI-RESEARCH.md, with the palette pinned by the user: #44D62C on #000000. */
 
 :root {
-  /* -- Ground. One panel, milled; sections are seams, not floating cards. ----- */
-  --panel-900: #0e1012;
-  --panel-800: #141719;
-  --panel-700: #1b1f22;
-  --panel-600: #24292d;
-  --panel-500: #2f353a;
+  /* -- Surface ladder ------------------------------------------------------
+   * Deliberately tiny steps: the whole ladder spans 28 hex points. A dark UI
+   * that jumps #111 -> #222 -> #333 is the clearest marker of an amateur
+   * system; Linear's entire ladder spans ten. */
+  --canvas: #000000;
+  --surface-1: #0a0a0b;
+  --surface-2: #101012;
+  --surface-3: #16161a;
+  --surface-4: #1c1c21;
 
-  --seam: #2c3237;
-  --seam-lit: #3a4248;
+  --hairline: #1f1f24;
+  --hairline-strong: #2c2c33;
 
-  /* -- Engraved legends ------------------------------------------------------ */
-  --legend: #c9d1d6;
-  --legend-dim: #8b959c;
-  --legend-faint: #616b72;
+  /* -- Text ladder ---------------------------------------------------------
+   * Neutral greys, not blue-tinted: the canvas is pure neutral black, so a
+   * tint would read as a colour mistake. Contrast ratios against #000 noted;
+   * --faint fails AA and is valid only for disabled controls. */
+  --ink: #f5f5f5;    /* 19.0:1 */
+  --body: #c9c9c9;   /* 11.3:1 */
+  --mute: #8f8f8f;   /*  5.6:1 */
+  --faint: #7a7a7a;  /*  4.6:1 — tertiary text, still AA */
 
-  /* -- Signal. Three colours, one meaning each, state only. ------------------- */
-  --signal-green: #4ade80;
-  --signal-amber: #fbbf24;
-  --signal-red: #f87171;
+  /* Genuinely disabled controls only. WCAG exempts disabled elements from the
+     contrast minimum; nothing that carries information may use this. --faint was
+     previously this dark and had crept onto placeholders, the formatter trace's
+     rule names and raw error text — all of which a person needs to read. */
+  --disabled: #5c5c5c;
 
-  --glow-green: rgb(74 222 128 / 18%);
-  --glow-amber: rgb(251 191 36 / 18%);
-  --glow-red: rgb(248 113 113 / 18%);
+  /* -- The one colour ------------------------------------------------------
+   * Green means the microphone is open, or an action that opens it. Never
+   * success, never links, never emphasis. Never a large flat fill: #44D62C at
+   * full chroma on pure black vibrates and leaves afterimages above button
+   * size. Borders, text, icons, waveform bars, small fills only. */
+  --live: #44d62c;
+  --live-hi: #5ce843;
+  --live-dim: #1d5a13;
+  --live-soft: rgb(68 214 44 / 12%);
+  --live-ring: rgb(68 214 44 / 24%);
 
-  --dim-green: #1d4d30;
-  --dim-amber: #4d3b10;
-  --dim-red: #4d2424;
+  /* -- Semantic state. Desaturated so they never out-shout --live. --------- */
+  --danger: #f45b5b;
+  --danger-soft: rgb(244 91 91 / 12%);
+  --warn: #d9a441;
+  --warn-soft: rgb(217 164 65 / 12%);
 
-  /* -- Type. System stacks only: a webfont CDN would break the local-first
-        promise for the sake of a typeface. The engraved look comes from
-        treatment (weight, case, tracking), not from a display face. --------- */
-  --font-legend: "Segoe UI", system-ui, -apple-system, sans-serif;
-  --font-data: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  /* -- Type ---------------------------------------------------------------
+   * Mono is for transcripts, numbers and code only. Using it for atmosphere
+   * is the tell of a design pretending to be technical. */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
-  /* -- Geometry. 2px is a milled edge; anything rounder is a web card. -------- */
-  --radius: 2px;
-  --hair: 1px;
+  /* -- Space. 8px base. --------------------------------------------------- */
+  --s-1: 2px;
+  --s-2: 4px;
+  --s-3: 8px;
+  --s-4: 12px;
+  --s-5: 16px;
+  --s-6: 24px;
+  --s-7: 32px;
+  --s-8: 48px;
+  --s-9: 64px;
 
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
+  /* -- Radius. Category centre: not Warp's severe 3px, not Wispr's
+   *    marketing-scale 40px (a web idiom, not app chrome). ----------------- */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+  --r-full: 9999px;
 
-  /* -- Motion. Lamp behaviour: filament up fast, decay slower. ---------------- */
-  --lamp-in: 90ms;
-  --lamp-out: 220ms;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* -- Motion. One authored moment (the waveform); everything else is a
+   *    plain state change. ------------------------------------------------ */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: 90ms;
+  --t-base: 160ms;
+  --t-slow: 260ms;
+
+  /* -- Layout ------------------------------------------------------------- */
+  --sidebar-w: 220px;
+  --control-h: 32px;
+  --control-h-sm: 28px;
 }
 
-/* Engraved legend treatment. Used for panel labels, never for sentences. */
-.legend {
-  font-family: var(--font-legend);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--legend);
+/* -- Type styles. Tracking follows the universal ~ -0.03em rule and reaches
+ *    exactly zero at body size. Weight never exceeds 600. ------------------ */
+
+.t-display {
+  font: 600 32px/1.15 var(--font-sans);
+  letter-spacing: -0.96px;
+  color: var(--ink);
 }
 
-.legend-sm {
-  font-family: var(--font-legend);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: var(--legend-dim);
+.t-title {
+  font: 600 22px/1.25 var(--font-sans);
+  letter-spacing: -0.44px;
+  color: var(--ink);
 }
 
-/* Tabular data. Monospace here is for measurement, not for atmosphere. */
-.data {
-  font-family: var(--font-data);
-  font-size: 12px;
+.t-heading {
+  font: 600 17px/1.35 var(--font-sans);
+  letter-spacing: -0.17px;
+  color: var(--ink);
+}
+
+.t-subheading {
+  font: 500 15px/1.4 var(--font-sans);
+  letter-spacing: -0.1px;
+  color: var(--ink);
+}
+
+.t-body {
+  font: 400 14px/1.55 var(--font-sans);
+  color: var(--body);
+}
+
+.t-body-strong {
+  font: 500 14px/1.55 var(--font-sans);
+  color: var(--ink);
+}
+
+.t-caption {
+  font: 400 12px/1.45 var(--font-sans);
+  color: var(--mute);
+}
+
+/* The one positive-tracked style, borrowed from Raycast's airier small type.
+   Labels form controls and table headers only -- never an eyebrow above every
+   section, which is grammar you did not choose. */
+.t-label {
+  font: 500 11px/1.3 var(--font-sans);
+  letter-spacing: 0.3px;
+  color: var(--mute);
+}
+
+.t-mono {
+  font: 400 13px/1.5 var(--font-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--legend);
+  color: var(--body);
 }
 
-.data-lg {
-  font-family: var(--font-data);
-  font-size: 20px;
+.t-mono-lg {
+  font: 500 20px/1.2 var(--font-mono);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-  color: var(--legend);
-}
-
-.body {
-  font-family: var(--font-legend);
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--legend);
+  letter-spacing: -0.2px;
+  color: var(--ink);
 }

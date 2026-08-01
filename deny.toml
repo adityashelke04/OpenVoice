@@ -1,0 +1,127 @@
+# cargo-deny configuration.
+#
+# Run locally with:
+#   cargo install cargo-deny --locked
+#   cargo deny check bans licenses advisories sources
+#
+# CI runs the same four checks on every push (.github/workflows/ci.yml).
+#
+# The point of this file is not bureaucracy. OpenVoice ships a binary that
+# installs a keyboard hook, so the set of code that ends up inside it is a
+# security property, not a packaging detail. This makes that set reviewable.
+
+[graph]
+# Evaluate every platform, not just the host. A Linux-only transitive dependency
+# with an unacceptable licence is still a problem for a project that plans macOS
+# and Linux support in v0.5.
+all-features = true
+
+[licenses]
+# Permissive only. Anything reciprocal or viral is denied by omission: this list
+# is an allowlist, so a new dependency under GPL/AGPL/LGPL/SSPL fails the build
+# rather than quietly changing the obligations of everyone who ships OpenVoice.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+]
+
+# A licence must be identified with high confidence. A fuzzy match on a mangled
+# LICENSE file is exactly the case where a wrong answer is expensive.
+confidence-threshold = 0.93
+
+# MPL-2.0 is file-level copyleft: it obliges you to publish changes to *those
+# files*, and imposes nothing on the rest of the binary. It is not in the
+# blanket allowlist, because a new MPL dependency should be a decision someone
+# makes on purpose rather than something that slips in. These five arrive
+# transitively through Tauri's web view stack (Servo's CSS engine) and through
+# `dirs`, are used unmodified, and are accepted deliberately.
+[[licenses.exceptions]]
+name = "cssparser"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "cssparser-macros"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "dtoa-short"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "selectors"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "option-ext"
+allow = ["MPL-2.0"]
+
+[bans]
+# Duplicate versions are noise, not danger, in a workspace pulling in Tauri.
+# Warn so the number stays visible; don't fail a PR over a transitive bump.
+multiple-versions = "warn"
+wildcards = "deny"
+# `*` in a workspace member's manifest means "whatever resolves today", which
+# makes builds unreproducible. Path and workspace deps are exempt.
+allow-wildcard-paths = true
+
+# Nothing is banned outright yet. When something is, it belongs here with a
+# `reason`, so the next person does not have to guess.
+deny = []
+
+[advisories]
+# Uses the RUSTSEC database. Vulnerabilities fail the build. There are currently
+# no `vulnerability` advisories against this graph; every entry below is an
+# `unmaintained` notice, which is a maintenance signal rather than a defect.
+#
+# Rule for this list: a `vulnerability` never gets an ignore entry, only a fix or
+# a version bump. An `unmaintained` entry may be ignored if it is transitive,
+# outside our control, and has no reachable attack surface -- and it must say so
+# here, with the crate and the path it arrives by. Re-check on every Tauri bump;
+# the whole list should disappear when Tauri moves off GTK3.
+ignore = [
+    # gtk-rs GTK3 bindings, unmaintained upstream. Reach us only through
+    # tauri -> wry/tao on Linux, which is not a supported platform until v0.5.
+    # Tauri's own migration to GTK4/webkitgtk-6 is the fix; there is nothing to
+    # do here in the meantime.
+    "RUSTSEC-2024-0411", # atk
+    "RUSTSEC-2024-0412", # atk-sys
+    "RUSTSEC-2024-0413", # gdk
+    "RUSTSEC-2024-0414", # gdk-sys
+    "RUSTSEC-2024-0415", # gdkwayland-sys
+    "RUSTSEC-2024-0416", # gdkx11
+    "RUSTSEC-2024-0417", # gdkx11-sys
+    "RUSTSEC-2024-0418", # gtk
+    "RUSTSEC-2024-0419", # gtk-sys
+    "RUSTSEC-2024-0420", # gtk3-macros
+
+    # proc-macro-error, unmaintained. A build-time-only dependency of the GTK
+    # macro crates above: it runs in the compiler, never in the shipped binary.
+    "RUSTSEC-2024-0370",
+
+    # The unic-* family, unmaintained. Arrives via tauri -> urlpattern. Pure
+    # Unicode table lookup with no I/O; the replacement is upstream's to choose.
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+]
+
+[sources]
+# Every dependency must come from crates.io. A git dependency in a security
+# sensitive binary means the exact bytes shipped depend on a branch someone else
+# can move.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

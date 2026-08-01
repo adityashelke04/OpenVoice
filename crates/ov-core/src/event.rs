@@ -8,8 +8,20 @@ use crate::types::{Millis, Outcome, SessionId};
 use serde::{Deserialize, Serialize};
 
 /// A user-visible change in the engine's state.
+///
+/// # Wire format
+///
+/// `rename_all_fields`, **not** `rename_all`. On an enum, `rename_all` renames the
+/// *variants* — so `Level` became `"level"` while its fields stayed `snake_case`.
+/// The TypeScript consumer matched on `"Level"` and read `elapsedMs`, so every
+/// event fell through its switch and the UI froze while the engine ran perfectly.
+///
+/// Variants stay PascalCase (matching the Rust names, so the two sides are
+/// greppable) and fields are camelCase (idiomatic for the JavaScript reading them).
+/// The round-trip is pinned by a test below; do not change this without updating
+/// `apps/ui/src/engine/types.ts`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum Event {
     /// Engine is idle and ready. Overlay hides.
     Idle,
@@ -130,5 +142,54 @@ impl Stage {
             Self::Inject => 120,
             Self::Total => 800,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Outcome, SessionId};
+
+    /// Pins the exact JSON the UI consumes.
+    ///
+    /// Regression: the enum previously carried `rename_all = "camelCase"`, which
+    /// renames *variants* rather than fields. Rust emitted `{"type":"level",
+    /// "elapsed_ms":…}` while the TypeScript matched `"Level"` and read
+    /// `elapsedMs`. Nothing matched, so the interface sat frozen while the engine
+    /// worked perfectly — a failure with no error anywhere to find.
+    #[test]
+    fn wire_format_matches_the_typescript_contract() {
+        let json = serde_json::to_value(Event::Level {
+            rms: 0.5,
+            peak: 0.8,
+            elapsed_ms: 1200,
+        })
+        .unwrap();
+        assert_eq!(json["type"], "Level", "variant names stay PascalCase");
+        assert_eq!(json["elapsedMs"], 1200, "fields are camelCase");
+        assert!(
+            json.get("elapsed_ms").is_none(),
+            "no snake_case field survives"
+        );
+
+        let json = serde_json::to_value(Event::Finished {
+            session: SessionId(1),
+            outcome: Outcome::Delivered,
+            text: "hi".into(),
+            latency_ms: 640,
+        })
+        .unwrap();
+        assert_eq!(json["type"], "Finished");
+        assert_eq!(json["latencyMs"], 640);
+        assert_eq!(json["outcome"]["kind"], "delivered");
+
+        let json = serde_json::to_value(Event::Transcribing {
+            session: SessionId(2),
+            audio_ms: 3000,
+        })
+        .unwrap();
+        assert_eq!(json["audioMs"], 3000);
+
+        assert_eq!(serde_json::to_value(Event::Idle).unwrap()["type"], "Idle");
     }
 }

@@ -231,6 +231,9 @@ struct Active {
     app: ForegroundApp,
     audio_ms: u64,
     raw_text: String,
+    /// Text after formatting, carried so the delivered outcome can record what
+    /// actually reached the user.
+    final_text: String,
     phase: Phase,
 }
 
@@ -319,7 +322,8 @@ impl SessionMachine {
             }
             Input::Formatted { session, text, at } => self.on_formatted(session, text, at, &mut fx),
             Input::Injected { session, at } => {
-                self.finish_pipeline(session, at, Outcome::Delivered, String::new(), &mut fx);
+                let text = self.front_final_text(session);
+                self.finish_pipeline(session, at, Outcome::Delivered, text, &mut fx);
             }
             Input::InjectionFailed {
                 session,
@@ -365,6 +369,7 @@ impl SessionMachine {
             app,
             audio_ms: 0,
             raw_text: String::new(),
+            final_text: String::new(),
             phase: Phase::Capturing,
         });
         fx.push(Effect::StartCapture { session: id });
@@ -494,6 +499,12 @@ impl SessionMachine {
             return;
         }
         front.phase = Phase::Injecting;
+        // Remember what we are about to deliver. Previously the delivered outcome
+        // persisted an empty string, so every successful session recorded
+        // `final_text: ""` -- which made history useless and actively concealed a
+        // real injection bug, because the log could not show that the correct text
+        // had been handed to the injector.
+        front.final_text = text.clone();
         let chars = text.chars().count();
         fx.push(Effect::Emit(Event::Injecting { session, chars }));
         fx.push(Effect::Inject { session, text });
@@ -504,6 +515,16 @@ impl SessionMachine {
             .front()
             .filter(|f| f.id == session)
             .map(|f| f.raw_text.clone())
+            .unwrap_or_default()
+    }
+
+    /// The formatted text of the in-flight session, for recording what was
+    /// delivered.
+    fn front_final_text(&self, session: SessionId) -> String {
+        self.pipeline
+            .front()
+            .filter(|f| f.id == session)
+            .map(|f| f.final_text.clone())
             .unwrap_or_default()
     }
 
@@ -681,6 +702,13 @@ mod tests {
         let records = persists(&fx);
         assert_eq!(records.len(), 1, "exactly one persist per session");
         assert_eq!(records[0].outcome, Outcome::Delivered);
+        // Regression: a delivered session used to persist an empty `final_text`,
+        // which made history worthless and hid an injection bug for hours -- the
+        // log could not show that the correct string had reached the injector.
+        assert_eq!(
+            records[0].final_text, "Hello world",
+            "a delivered session must record what was delivered"
+        );
         assert_eq!(records[0].profile, "editor");
         assert_eq!(records[0].raw_text, "hello world");
         assert_eq!(records[0].audio_ms, 2_000);

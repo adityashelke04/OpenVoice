@@ -29,7 +29,9 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard,
     SetClipboardData,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VIRTUAL_KEY,
@@ -78,25 +80,29 @@ impl TextSink for WinTextSink {
         }
         let chars = text.chars().count();
 
-        let chosen = match mode {
-            InjectMode::ClipboardOnly => InjectMode::ClipboardOnly,
-            InjectMode::Keystrokes => InjectMode::Keystrokes,
-            InjectMode::ClipboardPaste => InjectMode::ClipboardPaste,
-        };
-
+        let chosen = mode;
         match chosen {
             InjectMode::ClipboardOnly => {
                 set_clipboard_text(text)?;
-                Ok(InjectReceipt { mode: chosen, chars })
+                Ok(InjectReceipt {
+                    mode: chosen,
+                    chars,
+                })
             }
             InjectMode::Keystrokes if chars <= self.paste_threshold => {
                 send_unicode(text)?;
-                Ok(InjectReceipt { mode: InjectMode::Keystrokes, chars })
+                Ok(InjectReceipt {
+                    mode: InjectMode::Keystrokes,
+                    chars,
+                })
             }
             _ => {
                 // Long text, or the caller explicitly asked to paste.
                 match paste_with_restore(text) {
-                    Ok(()) => Ok(InjectReceipt { mode: InjectMode::ClipboardPaste, chars }),
+                    Ok(()) => Ok(InjectReceipt {
+                        mode: InjectMode::ClipboardPaste,
+                        chars,
+                    }),
                     Err(e) => {
                         // Leave the text on the clipboard so nothing is lost, and
                         // let the caller tell the user to press Ctrl+V themselves.
@@ -109,7 +115,17 @@ impl TextSink for WinTextSink {
     }
 }
 
-/// Choose the mode for a given length, so callers do not have to duplicate the rule.
+/// Choose the mode for a given length.
+///
+/// Clipboard paste is the default for anything but the shortest text, which
+/// reverses the original design. The reason is empirical: synthesized keystrokes
+/// were corrupting real dictation (see `KEYSTROKE_CHUNK` in this module), and a
+/// *atomic* — the target reads the whole string from the clipboard in one
+/// operation, so there is no queue to overflow and no way to lose characters.
+///
+/// The cost is that the clipboard is briefly borrowed, which the snapshot and
+/// restore in `paste_with_restore` already makes safe. Correct text is worth far
+/// more than avoiding that.
 #[must_use]
 pub fn mode_for(text: &str, threshold: usize) -> InjectMode {
     if text.chars().count() <= threshold {
@@ -119,18 +135,62 @@ pub fn mode_for(text: &str, threshold: usize) -> InjectMode {
     }
 }
 
-/// Synthesize one Unicode key event per UTF-16 code unit.
+/// Characters per `SendInput` call, and the pause between calls.
+///
+/// # Why this is not one big call
+///
+/// Sending the whole utterance in a single `SendInput` corrupts it. Every
+/// `KEYEVENTF_UNICODE` event carries `wVk = 0`, so Windows assigns them all the
+/// same virtual key (`VK_PACKET`) and distinguishes the character only by
+/// `wScan`. When events arrive faster than the target thread drains its input
+/// queue, adjacent same-virtual-key entries are merged: the *repeat count*
+/// survives but only one `wScan` does, and `TranslateMessage` then emits N copies
+/// of that single character.
+///
+/// The signature is unmistakable and was observed in production:
+///
+/// ```text
+///   "Are you the best?"       ->  "Are ?????????????"
+///   "Be the best voice model" ->  "Be llllllllllllllllllll"
+///   "Hello, check check check" -> "Hello,kkkkkkkkkkkkkkkkkk"
+/// ```
+///
+/// Output length always matched the input exactly, a short prefix was correct,
+/// and the rest was a run of the string's *last* character. Reproduced
+/// independently in a standalone script with no audio and no model involved.
+const KEYSTROKE_CHUNK: usize = 4;
+const KEYSTROKE_GAP: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// Synthesize one Unicode key event per UTF-16 code unit, paced.
 ///
 /// Surrogate pairs are sent as two events, which is what `KEYEVENTF_UNICODE`
 /// expects; sending a `char` directly would drop anything outside the BMP.
+///
+/// Pacing reduces the corruption above but does not eliminate it for long strings,
+/// which is why [`InjectMode::ClipboardPaste`] is the primary path and this is the
+/// fallback for short text and for targets that refuse a paste.
 fn send_unicode(text: &str) -> Result<()> {
-    let mut inputs: Vec<INPUT> = Vec::with_capacity(text.len() * 2);
-    for unit in text.encode_utf16() {
-        inputs.push(key_input(0, unit, KEYEVENTF_UNICODE));
-        inputs.push(key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+    let units: Vec<u16> = text.encode_utf16().collect();
+
+    for chunk in units.chunks(KEYSTROKE_CHUNK) {
+        let mut inputs: Vec<INPUT> = Vec::with_capacity(chunk.len() * 2);
+        for &unit in chunk {
+            inputs.push(key_input(0, unit, KEYEVENTF_UNICODE));
+            inputs.push(key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+        }
+        send_inputs(&inputs)?;
+        std::thread::sleep(KEYSTROKE_GAP);
     }
-    send_inputs(&inputs)
+    Ok(())
 }
+
+/// Tag on our synthetic events.
+///
+/// Two purposes: it makes OpenVoice's own input identifiable, and a distinct
+/// `dwExtraInfo` discourages the input queue from coalescing adjacent
+/// `VK_PACKET` entries, which is the mechanism behind the corruption described on
+/// [`KEYSTROKE_CHUNK`].
+const OV_EXTRA_INFO: usize = 0x4F56_0001; // "OV\0\1"
 
 fn key_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
     INPUT {
@@ -141,7 +201,7 @@ fn key_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
                 wScan: scan,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: OV_EXTRA_INFO,
             },
         },
     }
@@ -164,21 +224,59 @@ fn send_inputs(inputs: &[INPUT]) -> Result<()> {
     Ok(())
 }
 
-/// Snapshot the clipboard, paste, then put the clipboard back.
+/// How long to leave our text on the clipboard before handing it back.
+///
+/// The target reads the clipboard *asynchronously*, some time after receiving the
+/// keystroke. A 140 ms delay was tried and lost the race against an Electron-based
+/// editor: the old contents were restored before the app looked, so `Ctrl+V` pasted
+/// the user's previous clipboard — or nothing — while the engine happily recorded
+/// "delivered". A second is imperceptible and comfortably outlasts a slow app.
+const CLIPBOARD_HOLD: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// Snapshot the clipboard, paste, then put the clipboard back later.
 fn paste_with_restore(text: &str) -> Result<()> {
     let snapshot = ClipboardSnapshot::capture()?;
     set_clipboard_text(text)?;
-
     let result = send_paste_chord();
 
-    // The target application reads the clipboard asynchronously after receiving the
-    // keystroke. Restoring immediately races that read and pastes the *old*
-    // contents. This delay is a heuristic, and it is the reason the clipboard is
-    // only borrowed for long text where the alternative is worse.
-    std::thread::sleep(std::time::Duration::from_millis(140));
-    snapshot.restore();
+    // Restore off-thread so injection returns immediately. Blocking here made every
+    // dictation feel slower *and* still lost the race.
+    let ours = text.to_string();
+    std::thread::Builder::new()
+        .name("ov-clipboard-restore".into())
+        .spawn(move || {
+            std::thread::sleep(CLIPBOARD_HOLD);
+            // Only take the clipboard back if it is still ours. If the user copied
+            // something in the meantime, restoring would silently destroy it —
+            // and quietly eating someone's clipboard is far worse than leaving a
+            // transcript on it.
+            match read_clipboard_text() {
+                Some(current) if current == ours => snapshot.restore(),
+                Some(_) => tracing::debug!("clipboard changed since paste; not restoring"),
+                None => snapshot.restore(),
+            }
+        })
+        .map_err(|e| Error::Injection(format!("clipboard restore thread: {e}")))?;
 
     result
+}
+
+/// Current clipboard text, if any.
+fn read_clipboard_text() -> Option<String> {
+    let _guard = ClipboardGuard::open().ok()?;
+    // SAFETY: the clipboard is open and the format is checked before the handle is
+    // interpreted as UTF-16 text.
+    let handle = unsafe { GetClipboardData(CF_UNICODETEXT) }.ok()?;
+    if handle.is_invalid() {
+        return None;
+    }
+    let bytes = read_global(handle)?;
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .take_while(|&u| u != 0)
+        .collect();
+    Some(String::from_utf16_lossy(&units))
 }
 
 /// Send `Ctrl+V`, first clearing any physically-held Control key.
@@ -275,9 +373,7 @@ impl ClipboardSnapshot {
         }
 
         if partial {
-            tracing::debug!(
-                "clipboard snapshot is partial; some formats cannot be preserved"
-            );
+            tracing::debug!("clipboard snapshot is partial; some formats cannot be preserved");
         }
         Ok(Self { items, partial })
     }

@@ -72,8 +72,8 @@ pub fn append(record: &SessionRecord) -> Result<(), String> {
 /// the pipeline against known fixtures, and silently accepting a mismatched rate
 /// would make a bad transcript look like a model problem.
 pub fn read_wav_16k(path: &Path) -> Result<Vec<f32>, String> {
-    let mut reader = hound::WavReader::open(path)
-        .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    let mut reader =
+        hound::WavReader::open(path).map_err(|e| format!("opening {}: {e}", path.display()))?;
     let spec = reader.spec();
 
     if spec.sample_rate != 16_000 {

@@ -52,8 +52,8 @@ use dictionary::{builtin_entries, Dictionary, Entry};
 use doc::Doc;
 use profile::Profile;
 use rules::{
-    ApplyDictionary, Capitalize, CaseTransforms, Ctx, ProfilePolicy, Rule, StripFillers,
-    VoiceCommands,
+    ApplyDictionary, Capitalize, CaseTransforms, CollapseRepeats, Ctx, ProfilePolicy, Rule,
+    StripFillers, VoiceCommands,
 };
 
 /// Output of one pipeline stage, for the debug panel.
@@ -153,6 +153,8 @@ impl Formatter {
 /// The standard rule order. See the module docs for why it is what it is.
 fn default_rules() -> Vec<Box<dyn Rule>> {
     vec![
+        // First: nothing downstream should have to cope with `kkkkkkkkkkkk`.
+        Box::new(CollapseRepeats),
         Box::new(StripFillers),
         Box::new(VoiceCommands),
         Box::new(ApplyDictionary),
@@ -208,6 +210,7 @@ mod tests {
             names,
             vec![
                 "parse",
+                "repeats",
                 "fillers",
                 "commands",
                 "dictionary",
@@ -216,12 +219,13 @@ mod tests {
                 "profile"
             ]
         );
+        // Indices follow `default_rules`; keep them in step when the order changes.
         assert_eq!(
-            out.trace[1].text, "call use effect",
+            out.trace[2].text, "call use effect",
             "fillers removed the 'um'"
         );
         assert_eq!(
-            out.trace[3].text, "call useEffect",
+            out.trace[4].text, "call useEffect",
             "dictionary resolved the identifier"
         );
     }

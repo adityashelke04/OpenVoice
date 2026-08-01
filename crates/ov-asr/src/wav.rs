@@ -19,8 +19,8 @@ pub fn write_16k_mono(path: &Path, samples: &[f32]) -> Result<(), String> {
         sample_format: hound::SampleFormat::Int,
     };
 
-    let mut writer =
-        hound::WavWriter::create(path, spec).map_err(|e| format!("creating {}: {e}", path.display()))?;
+    let mut writer = hound::WavWriter::create(path, spec)
+        .map_err(|e| format!("creating {}: {e}", path.display()))?;
 
     for &s in samples {
         // Clamp before scaling. A sample slightly outside [-1, 1] -- which a hot
@@ -28,10 +28,14 @@ pub fn write_16k_mono(path: &Path, samples: &[f32]) -> Result<(), String> {
         // moment into a burst of noise the model cannot read.
         let clamped = s.clamp(-1.0, 1.0);
         let v = (clamped * f32::from(i16::MAX)) as i16;
-        writer.write_sample(v).map_err(|e| format!("writing sample: {e}"))?;
+        writer
+            .write_sample(v)
+            .map_err(|e| format!("writing sample: {e}"))?;
     }
 
-    writer.finalize().map_err(|e| format!("finalising wav: {e}"))
+    writer
+        .finalize()
+        .map_err(|e| format!("finalising wav: {e}"))
 }
 
 #[cfg(test)]
@@ -65,7 +69,10 @@ mod tests {
         write_16k_mono(&path, &[2.0, -2.0]).unwrap();
 
         let mut reader = hound::WavReader::open(&path).unwrap();
-        let samples: Vec<i16> = reader.samples::<i16>().map(std::result::Result::unwrap).collect();
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .map(std::result::Result::unwrap)
+            .collect();
         assert!(samples[0] > 32_000, "positive overload must clamp high");
         assert!(samples[1] < -32_000, "negative overload must clamp low");
         let _ = std::fs::remove_file(&path);

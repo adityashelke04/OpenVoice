@@ -13,9 +13,10 @@ import os
 import sys
 import sysconfig
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .protocol import log
 
@@ -105,6 +106,21 @@ _OFFLINE = enforce_offline_by_default()
 # Warn rather than fail: a slow load is still a working app.
 SLOW_LOAD_WARN_MS = 15_000
 
+# Decoding beam width. Overridable with OPENVOICE_BEAM_SIZE for experiments.
+BEAM_SIZE = int(os.environ.get("OPENVOICE_BEAM_SIZE", "5"))
+
+# Rejection thresholds for hallucinated output. Whisper does not fail silently on
+# noise -- it produces confident, well-formed words -- so these are the difference
+# between a dictation tool and a random word generator.
+#
+# A segment is discarded if the model's own "this is not speech" probability is
+# above NO_SPEECH_MAX, or if its mean token log-probability is below
+# MIN_AVG_LOGPROB. An entire utterance is discarded if the voice-activity detector
+# found less than MIN_SPEECH_SECONDS of actual speech in it.
+NO_SPEECH_MAX = float(os.environ.get("OPENVOICE_NO_SPEECH_MAX", "0.6"))
+MIN_AVG_LOGPROB = float(os.environ.get("OPENVOICE_MIN_AVG_LOGPROB", "-1.0"))
+MIN_SPEECH_SECONDS = float(os.environ.get("OPENVOICE_MIN_SPEECH_S", "0.35"))
+
 # Reference machine: RTX 3050 Laptop, 4 GB VRAM. These presets are chosen so the
 # default fits comfortably alongside a desktop compositor and a browser, which is
 # the realistic condition this app runs under -- not a benchmark machine with an
@@ -169,9 +185,7 @@ class Engine:
 
     def __init__(self, model: str = "base.en", device: str = "auto") -> None:
         if model not in MODEL_PRESETS:
-            raise ValueError(
-                f"unknown model {model!r}; known: {', '.join(sorted(MODEL_PRESETS))}"
-            )
+            raise ValueError(f"unknown model {model!r}; known: {', '.join(sorted(MODEL_PRESETS))}")
         self.model_name = model
         self.preset = MODEL_PRESETS[model]
         self.device = device
@@ -307,12 +321,33 @@ class Engine:
         segments, info = self._model.transcribe(
             wav_path,
             language=language,
-            beam_size=1,
-            # Greedy decoding with beam_size=1 is roughly 2x faster than the default
-            # beam of 5, and for short dictated utterances the accuracy difference is
-            # not perceptible. Latency is the feature here.
+            # Beam search, not greedy. beam_size=1 was chosen for latency and it
+            # was a bad trade: greedy decoding falls into repetition loops, which
+            # is where `?????????????`, `kkkkkkkkkkkk` and `...............` come
+            # from. A beam keeps alternative hypotheses alive so a degenerate one
+            # loses, and it costs a few hundred milliseconds. Correct output is
+            # worth more than the latency.
+            beam_size=BEAM_SIZE,
+            # Direct suppression of loops, belt to the beam's braces.
+            repetition_penalty=1.15,
+            no_repeat_ngram_size=3,
+            # Whisper hallucinates confidently on silence and noise. These three
+            # are the model's own escape hatches and are worth setting explicitly
+            # rather than inheriting: a segment that is too repetitive (high
+            # compression ratio), too improbable, or too likely to be silence gets
+            # retried at a higher temperature and then dropped.
+            temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            # Trim silence before decoding. Push-to-talk always captures a moment
+            # of room tone at each end, and room tone is exactly what Whisper
+            # invents words for.
             vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 300},
+            vad_parameters={
+                "min_silence_duration_ms": 300,
+                "speech_pad_ms": 200,
+            },
             initial_prompt=build_hint(vocabulary),
             condition_on_previous_text=False,
             # Each utterance is independent. Conditioning on previous text makes
@@ -322,14 +357,42 @@ class Engine:
 
         parts: list[str] = []
         logprobs: list[float] = []
+        dropped = 0
         for seg in segments:  # generator: this is where decoding actually happens
+            # Per-segment rejection. Whisper will confidently transcribe room tone
+            # -- a 2 s capture that was 74% silence produced the word "Jordan" --
+            # and a hallucinated segment carries the evidence of its own
+            # unreliability in these two numbers. Dropping them here is far better
+            # than letting them reach the user's editor.
+            no_speech = getattr(seg, "no_speech_prob", 0.0) or 0.0
+            avg_lp = seg.avg_logprob if seg.avg_logprob is not None else 0.0
+            if no_speech > NO_SPEECH_MAX or avg_lp < MIN_AVG_LOGPROB:
+                dropped += 1
+                log(
+                    f"dropped segment (no_speech={no_speech:.2f}, "
+                    f"avg_logprob={avg_lp:.2f}): {seg.text.strip()[:60]!r}"
+                )
+                continue
             parts.append(seg.text)
-            if seg.avg_logprob is not None:
-                logprobs.append(seg.avg_logprob)
+            logprobs.append(avg_lp)
+
+        text = "".join(parts).strip()
+
+        # Whole-utterance rejection. `duration_after_vad` is how much audio the
+        # voice-activity detector actually considered speech; when that is a
+        # fraction of a second, anything the model produced came from noise.
+        speech_s = getattr(info, "duration_after_vad", None)
+        if speech_s is not None and speech_s < MIN_SPEECH_SECONDS:
+            if text:
+                log(f"discarding {text[:60]!r}: only {speech_s:.2f}s of speech detected")
+            text = ""
+
+        if dropped:
+            log(f"dropped {dropped} low-confidence segment(s)")
 
         decode_ms = int((time.perf_counter() - started) * 1000)
         return Transcription(
-            text="".join(parts).strip(),
+            text=text,
             language=getattr(info, "language", language),
             confidence=(sum(logprobs) / len(logprobs)) if logprobs else None,
             decode_ms=decode_ms,

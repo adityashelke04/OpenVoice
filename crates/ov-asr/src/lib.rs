@@ -21,7 +21,9 @@
 //! struct is dropped or the parent process dies. That is what stops an orphaned
 //! Python process from sitting on 1.6 GB of VRAM.
 
-#![forbid(unsafe_code)]
+// `unsafe` is confined to `job.rs`, which uses Win32 job objects to guarantee the
+// sidecar cannot outlive this process and strand GPU memory. Everything else in
+// this crate is safe Rust.
 #![warn(missing_docs, clippy::all)]
 
 use std::io::{BufRead, BufReader, Write};
@@ -35,6 +37,8 @@ use ov_core::ports::{DecodeHint, Pcm16k, Transcriber};
 use ov_core::types::Transcript;
 use serde::Deserialize;
 
+#[cfg(windows)]
+mod job;
 mod wav;
 
 /// How to launch the sidecar.
@@ -106,20 +110,60 @@ pub struct SidecarTranscriber {
     pipe: Mutex<Option<Pipe>>,
     next_id: AtomicU64,
     model_id: Mutex<String>,
+    /// Kernel-enforced guarantee that the sidecar cannot outlive this process.
+    /// Closing stdin covers a graceful exit; this covers a kill or a crash.
+    #[cfg(windows)]
+    job: Option<job::KillOnDrop>,
 }
 
 impl SidecarTranscriber {
     /// Create a supervisor. The process is not spawned until first use or
     /// [`Transcriber::warm`].
     pub fn new(cfg: SidecarConfig) -> Result<Self> {
+        // Validate at construction, not at first decode. A missing sidecar
+        // directory otherwise surfaces as a bare OS error from `spawn` ("The
+        // directory name is invalid"), which names neither the directory nor the
+        // thing that is missing.
+        if !cfg.sidecar_dir.join("openvoice_asr").is_dir() {
+            return Err(Error::Transcription(format!(
+                "sidecar package not found at {}",
+                cfg.sidecar_dir.join("openvoice_asr").display()
+            )));
+        }
+        if !cfg.python.is_file()
+            && cfg
+                .python
+                .parent()
+                .is_some_and(|p| !p.as_os_str().is_empty())
+        {
+            return Err(Error::Transcription(format!(
+                "python interpreter not found at {}",
+                cfg.python.display()
+            )));
+        }
         std::fs::create_dir_all(&cfg.scratch_dir)
             .map_err(|e| Error::Transcription(format!("creating scratch dir: {e}")))?;
         let model_id = Mutex::new(format!("faster-whisper/{}", cfg.model));
+
+        #[cfg(windows)]
+        let job = {
+            let j = job::KillOnDrop::new();
+            if j.is_none() {
+                tracing::warn!(
+                    "could not create a job object; a hard kill of this process may \
+                     strand the sidecar holding GPU memory"
+                );
+            }
+            j
+        };
+
         Ok(Self {
             cfg,
             pipe: Mutex::new(None),
             next_id: AtomicU64::new(1),
             model_id,
+            #[cfg(windows)]
+            job,
         })
     }
 
@@ -152,6 +196,15 @@ impl SidecarTranscriber {
                 ))
             })?;
 
+        // Adopt before anything else can go wrong, so the child is covered for its
+        // entire life rather than from the first successful request onwards.
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            if !job.adopt(&child) {
+                tracing::warn!("could not assign the sidecar to the job object");
+            }
+        }
+
         let stdin = child
             .stdin
             .take()
@@ -161,7 +214,11 @@ impl SidecarTranscriber {
             .take()
             .ok_or_else(|| Error::Transcription("sidecar stdout unavailable".into()))?;
 
-        Ok(Pipe { child, stdin, stdout: BufReader::new(stdout) })
+        Ok(Pipe {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        })
     }
 
     /// Send one request and read its response, restarting the sidecar once if the
@@ -211,7 +268,8 @@ impl SidecarTranscriber {
 
         if !resp.ok {
             return Err(Error::Transcription(
-                resp.error.unwrap_or_else(|| "sidecar reported failure".into()),
+                resp.error
+                    .unwrap_or_else(|| "sidecar reported failure".into()),
             ));
         }
         Ok(resp)
@@ -286,6 +344,9 @@ impl Transcriber for SidecarTranscriber {
     }
 
     fn model_id(&self) -> String {
-        self.model_id.lock().expect("model id mutex poisoned").clone()
+        self.model_id
+            .lock()
+            .expect("model id mutex poisoned")
+            .clone()
     }
 }

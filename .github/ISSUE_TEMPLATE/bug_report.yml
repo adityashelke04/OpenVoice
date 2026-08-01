@@ -1,0 +1,112 @@
+name: Bug report
+description: Something behaves incorrectly — wrong text, a crash, a hotkey that stops working.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Two things make a dictation bug fixable rather than
+        merely reported:
+
+        1. **What you said and what appeared.** Verbatim, both of them.
+        2. **The log.** It records the state machine, timings, and the injection path taken.
+
+        If this is a **security** issue — anything involving the keyboard hook, the
+        clipboard, or data leaving your machine — please close this and follow
+        [SECURITY.md](https://github.com/adityashelke04/OpenVoice/blob/main/SECURITY.md) instead. Do not post it publicly.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+      placeholder: |
+        I said "cube control get pods" in Windows Terminal.
+        Expected: kubectl get pods
+        Got:      Cube control get pods.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: If it is intermittent, say so and estimate how often. That is useful, not a disqualifier.
+      placeholder: |
+        1. Focus Windows Terminal
+        2. Hold Right Ctrl, say "cube control get pods", release
+        3. Read the injected text
+    validations:
+      required: true
+
+  - type: input
+    id: target-app
+    attributes:
+      label: Target application
+      description: The app the text was going into, with its version. Injection fails per-application in ways nothing else reproduces.
+      placeholder: "Windows Terminal 1.21.2701.0 / VS Code 1.96.2 / Chrome 131"
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: "`winver` gives you the exact build."
+      placeholder: "Windows 11 Home 23H2, build 22631.4602"
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: "`nvidia-smi` for NVIDIA, or Task Manager → Performance → GPU. Write `CPU only` if you have no usable GPU."
+      placeholder: "RTX 3050 Laptop 4 GB, driver 566.36 / CPU only"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Which Whisper model was selected, and whether it was running on CUDA or CPU.
+      placeholder: "base.en on CUDA"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: OpenVoice version
+      description: From the settings window, or the tag/commit you built from.
+      placeholder: "v0.1.0, or commit 7bfdfc6"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: |
+        Paste the relevant tail of `%APPDATA%\OpenVoice\openvoice.log`.
+
+        Get it with:
+
+        ```powershell
+        Get-Content "$env:APPDATA\OpenVoice\openvoice.log" -Tail 200
+        ```
+
+        **Read it before pasting.** If you had transcript retention on, it may contain
+        text you dictated. Redact anything you would not post in public.
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I have removed anything private from the log I pasted.
+          required: true

@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
 
 PROTOCOL_VERSION = 1
 
@@ -33,7 +34,7 @@ class Request:
     params: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
-    def parse(line: str) -> "Request":
+    def parse(line: str) -> Request:
         # Strip a UTF-8 BOM. Windows tooling emits one readily -- PowerShell's pipe
         # does it by default -- and a BOM on the first line would otherwise make the
         # sidecar look broken on exactly the platform it primarily targets.

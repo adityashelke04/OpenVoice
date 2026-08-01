@@ -53,6 +53,17 @@ setx CARGO_HOME  D:\dev\cargo
 # then put  [build] target-dir = "D:\\dev\\cargo-target"  in %CARGO_HOME%\config.toml
 ```
 
+**Python environment somewhere unusual?** The app looks for an interpreter in
+`OPENVOICE_PYTHON`, then `VIRTUAL_ENV`, then `.venv/` and `sidecar/.venv/` in the
+repo. Nothing else — no absolute path to anyone's machine is compiled in, and
+none should be added. If yours lives elsewhere, name it once:
+
+```powershell
+setx OPENVOICE_PYTHON D:\dev\openvoice-venv\Scripts\python.exe
+```
+
+`ov` also takes `--python <path>` for a one-off.
+
 ### Any platform (pure crates only)
 
 ```sh
@@ -90,7 +101,7 @@ Three rules for rule-writing:
 cargo test --workspace                                        # everything
 cargo test -p ov-format                                       # fast inner loop
 cargo check -p ov-core -p ov-format --target wasm32-unknown-unknown   # purity
-cd sidecar && uv run pytest -q                                # sidecar protocol
+cd sidecar && uv run --with pytest pytest -q                  # sidecar protocol
 ```
 
 Tests that need model weights are `#[ignore]`d and run nightly. Downloading 1.6 GB on

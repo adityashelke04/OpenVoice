@@ -1,0 +1,40 @@
+[package]
+name = "ov-app"
+description = "OpenVoice desktop application: Tauri shell and composition root."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "openvoice"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ov-core.workspace = true
+ov-format.workspace = true
+ov-audio.workspace = true
+ov-asr.workspace = true
+ov-input.workspace = true
+ov-store.workspace = true
+
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1,0 +1,259 @@
+/* Shared layout for Hub screens. */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
+  max-width: 860px;
+}
+
+.screen-head h1 {
+  margin: 0;
+}
+
+.screen-lead {
+  margin-top: var(--s-2);
+  max-width: 62ch;
+}
+
+.screen-foot {
+  max-width: 68ch;
+}
+
+/* ------------------------------------------------------------------ rows -- */
+
+.srows {
+  margin: 0 calc(var(--s-5) * -1) calc(var(--s-5) * -1);
+}
+
+.srow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-6);
+  padding: var(--s-4) var(--s-5);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.srow:last-child {
+  border-bottom: none;
+}
+
+.srow-label {
+  min-width: 0;
+}
+
+/* Hints carry the real explanation, so they get a readable measure rather than
+   being squeezed into a column. */
+.srow-hint {
+  margin-top: 3px;
+  max-width: 64ch;
+}
+
+.srow-control {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding-top: 2px;
+}
+
+/* ---------------------------------------------------------------- models -- */
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-6);
+  width: 100%;
+  padding: var(--s-5);
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  text-align: left;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+
+.model:hover {
+  background: var(--surface-2);
+  border-color: var(--hairline-strong);
+}
+
+/* The selected model is the one currently listening, so it earns the accent —
+   consistent with green meaning "this is the live one". */
+.model[data-active="true"] {
+  border-color: var(--live-dim);
+}
+
+.model-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.model-detail {
+  max-width: 52ch;
+}
+
+.model-id {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.model-numbers {
+  display: flex;
+  gap: var(--s-6);
+  flex: none;
+  text-align: right;
+}
+
+/* ------------------------------------------------------------ dictionary -- */
+
+.dict-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--s-4);
+  padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.dict-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--s-4);
+  align-items: center;
+  padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.dict-row:last-child {
+  border-bottom: none;
+}
+
+.dict-row:hover {
+  background: var(--surface-1);
+}
+
+.dict-spoken {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--mute);
+}
+
+.dict-written {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.dict-add {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--s-4);
+  align-items: end;
+  padding: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+/* ----------------------------------------------------------- style tabs -- */
+
+.style-tabs {
+  display: inline-flex;
+  gap: var(--s-1);
+  padding: var(--s-1);
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  align-self: flex-start;
+}
+
+.app-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.app-chip {
+  padding: 4px var(--s-3);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--mute);
+}
+
+/* ---------------------------------------------------------------- trace -- */
+
+.trace {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.trace-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: var(--s-4);
+  align-items: baseline;
+  padding: 7px var(--s-4);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas);
+}
+
+.trace-row:last-child {
+  border-bottom: none;
+}
+
+/* A changed row is the answer to "which rule did this?", so it is the one thing
+   on the screen allowed to be highlighted. */
+.trace-row[data-changed="true"] {
+  background: var(--surface-1);
+}
+
+.trace-stage {
+  text-align: right;
+  color: var(--faint);
+}
+
+.trace-out {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--mute);
+  word-break: break-word;
+}
+
+.trace-out.changed {
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------- try it out -- */
+
+.tryout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.tryout-result {
+  padding: var(--s-4);
+  background: var(--canvas);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  min-height: 44px;
+  word-break: break-word;
+}
+
+.tryout-result[data-empty="true"] {
+  color: var(--faint);
+}

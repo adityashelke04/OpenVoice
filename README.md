@@ -42,9 +42,16 @@ you get:   "kubectl get pods"               (no capital, no period — it runs)
 
 ## Principles
 
-1. **Local by default, network by exception.** The only outbound request the app can
-   make is a model download you asked for. This is [enforced in
-   CI](scripts/check-no-network.sh), not just promised here.
+1. **Local by default, network by exception.** The only outbound request OpenVoice
+   makes is a model download you asked for. Every crate that touches your
+   microphone, your transcripts, your keyboard or your history is *sealed*: it has
+   no path to an HTTP client, TLS stack or socket library anywhere in its
+   dependency graph. That is [checked in CI](scripts/check-no-network.sh), not just
+   promised here. The one honest caveat: the Tauri shell links `reqwest`
+   transitively, because Tauri does, so an HTTP client is present in the binary
+   even though no OpenVoice code calls it. The CI job asserts that no OpenVoice
+   crate takes a network dependency of its own — telemetry or an update ping
+   cannot be added quietly.
 2. **Never lose a word.** If injection fails, the text is still on your clipboard and
    in your history. A failure is recoverable, never a silent drop.
 3. **Invisible when idle.** ~60 MB RAM, ~0% CPU. You should never notice it running.
@@ -84,8 +91,8 @@ The boundary is enforced mechanically: CI compiles the core crates for
 | `ov-app` | Tauri shell — the composition root |
 | `sidecar/` | faster-whisper, as a supervised child process |
 
-Full design: [`docs/DESIGN.md`](docs/DESIGN.md). Decisions and their rationale:
-[`docs/adr/`](docs/adr/).
+Full design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Decisions and their
+rationale: [`docs/adr/`](docs/adr/).
 
 ### Measured on the reference machine
 

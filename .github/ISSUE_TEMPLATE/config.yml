@@ -1,0 +1,18 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/adityashelke04/OpenVoice/security/advisories/new
+    about: >-
+      Anything touching the keyboard hook, the clipboard, injection into other
+      applications, or data leaving the machine. Report privately, not here.
+  - name: Question or idea
+    url: https://github.com/adityashelke04/OpenVoice/discussions
+    about: >-
+      Usage questions, half-formed ideas, and "is this supposed to work like
+      this?" belong in Discussions, where they stay findable without becoming a
+      tracked task.
+  - name: Text injection failed in a specific app
+    url: https://github.com/adityashelke04/OpenVoice/issues/new?template=bug_report.yml&labels=bug,injection
+    about: >-
+      Use the bug form and include the application name and version. Injection
+      breaks per-application and no unit test catches it.

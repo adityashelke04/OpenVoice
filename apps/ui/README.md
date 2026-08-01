@@ -1,32 +1,42 @@
-# React + TypeScript + Vite
+# OpenVoice UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React frontend for the Tauri shell (`crates/ov-app`). Vite builds it to
+`dist/`, which `tauri.conf.json` embeds into the binary as `frontendDist`.
 
-Currently, two official plugins are available:
+## Running it
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+npm install
+npm run dev        # http://localhost:5199, mock data, no Rust needed
+npm run build      # type-check and emit dist/
+npm run lint       # oxlint
+npx tsc --noEmit   # type-check only
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+`npm run dev` works standalone. Anything that calls into Rust is guarded by a
+`__TAURI_INTERNALS__` check in `src/engine/settings.ts` and returns `null`
+outside the shell, so the UI can be developed in a browser at full speed.
+
+To see it inside the real window, build the Tauri shell instead — its
+`beforeDevCommand` in `crates/ov-app/tauri.conf.json` starts this server on port
+5199 for you, so do not run `npm run dev` at the same time.
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `src/windows/` | One file per Tauri window: `Hub` (main), `Overlay` (the Flow Bar), `Sheet` (component gallery, `?window=sheet`) |
+| `src/screens/` | Sections of the hub: Settings, Dictionary, Profiles, Advanced |
+| `src/ui/` | The primitives everything else is built from |
+| `src/engine/` | The bridge to Rust: event stream, settings, stats |
+| `src/styles/` | Design tokens, then global styles. Tokens first; components never invent a colour |
+
+## The one rule
+
+**The UI is a projection of the event stream, never a source of truth.** It
+renders whatever `ov-core` last said and computes nothing the engine could
+compute. That is what keeps the engine testable without a window, and it is why
+`src/engine/types.ts` is a hand-maintained mirror of `ov_core::event::Event`
+rather than a place to add fields.
+
+If you find yourself deriving state here, add it to the event instead.

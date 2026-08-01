@@ -25,7 +25,7 @@ What the design does about it:
 | Concern | Mitigation |
 |---|---|
 | Hook could log every keystroke | The hook procedure compares a virtual key code against your configured chord and discards the event. It has no storage and no path to one. Source: `crates/ov-input/`. |
-| Audio could be exfiltrated | No crate outside the model downloader can reach the network. Enforced by a CI job (`scripts/check-no-network.sh`) that fails the build on any HTTP client, TLS stack, or socket library in the sealed crates. |
+| Audio could be exfiltrated | Every crate that touches audio, transcripts, the keyboard or history — `ov-core`, `ov-format`, `ov-audio`, `ov-input`, `ov-asr`, `ov-cli` — is *sealed*: no HTTP client, TLS stack, or socket library anywhere in its transitive graph, build scripts included. A CI job (`scripts/check-no-network.sh`) fails the build if that changes. **Caveat, stated plainly:** the Tauri shell (`ov-app`) links `reqwest` transitively because Tauri depends on it unconditionally. No OpenVoice code calls it, and the same CI job asserts that `ov-app` takes no network dependency of its own, so telemetry or an update ping cannot be added without failing the build — but an HTTP client is in the shipped binary and it would be dishonest to say otherwise. |
 | Audio could be retained | Held in RAM, dropped after transcription. Writing audio to disk requires explicitly enabling `privacy.retain_audio`. |
 | Transcripts could leak secrets | Configurable regex redaction runs before anything is written to history or logs. Defaults cover common API key and token formats. |
 | Telemetry | There is none. Not disabled by default — absent from the codebase, and kept absent by the same CI job. |

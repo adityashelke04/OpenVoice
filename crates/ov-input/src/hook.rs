@@ -22,7 +22,7 @@
 //!    default binding (Right Ctrl) must pass through or the user's own shortcuts
 //!    break.
 
-use std::sync::atomic::{AtomicU32, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, OnceLock};
 
@@ -111,7 +111,8 @@ impl HotkeyListener for WinHotkeyListener {
                 // SAFETY: `hook_proc` is a valid `extern "system"` callback with the
                 // signature Windows expects. Passing a null module handle with a
                 // non-zero thread id is required for a thread-local low-level hook.
-                let installed = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None, 0) };
+                let installed =
+                    unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None, 0) };
 
                 match installed {
                     Ok(h) => {
@@ -120,9 +121,8 @@ impl HotkeyListener for WinHotkeyListener {
                         pump_messages();
                     }
                     Err(e) => {
-                        let _ = ready_tx.send(Err(Error::Hotkey(format!(
-                            "SetWindowsHookExW failed: {e}"
-                        ))));
+                        let _ = ready_tx
+                            .send(Err(Error::Hotkey(format!("SetWindowsHookExW failed: {e}"))));
                     }
                 }
             })

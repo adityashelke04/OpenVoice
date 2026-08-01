@@ -14,9 +14,20 @@ serde.workspace = true
 serde_json.workspace = true
 hound = "3.5"
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [lints.rust]
 missing_docs = "warn"
-unsafe_code = "forbid"
+# Allowed only for the job-object FFI in `job.rs`, which guarantees the sidecar
+# cannot outlive the app and strand GPU memory. Every block there states its
+# invariant.
+unsafe_code = "allow"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

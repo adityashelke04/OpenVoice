@@ -6,8 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  # Applies to workspace crates only: Cargo passes --cap-lints allow to registry
+  # dependencies, so a warning in someone else's crate cannot fail our build.
   RUSTFLAGS: -D warnings
 
 concurrency:
@@ -15,13 +20,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # The full workspace only builds on Windows, and that is not an oversight.
+  # `ov-input`, `ov-cli` and `ov-app` call Win32 directly (`WinTextSink`,
+  # `WinHotkeyListener`, `WinForeground`) with no non-Windows implementation
+  # behind them. macOS and Linux adapters are v0.5 work; when they exist, turn
+  # this back into an os matrix and delete this comment.
+  #
+  # The portability guarantee is kept by the `portable` job below, which builds
+  # every crate that is genuinely platform-independent today on Linux.
+  # ---------------------------------------------------------------------------
   rust:
-    name: Rust (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
+    name: Rust (windows-latest)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,6 +54,44 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  # ---------------------------------------------------------------------------
+  # Everything not tied to Win32, compiled on Linux. This is what stops a
+  # platform assumption from leaking into a crate that is supposed to be
+  # portable, months before anyone attempts the port.
+  #
+  # `ov-input` is included deliberately: every item in it sits behind
+  # `cfg(windows)`, so on Linux it must still compile -- as an empty crate. A
+  # Win32 call added without a gate fails here, which is the point.
+  # ---------------------------------------------------------------------------
+  portable:
+    name: Portable crates (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # cpal links ALSA on Linux; ov-audio does not build without the headers.
+      - name: ALSA headers for cpal
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev
+
+      - name: Clippy
+        run: >-
+          cargo clippy
+          -p ov-core -p ov-format -p ov-asr -p ov-audio -p ov-input
+          --all-targets --all-features
+
+      - name: Test
+        run: >-
+          cargo test
+          -p ov-core -p ov-format -p ov-asr -p ov-audio -p ov-input
+          --all-features
+
+  # ---------------------------------------------------------------------------
   purity:
     name: Domain purity
     runs-on: ubuntu-latest
@@ -63,6 +112,7 @@ jobs:
       - name: Core crates must compile for wasm32
         run: cargo check -p ov-core -p ov-format --target wasm32-unknown-unknown
 
+  # ---------------------------------------------------------------------------
   no-network:
     name: No network in the hot path
     runs-on: ubuntu-latest
@@ -74,9 +124,14 @@ jobs:
       # "Local-first, no telemetry" is a product promise. A promise that is only
       # written in a README rots the first time someone adds a convenient
       # dependency. This makes it a build failure instead.
+      #
+      # Note what this does *not* cover: ov-app links Tauri, which depends on
+      # reqwest. The sealed set is the crates that carry audio and transcripts.
+      # See the header of the script.
       - name: Assert no HTTP client outside the model downloader
         run: bash scripts/check-no-network.sh
 
+  # ---------------------------------------------------------------------------
   deny:
     name: Licenses and advisories
     runs-on: ubuntu-latest
@@ -86,21 +141,63 @@ jobs:
         with:
           command: check bans licenses advisories sources
 
+  # ---------------------------------------------------------------------------
   sidecar:
     name: ASR sidecar
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+
+      # Ruff is pinned. An unpinned linter turns "upstream shipped a new rule"
+      # into "main is red", on a morning nobody chose.
       - name: Lint
         working-directory: sidecar
-        run: uvx ruff check .
+        run: uvx ruff@0.16.1 check .
+
       - name: Format
         working-directory: sidecar
-        run: uvx ruff format --check .
+        run: uvx ruff@0.16.1 format --check .
+
       - name: Test
         working-directory: sidecar
         # Protocol and hint-packing tests only. Model inference is exercised
         # nightly, not per-PR: pulling weights on every push would make CI slower
         # than the review it is meant to support.
-        run: uv run --with pytest pytest -q
+        #
+        # `uv run` installs the package first, so this doubles as a check that
+        # `uv pip install -e sidecar` still works. faster-whisper is imported
+        # lazily inside Engine.load(), so no model code executes here.
+        run: uv run --python 3.12 --with pytest pytest -q
+
+  # ---------------------------------------------------------------------------
+  # The Tauri shell embeds apps/ui/dist. Without this job a frontend that does
+  # not typecheck or does not build is only discovered at package time, and the
+  # installer ships an empty window.
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+
+      - name: Install
+        working-directory: apps/ui
+        run: npm ci
+
+      - name: Lint
+        working-directory: apps/ui
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: apps/ui
+        run: npx tsc --noEmit -p tsconfig.app.json
+
+      - name: Build
+        working-directory: apps/ui
+        run: npm run build

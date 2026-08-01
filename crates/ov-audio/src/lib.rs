@@ -242,7 +242,12 @@ fn open_stream(
     .map_err(|e| Error::Audio(format!("building input stream: {e}")))?;
 
     tracing::info!(rate = src_rate, channels, "capture started");
-    Ok(Active { stream, buffer, src_rate, channels })
+    Ok(Active {
+        stream,
+        buffer,
+        src_rate,
+        channels,
+    })
 }
 
 /// The realtime callback. Appends samples and reports a level.

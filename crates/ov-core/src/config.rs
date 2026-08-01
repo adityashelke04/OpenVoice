@@ -149,8 +149,25 @@ pub struct Config {
     pub model: String,
     /// Preferred input device name, or `None` for the system default.
     pub input_device: Option<String>,
-    /// Above this many characters, injection switches from synthesized keystrokes to
-    /// clipboard paste. See `docs/DESIGN.md` §7.
+    /// Above this many characters, injection switches from synthesized keystrokes
+    /// to clipboard paste.
+    ///
+    /// Two failure modes pull this in opposite directions, so the value sits
+    /// between them.
+    ///
+    /// *Too high* and synthesized keystrokes corrupt: Windows coalesces adjacent
+    /// `VK_PACKET` events when the target cannot drain its input queue, turning
+    /// `Are you the best?` into `Are ?????????????`. That is now mitigated by
+    /// sending in small paced chunks rather than one batch.
+    ///
+    /// *Too low* and everything routes through the clipboard, which is atomic but
+    /// depends on the target honouring `Ctrl+V` and reading the clipboard promptly.
+    /// An Electron editor did neither, and text vanished while the engine recorded
+    /// "delivered".
+    ///
+    /// 60 characters covers most single utterances by typing them directly —
+    /// borrowing no clipboard and working in terminals that do not accept `Ctrl+V`
+    /// — while longer passages still paste atomically.
     pub paste_threshold_chars: usize,
 }
 
@@ -164,7 +181,7 @@ impl Default for Config {
             privacy: PrivacyConfig::default(),
             model: "base.en".into(),
             input_device: None,
-            paste_threshold_chars: 120,
+            paste_threshold_chars: 60,
         }
     }
 }

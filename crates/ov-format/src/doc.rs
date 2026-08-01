@@ -13,7 +13,7 @@ pub enum Tok {
     Word(String),
     /// Literal text that is already final — punctuation, symbols, an identifier a
     /// rule has resolved. Later rules leave these alone. Spacing follows the
-    /// [`TIGHT_LEFT`] / [`TIGHT_RIGHT`] tables.
+    /// `TIGHT_LEFT` / `TIGHT_RIGHT` tables in this module.
     Lit(String),
     /// A literal that binds tightly to *both* neighbours, with no space on either
     /// side.
