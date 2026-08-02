@@ -212,7 +212,8 @@ function reduce(
       return { ...v, state: "injecting" };
 
     case "Finished": {
-      const failed = e.outcome.kind === "asr_failed";
+      const failed =
+        e.outcome.kind === "asr_failed" || e.outcome.kind === "capture_failed";
       return {
         ...v,
         state: failed ? "fault" : v.state,

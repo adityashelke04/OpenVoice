@@ -11,6 +11,8 @@ import io
 import json
 import os
 import struct
+import subprocess
+import sys
 import wave
 from pathlib import Path
 
@@ -231,15 +233,77 @@ class TestLoadPcm16Wav:
         # The actual audio this protocol carries in production, not a synthetic
         # WAV -- proof the reader works on what ov-asr really writes, not just on
         # inputs shaped to fit it.
+        #
+        # fixtures/audio/ itself is tracked via a .gitkeep so the path always
+        # exists; the *.wav files inside it are gitignored (see repo
+        # .gitignore) and are not part of a normal checkout. Checking
+        # `fixtures.is_dir()` alone therefore never skips -- it always finds
+        # the directory and then fails on the empty glob. Skip on the absence
+        # of actual fixture files, not the directory that merely holds them.
         fixtures = Path(__file__).parents[2] / "fixtures" / "audio"
-        if not fixtures.is_dir():
-            pytest.skip("fixtures/audio not present in this checkout")
+        wavs = list(fixtures.glob("*.wav")) if fixtures.is_dir() else []
+        if not wavs:
+            pytest.skip("no fixture WAVs in this checkout (fixtures/audio/*.wav is gitignored)")
         engine = Engine(model="base.en", device="cpu")
-        found = False
-        for wav in fixtures.glob("*.wav"):
-            found = True
+        for wav in wavs:
             audio = engine._load_pcm16_wav(str(wav))
             assert audio.dtype == np.float32
             assert audio.ndim == 1
             assert np.all(np.abs(audio) <= 1.0)
-        assert found, "expected at least one fixture WAV"
+
+
+class TestStdioEncoding:
+    """`_force_utf8_io` must actually force UTF-8 on a real, piped subprocess.
+
+    This cannot be tested in-process: pytest's own stdio capture does not
+    reproduce the failure. Python's stdio only defaults to UTF-8 inside an
+    interactive console (PEP 528) -- redirected to a pipe, exactly how the
+    Rust host launches this sidecar, it silently falls back to
+    `locale.getpreferredencoding()`, the Windows ANSI code page (`cp1252` on
+    a typical install). Confirmed by hand on this platform: without the fix,
+    `write()` raises `UnicodeEncodeError` on a character cp1252 cannot
+    represent at all (crashing the process outright), and silently emits
+    invalid-UTF-8 bytes for a character cp1252 *can* represent but as a
+    different byte than UTF-8 uses -- which includes ordinary accented Latin
+    text ("café", "naïve") and the smart quotes/dashes Whisper's own
+    punctuation restoration commonly adds. Either way the transcript is lost,
+    which is exactly the "never lose a word" guarantee this app promises.
+    """
+
+    def test_utf8_survives_a_real_piped_subprocess(self):
+        text = "cafe with accents: café naïve, CJK: 你好, emoji: \U0001f600"
+        script = (
+            "import sys; sys.path.insert(0, 'sidecar'); "
+            "from openvoice_asr.__main__ import _force_utf8_io; "
+            "from openvoice_asr.protocol import write; "
+            "_force_utf8_io(); "
+            f"write({{'id': 1, 'ok': True, 'text': {text!r}}})"
+        )
+        repo_root = Path(__file__).parents[2]
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            cwd=repo_root,
+        )
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+        line = proc.stdout.decode("utf-8")
+        assert json.loads(line)["text"] == text
+
+    def test_without_the_fix_the_same_text_breaks_a_piped_subprocess(self):
+        # Documents the exact failure the fix prevents, so a future change that
+        # accidentally removes `_force_utf8_io()` fails loudly here rather than
+        # only under real dictation with an accented word.
+        text = "cafe with accents: café naïve, CJK: 你好, emoji: \U0001f600"
+        script = (
+            "import sys; sys.path.insert(0, 'sidecar'); "
+            "from openvoice_asr.protocol import write; "
+            f"write({{'id': 1, 'ok': True, 'text': {text!r}}})"
+        )
+        repo_root = Path(__file__).parents[2]
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            cwd=repo_root,
+        )
+        assert proc.returncode != 0
+        assert b"UnicodeEncodeError" in proc.stderr

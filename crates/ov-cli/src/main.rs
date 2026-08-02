@@ -922,6 +922,7 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                     println!("   could not type into {} - press Ctrl+V", record.app.exe);
                 }
                 Outcome::AsrFailed(e) => println!("   transcription failed: {e}"),
+                Outcome::CaptureFailed(e) => println!("   microphone error: {e}"),
                 Outcome::Cancelled => println!("   cancelled"),
                 // These two were previously silent, which is the worst possible
                 // behaviour when someone is trying to work out why nothing

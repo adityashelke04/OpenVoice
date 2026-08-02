@@ -228,6 +228,18 @@ impl Config {
         if self.model.trim().is_empty() {
             return Err(Error::Config("model must not be empty".into()));
         }
+        // TOML happily parses `nan`/`-nan`/`inf` float literals, and a NaN here is
+        // not merely wrong, it is silent: `rms < silence_rms` is `false` for every
+        // possible `rms` when `silence_rms` is NaN (all comparisons with NaN are
+        // false), and the same holds for any negative threshold since RMS is never
+        // negative. Either one completely and quietly disables the muted-microphone
+        // check with no error anywhere -- exactly the "mysterious dead hotkey" this
+        // function exists to prevent, just for a different symptom.
+        if !self.limits.silence_rms.is_finite() || self.limits.silence_rms < 0.0 {
+            return Err(Error::Config(
+                "limits.silence_rms must be a finite, non-negative number".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -258,6 +270,32 @@ mod tests {
             limits: SessionLimits {
                 min_duration_ms: 5_000,
                 max_duration_ms: 1_000,
+                ..SessionLimits::default()
+            },
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_nan_silence_threshold() {
+        // A NaN threshold makes `rms < silence_rms` false for every rms, silently
+        // and completely disabling muted-microphone detection with no error.
+        let c = Config {
+            limits: SessionLimits {
+                silence_rms: f32::NAN,
+                ..SessionLimits::default()
+            },
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_negative_silence_threshold() {
+        let c = Config {
+            limits: SessionLimits {
+                silence_rms: -0.01,
                 ..SessionLimits::default()
             },
             ..Config::default()

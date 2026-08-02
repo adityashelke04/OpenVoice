@@ -56,6 +56,12 @@ pub enum Outcome {
     Silent,
     /// The transcriber failed.
     AsrFailed(String),
+    /// Capture itself failed — a microphone/device problem, never reaching the
+    /// transcriber. Kept distinct from `AsrFailed` because the two are different
+    /// failure classes with different user-facing advice ("check your input
+    /// device" vs. "try again"), and history/metrics should be able to tell them
+    /// apart rather than blaming the model for a dead microphone.
+    CaptureFailed(String),
 }
 
 impl Outcome {
@@ -75,6 +81,7 @@ impl Outcome {
             Self::TooShort => "too_short",
             Self::Silent => "silent",
             Self::AsrFailed(_) => "asr_failed",
+            Self::CaptureFailed(_) => "capture_failed",
         }
     }
 }

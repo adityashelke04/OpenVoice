@@ -238,6 +238,10 @@ fn paste_with_restore(text: &str) -> Result<()> {
     let snapshot = ClipboardSnapshot::capture()?;
     set_clipboard_text(text)?;
     let result = send_paste_chord();
+    // Whether the synthetic Ctrl+V actually reached the target, not merely
+    // whether we attempted it. See `should_restore`: this is what the restore
+    // decision must key on, not just "does the clipboard still hold our text".
+    let paste_sent = result.is_ok();
 
     // Restore off-thread so injection returns immediately. Blocking here made every
     // dictation feel slower *and* still lost the race.
@@ -246,19 +250,57 @@ fn paste_with_restore(text: &str) -> Result<()> {
         .name("ov-clipboard-restore".into())
         .spawn(move || {
             std::thread::sleep(CLIPBOARD_HOLD);
-            // Only take the clipboard back if it is still ours. If the user copied
-            // something in the meantime, restoring would silently destroy it —
-            // and quietly eating someone's clipboard is far worse than leaving a
-            // transcript on it.
-            match read_clipboard_text() {
-                Some(current) if current == ours => snapshot.restore(),
-                Some(_) => tracing::debug!("clipboard changed since paste; not restoring"),
-                None => snapshot.restore(),
+            let current = read_clipboard_text();
+            if should_restore(paste_sent, current.as_deref(), &ours) {
+                snapshot.restore();
+            } else {
+                tracing::debug!(
+                    paste_sent,
+                    matches_ours = current.as_deref() == Some(ours.as_str()),
+                    "not restoring clipboard after paste"
+                );
             }
         })
         .map_err(|e| Error::Injection(format!("clipboard restore thread: {e}")))?;
 
     result
+}
+
+/// Whether the background thread should hand the clipboard back to whatever
+/// held it before the paste.
+///
+/// Regression: the decision used to look *only* at whether the clipboard
+/// still held our own text, never at whether the paste actually sent. That
+/// missed exactly the failure path it exists to protect: when `send_paste_chord`
+/// fails (`SendInput` blocked by a more-privileged window, say), the target
+/// never reads our text from the clipboard at all, and `WinTextSink::inject`'s
+/// caller deliberately re-copies `text` to the clipboard as the safety net a
+/// failed injection is supposed to leave behind ("leave the text on the
+/// clipboard so nothing is lost"). A second later, this same clipboard
+/// content trivially satisfies `current == ours` regardless of *why* it got
+/// there, so the old code restored right over that safety net, silently
+/// destroying the one thing a failed injection promised to leave the user.
+///
+/// `paste_sent` is `send_paste_chord`'s own result. If it never sent, nothing
+/// currently on the clipboard can be attributed to a successful paste that
+/// has finished being read, so the pre-paste snapshot must never come back —
+/// restoring it would either destroy the just-explained safety net, or
+/// destroy something the user copied in the meantime. Only once the paste is
+/// known to have gone through does "does the clipboard still hold our text"
+/// become a meaningful signal that it is safe to hand the old contents back.
+#[must_use]
+fn should_restore(paste_sent: bool, current: Option<&str>, ours: &str) -> bool {
+    if !paste_sent {
+        return false;
+    }
+    // Only take the clipboard back if it is still ours. If the user copied
+    // something in the meantime, restoring would silently destroy it — and
+    // quietly eating someone's clipboard is far worse than leaving a
+    // transcript on it.
+    match current {
+        Some(c) => c == ours,
+        None => true,
+    }
 }
 
 /// Current clipboard text, if any.
@@ -459,4 +501,37 @@ fn set_clipboard_text(text: &str) -> Result<()> {
             .map_err(|e| Error::Injection(format!("SetClipboardData: {e}")))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn never_restores_when_the_paste_never_sent() {
+        // The exact regression: a failed `send_paste_chord` means the caller's
+        // own safety net (re-copying `text` to the clipboard, see
+        // `WinTextSink::inject`) is sitting there, and it must survive.
+        assert!(!should_restore(false, Some("our text"), "our text"));
+        assert!(!should_restore(false, None, "our text"));
+        assert!(!should_restore(false, Some("something else"), "our text"));
+    }
+
+    #[test]
+    fn restores_after_a_successful_paste_if_the_clipboard_is_still_ours() {
+        assert!(should_restore(true, Some("our text"), "our text"));
+    }
+
+    #[test]
+    fn does_not_restore_after_success_if_the_user_copied_something_else() {
+        assert!(!should_restore(true, Some("something else"), "our text"));
+    }
+
+    #[test]
+    fn restores_after_success_when_no_text_is_present() {
+        // No CF_UNICODETEXT at all is treated as "safe to restore" once the
+        // paste is known to have gone through -- see the doc comment on
+        // `should_restore` for the ambiguity this still carries.
+        assert!(should_restore(true, None, "our text"));
+    }
 }

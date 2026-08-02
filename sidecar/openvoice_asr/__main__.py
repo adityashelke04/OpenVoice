@@ -39,6 +39,38 @@ from .protocol import (
 PROGRESS_INTERVAL_S = 0.2
 
 
+def _force_utf8_io() -> None:
+    """Make stdin/stdout/stderr UTF-8, unconditionally.
+
+    Both sides of this protocol write and read raw UTF-8: this module's own
+    ``write()`` uses ``ensure_ascii=False``, and the Rust host's ``serde_json``
+    does the same. But Python's stdio streams are only UTF-8 by default inside
+    an interactive console (PEP 528) -- redirected to a pipe, which is exactly
+    how the Rust host launches this process, they fall back to
+    ``locale.getpreferredencoding()``, the ANSI code page (``cp1252`` on a
+    typical Windows install). That breaks the protocol two different ways,
+    confirmed by actually spawning a piped child on this platform:
+
+    - A character cp1252 cannot represent at all (CJK, emoji) raises
+      ``UnicodeEncodeError`` on ``write()`` and crashes the process outright.
+    - A character cp1252 *can* represent, but as a single byte that is not
+      valid UTF-8 on its own (ordinary accented Latin text -- "café",
+      "naïve" -- or the smart quotes and en/em dashes Whisper's own
+      punctuation restoration commonly adds), writes bytes that Rust's
+      ``read_line`` then rejects as invalid UTF-8. The Rust side retries the
+      request once against a freshly-spawned sidecar, which decodes the exact
+      same non-ASCII characters and hits the exact same failure again -- so
+      the retry cannot help, and the transcript is lost outright. That is
+      precisely the "never lose a word" guarantee this app promises, broken
+      by something as ordinary as a dictated loanword.
+
+    Called first thing, before any request is read or any response written.
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+
 def ensure_model(req: Request, engine: Engine) -> dict[str, object]:
     """Make a model's weights available locally, downloading them if needed.
 
@@ -137,6 +169,8 @@ def handle(req: Request, engine: Engine) -> dict[str, object] | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_io()
+
     parser = argparse.ArgumentParser(prog="openvoice_asr")
     parser.add_argument("--model", default="base.en")
     parser.add_argument(
