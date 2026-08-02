@@ -246,13 +246,19 @@ one** — retrofitting latency instrumentation into a shipped app never happens.
 
 | Model | Size on disk | VRAM | Quality | Verdict |
 |---|---:|---:|---|---|
-| `large-v3-turbo` q5_0 | ~574 MB | ~1.6 GB | Excellent | **Default.** Fits comfortably. |
+| `large-v3-turbo` q5_0 | ~574 MB | ~1.6 GB | Excellent | Best accuracy, opt-in upgrade |
 | `distil-large-v3` | ~750 MB | ~1.9 GB | Very good, EN-only | Alternate |
 | `small.en` q5_1 | ~190 MB | ~0.6 GB | Good | Low-VRAM / battery profile |
-| `base.en` q5_1 | ~60 MB | CPU-ok | Mediocre | CPU fallback, first-run smoke test |
+| `base.en` q5_1 | ~60 MB | CPU-ok | Mediocre | **Installed default.** First-run smoke test. |
 
-Ship with `base.en` downloadable in seconds so the very first run works within 30 s
-of install, then prompt to upgrade to `large-v3-turbo` in the background.
+> **Corrected on 2026-08-02.** This originally shipped `large-v3-turbo` as the
+> default with a plan to prompt an upgrade *from* `base.en` in the background —
+> that upgrade prompt was never built, and the plain default landed as
+> `large-v3-turbo` instead. Distribution turned out CPU-only (§14, ADR 0003
+> outcome), which makes `large-v3-turbo` the heaviest model on the slowest path:
+> a 1.6 GB download for worse-than-necessary latency. `base.en` is now the actual
+> default in `crates/ov-app/src/settings.rs`; upgrading is a Models-screen action,
+> not a background surprise.
 
 ### 5.2 Decode hints — tried, measured, and turned off
 
@@ -510,8 +516,12 @@ before each release. Injection breaks per-app in ways no unit test can catch.
 - **CI** (`ci.yml`): `cargo fmt --check`, `clippy -D warnings`, `cargo test`,
   `cargo deny` (licenses + advisories), the wasm purity check, `tsc --noEmit`,
   eslint, vitest. Required for merge.
-- **Release** (`release.yml`): tag → Tauri bundle (NSIS + MSI) → GitHub Release with
-  SHA-256 sums. `cargo-dist` later for multi-platform.
+- **Release** (`release.yml`, built): tag → freeze the sidecar with PyInstaller →
+  Tauri NSIS bundle → draft GitHub Release. MSI is not produced; NSIS alone keeps
+  one artifact to test and one to sign. The workflow asserts the frozen sidecar
+  exists before bundling, because its absence does not fail the build — it
+  produces an installer with no speech engine, which only surfaces when a user
+  runs the app. `cargo-dist` later for multi-platform.
 - **Repo hygiene:** `rust-toolchain.toml` pinned, `.editorconfig`, issue/PR
   templates, `CODEOWNERS`, `good-first-issue` labels, dependabot.
 - **Naming caution:** "OpenVoice" is already a well-known TTS project from MyShell

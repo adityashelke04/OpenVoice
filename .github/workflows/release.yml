@@ -1,0 +1,132 @@
+# Tag-triggered release: builds the Windows installer and attaches it.
+#
+# This is the only path by which a user ever gets OpenVoice. Everything the app
+# needs at run time has to be assembled here, because the machine that installs
+# it has no Rust, no Node, and no Python.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Buildable without tagging, so the packaging path can be exercised before a
+  # release depends on it. A tagless run uploads artifacts and publishes nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+
+      # 3.12 rather than the newest release: the frozen sidecar embeds this
+      # interpreter, and PyInstaller support for a Python version reliably lags
+      # its release by months. A packaging break discovered at tag time is the
+      # worst moment to discover it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+
+      # ---------------------------------------------------------------- sidecar
+      # Frozen first, because tauri.conf.json lists sidecar/dist/openvoice-asr/
+      # as a bundle resource. If it is missing, `tauri build` does not fail — it
+      # produces an installer with no speech engine in it, which only shows up
+      # when a user runs the app.
+      - name: Create the sidecar environment
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/Scripts/python.exe ./sidecar
+          uv pip install --python .venv/Scripts/python.exe "pyinstaller>=6.11"
+
+      - name: Freeze the sidecar
+        run: pwsh scripts/build-sidecar.ps1 -Clean -Python .venv/Scripts/python.exe
+
+      - name: Fail if the sidecar is missing
+        shell: pwsh
+        run: |
+          $exe = 'sidecar/dist/openvoice-asr/openvoice-asr.exe'
+          if (-not (Test-Path $exe)) {
+            throw "no frozen sidecar at $exe; the installer would ship without a speech engine"
+          }
+
+      # ----------------------------------------------------------------- bundle
+      - name: Install UI dependencies
+        working-directory: apps/ui
+        run: npm ci
+
+      - name: Build the installer
+        working-directory: crates/ov-app
+        run: npx --prefix ../../apps/ui tauri build
+
+      - name: Collect the installer and checksum it
+        id: collect
+        shell: pwsh
+        run: |
+          $nsis = Get-ChildItem -Recurse -Filter '*-setup.exe' -Path target |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $nsis) { throw "tauri build produced no NSIS installer" }
+          $mb = [math]::Round($nsis.Length / 1MB, 1)
+          Write-Host "$($nsis.Name) - $mb MB"
+
+          # An unsigned installer is the one people are most entitled to verify,
+          # so the checksum ships beside it rather than being left implied.
+          $sum = (Get-FileHash $nsis.FullName -Algorithm SHA256).Hash.ToLower()
+          $sumFile = "$($nsis.FullName).sha256"
+          "$sum  $($nsis.Name)" | Out-File $sumFile -Encoding ascii -NoNewline
+          Write-Host "sha256 $sum"
+
+          "path=$($nsis.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
+          "sha256=$sum" | Out-File $env:GITHUB_OUTPUT -Append
+          "sumfile=$sumFile" | Out-File $env:GITHUB_OUTPUT -Append
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openvoice-windows-installer
+          path: |
+            ${{ steps.collect.outputs.path }}
+            ${{ steps.collect.outputs.sumfile }}
+          if-no-files-found: error
+
+      # Only a tag publishes. A workflow_dispatch run has proved the packaging
+      # path and stops there.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.collect.outputs.path }}
+            ${{ steps.collect.outputs.sumfile }}
+          draft: true
+          generate_release_notes: true
+          body: |
+            Windows installer. Runs entirely on your machine — no account, no
+            cloud, no telemetry.
+
+            The speech model downloads on first launch and is cached afterwards.
+            Everything after that works offline.
+
+            This build is **not code-signed**, so Windows SmartScreen will warn
+            about an unknown publisher. Verify it yourself:
+
+            ```powershell
+            Get-FileHash OpenVoice_*_x64-setup.exe -Algorithm SHA256
+            ```
+
+            Expected: `${{ steps.collect.outputs.sha256 }}`

@@ -219,8 +219,9 @@ export function ModelsScreen({
             </Button>
           }
         >
-          Restart to start using <strong>{pending}</strong>. It takes about ten
-          seconds while the new model loads.
+          Restart to start using <strong>{pending}</strong>. If it's already on
+          this machine, that takes about ten seconds. If not, you'll see it
+          download first — OpenVoice never fetches a model you haven't chosen.
         </Notice>
       )}
 

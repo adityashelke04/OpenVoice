@@ -72,6 +72,49 @@ cargo test -p ov-core -p ov-format
 
 No MSVC, no GPU, no microphone. This is where most work happens.
 
+### Running the app
+
+```powershell
+cd crates/ov-app
+node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js dev
+```
+
+A debug build always prefers the Python sidecar in your checkout over any frozen
+one, so edits to `sidecar/` take effect on the next restart. A release build
+prefers the frozen engine it was packaged with. Setting `OPENVOICE_ROOT` or
+`OPENVOICE_PYTHON` forces the checkout in either case.
+
+## Packaging
+
+The machine that installs OpenVoice has no Python, so the sidecar is frozen into
+a standalone folder and bundled as a Tauri resource:
+
+```powershell
+pwsh scripts/build-sidecar.ps1 -Clean
+cd crates/ov-app
+node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js build
+```
+
+Three things about this that are easy to get wrong:
+
+- **The freeze must run first.** Skipping it does not fail the build — it
+  produces an installer with no speech engine, and that only surfaces when
+  someone runs the app. `.github/workflows/release.yml` asserts the frozen
+  binary exists for exactly this reason.
+- **`build-sidecar.ps1` is not finished when PyInstaller succeeds.** A frozen
+  binary can die on its first import because a hidden import was missed, which
+  static analysis cannot see. The script sends a real `probe` request over the
+  protocol and fails if it does not get a valid reply.
+- **CUDA is excluded on purpose.** `nvidia-cublas-cu12` and `nvidia-cudnn-cu12`
+  are 1.9 GB against 240 MB for everything else, and do nothing on a machine
+  without an NVIDIA GPU. A packaged build runs on CPU; `engine.py` picks up
+  `OPENVOICE_CUDA_DIR` when the libraries are available separately.
+
+Build commands live in the root `package.json` rather than being spelled out as
+relative paths. `npm run` searches upwards for a manifest, so `npm run build:ui`
+resolves the same from any directory in the repo — where `npm --prefix ../../apps/ui`
+silently resolved against the wrong root depending on who invoked it.
+
 ## Working on the formatter
 
 This is the highest-leverage part of the project and the friendliest to newcomers.

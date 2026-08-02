@@ -36,7 +36,12 @@ const INK: [string, string, string][] = [
   ["--ink", "#f5f5f5", "19.0:1"],
   ["--body", "#c9c9c9", "11.3:1"],
   ["--mute", "#8f8f8f", "5.6:1 · AA"],
-  ["--faint", "#6b6b6b", "3.4:1 · disabled only"],
+  ["--faint", "#7a7a7a", "4.6:1 · AA · tertiary text"],
+  // Split out from --faint when that token was found on placeholders, rule names
+  // and raw error text — all of which a person has to read. WCAG exempts genuinely
+  // disabled controls from the contrast floor; nothing carrying information may
+  // use this.
+  ["--disabled", "#5c5c5c", "disabled controls only"],
 ];
 
 const TYPE: [string, string][] = [

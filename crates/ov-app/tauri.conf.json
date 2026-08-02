@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../../apps/ui/dist",
     "devUrl": "http://localhost:5199",
-    "beforeDevCommand": "npm --prefix ../../apps/ui run dev -- --port 5199 --strictPort",
-    "beforeBuildCommand": "npm --prefix ../../apps/ui run build"
+    "beforeDevCommand": "npm run dev:ui",
+    "beforeBuildCommand": "npm run build:ui"
   },
   "app": {
     "withGlobalTauri": false,
@@ -50,6 +50,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "resources": {
+      "../../sidecar/dist/openvoice-asr/": "sidecar/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

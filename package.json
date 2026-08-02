@@ -1,0 +1,11 @@
+{
+  "name": "openvoice",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Workspace-level build entry points. The application itself is Rust; this file exists so that build commands resolve from a fixed root instead of from whatever directory happened to invoke them.",
+  "scripts": {
+    "build:ui": "npm --prefix apps/ui run build",
+    "dev:ui": "npm --prefix apps/ui run dev -- --port 5199 --strictPort",
+    "screenshots": "node scripts/screenshots.mjs"
+  }
+}

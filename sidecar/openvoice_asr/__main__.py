@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 import traceback
 
-from .engine import Engine, probe
+from .engine import Engine, download_model, model_is_cached, probe
 from .protocol import (
     PROTOCOL_VERSION,
     BadRequest,
@@ -26,9 +27,63 @@ from .protocol import (
     err,
     log,
     ok,
+    progress,
     read_requests,
     write,
 )
+
+# Progress ticks are throttled to this interval. huggingface_hub advances its
+# counter once per network chunk, which is thousands of times a second on a fast
+# link; forwarding all of them would swamp the host's pipe with messages nobody
+# can read and turn a progress bar into a bottleneck.
+PROGRESS_INTERVAL_S = 0.2
+
+
+def ensure_model(req: Request, engine: Engine) -> dict[str, object]:
+    """Make a model's weights available locally, downloading them if needed.
+
+    Reports progress as interim ``event: progress`` messages before the single
+    final response. The first run of a fresh install fetches ~1.6 GB for the
+    default model; without progress the app looks hung for several minutes, and
+    the most common reaction to that is to kill it halfway through.
+
+    Idempotent, and cheap when the weights are already present — so the host can
+    call it unconditionally on every start rather than tracking installation
+    state of its own, which would drift the moment a user cleared the cache.
+    """
+    name = req.params.get("model") or engine.model_name
+    if not isinstance(name, str):
+        return err(req.id, "'model' must be a string", retriable=False)
+
+    try:
+        if model_is_cached(name):
+            return ok(req.id, model=name, fetched=False)
+    except ValueError as exc:  # unknown preset
+        return err(req.id, str(exc), retriable=False)
+
+    last_tick = 0.0
+
+    def report(done: int, total: int) -> None:
+        nonlocal last_tick
+        now = time.monotonic()
+        # Always let the final tick through, so the bar reaches full rather than
+        # stopping at whatever fraction the throttle last allowed.
+        if now - last_tick < PROGRESS_INTERVAL_S and not (total and done >= total):
+            return
+        last_tick = now
+        write(progress(req.id, downloaded=done, total=total))
+
+    try:
+        download_model(name, report)
+    except Exception as exc:  # noqa: BLE001
+        # Retriable: this is nearly always a dropped connection, and the transfer
+        # resumes from where it stopped.
+        return err(req.id, f"could not download {name}: {type(exc).__name__}: {exc}")
+
+    # `fetched`, not `downloaded`: the progress messages already use `downloaded`
+    # for a byte count, and a field that is an integer on one message and a boolean
+    # on the next cannot be decoded by a typed reader.
+    return ok(req.id, model=name, fetched=True)
 
 
 def handle(req: Request, engine: Engine) -> dict[str, object] | None:
@@ -53,6 +108,9 @@ def handle(req: Request, engine: Engine) -> dict[str, object] | None:
     if req.op == "warm":
         engine.load()
         return ok(req.id, device=engine.device_in_use, model_id=engine.model_id)
+
+    if req.op == "ensure_model":
+        return ensure_model(req, engine)
 
     if req.op == "transcribe":
         wav = req.params.get("wav")

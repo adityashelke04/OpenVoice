@@ -78,6 +78,21 @@ def err(request_id: int, message: str, *, retriable: bool = True) -> dict[str, A
     return {"id": request_id, "ok": False, "error": message, "retriable": retriable}
 
 
+def progress(request_id: int, **fields: Any) -> dict[str, Any]:
+    """Build an interim progress message for a request still in flight.
+
+    Deliberately carries no ``ok`` key. The host distinguishes these from the final
+    response by the presence of ``event``, and reads on rather than treating a
+    half-finished download as an answer — so adding ``ok`` here, however harmless
+    it looks, would make every progress tick resolve the request.
+
+    One message per request is still the rule for *responses*; this is the
+    exception that lets a multi-minute operation say anything at all before it
+    finishes.
+    """
+    return {"id": request_id, "event": "progress", **fields}
+
+
 def write(obj: dict[str, Any]) -> None:
     """Emit one protocol message and flush.
 

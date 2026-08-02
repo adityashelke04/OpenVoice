@@ -9,11 +9,23 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import struct
+import wave
+from pathlib import Path
 
+import numpy as np
 import pytest
 
-from openvoice_asr.engine import MAX_HINT_CHARS, build_hint
-from openvoice_asr.protocol import BadRequest, Request, err, ok, read_requests
+from openvoice_asr.engine import MAX_HINT_CHARS, Engine, build_hint, model_repo_id, online
+from openvoice_asr.protocol import (
+    BadRequest,
+    Request,
+    err,
+    ok,
+    progress,
+    read_requests,
+)
 
 
 class TestRequest:
@@ -104,3 +116,130 @@ class TestBuildHint:
         hint = build_hint(terms)
         assert hint is not None
         assert "first" in hint, "callers rank by relevance; ranking must be honoured"
+
+
+class TestProgress:
+    """Interim messages sent while a long operation is still running."""
+
+    def test_carries_no_ok_key(self):
+        # The host tells a progress tick from a final response by the presence of
+        # `event` and reads on. Adding `ok` would make a typed reader treat a
+        # download that is 3% complete as the answer to the request.
+        msg = progress(4, downloaded=100, total=1000)
+        assert "ok" not in msg
+        assert msg["event"] == "progress"
+        assert msg["id"] == 4
+
+    def test_is_addressed_to_its_request(self):
+        assert progress(9)["id"] == 9
+
+    def test_survives_a_round_trip_through_the_wire(self):
+        decoded = json.loads(json.dumps(progress(1, downloaded=5, total=7)))
+        assert decoded == {"id": 1, "event": "progress", "downloaded": 5, "total": 7}
+
+
+class TestModelRepoId:
+    def test_expands_a_short_preset(self):
+        assert model_repo_id("base.en") == "Systran/faster-whisper-base.en"
+
+    def test_leaves_a_fully_qualified_repo_alone(self):
+        # large-v3-turbo is a third-party conversion, not one of Systran's.
+        assert model_repo_id("large-v3-turbo") == "deepdml/faster-whisper-large-v3-turbo-ct2"
+
+    def test_rejects_an_unknown_name(self):
+        # An unknown preset must not reach huggingface_hub as a repository id: the
+        # failure would arrive as a 404 from the network rather than as a fact we
+        # already knew locally.
+        with pytest.raises(ValueError, match="unknown model"):
+            model_repo_id("enormous-v9")
+
+
+class TestOnline:
+    def test_restores_offline_mode_afterwards(self):
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            with online():
+                assert "HF_HUB_OFFLINE" not in os.environ
+            assert os.environ["HF_HUB_OFFLINE"] == "1"
+        finally:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+
+    def test_restores_offline_mode_after_a_failure(self):
+        # A download that raises must not leave the process online. It would
+        # silently reintroduce the ~171s cached-model load on every later start,
+        # with nothing to connect the slowness back to this failure.
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            with pytest.raises(RuntimeError), online():
+                raise RuntimeError("connection reset")
+            assert os.environ["HF_HUB_OFFLINE"] == "1"
+        finally:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+
+    def test_leaves_the_variable_unset_if_it_was_unset(self):
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        with online():
+            pass
+        assert "HF_HUB_OFFLINE" not in os.environ
+
+
+class TestLoadPcm16Wav:
+    """The reader that replaced PyAV for this sidecar's own WAV files.
+
+    ov-asr is the only producer of the files this reads, and it always writes 16
+    kHz mono 16-bit PCM (crates/ov-asr/src/wav.rs). These tests exist to prove the
+    hand-rolled int16->float32 conversion is the exact one faster-whisper's own
+    decode_audio performs, not an approximation of it.
+    """
+
+    def _write_wav(self, path, samples, *, channels=1, rate=16_000, width=2):
+        with wave.open(str(path), "wb") as f:
+            f.setnchannels(channels)
+            f.setsampwidth(width)
+            f.setframerate(rate)
+            f.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+
+    def test_matches_decode_audios_int16_to_float32_conversion(self, tmp_path):
+        path = tmp_path / "in.wav"
+        # 0, max, min, and a mid-scale value -- the corners decode_audio's own
+        # `astype(float32) / 32768.0` has to get right.
+        samples = [0, 32767, -32768, 16384]
+        self._write_wav(path, samples)
+
+        engine = Engine(model="base.en", device="cpu")
+        audio = engine._load_pcm16_wav(str(path))
+
+        assert audio.dtype == np.float32
+        expected = np.array(samples, dtype=np.float32) / 32768.0
+        np.testing.assert_array_almost_equal(audio, expected, decimal=6)
+
+    def test_rejects_stereo(self, tmp_path):
+        path = tmp_path / "stereo.wav"
+        self._write_wav(path, [0, 0, 0, 0], channels=2)
+        engine = Engine(model="base.en", device="cpu")
+        with pytest.raises(ValueError, match="16 kHz mono"):
+            engine._load_pcm16_wav(str(path))
+
+    def test_rejects_the_wrong_sample_rate(self, tmp_path):
+        path = tmp_path / "wrong-rate.wav"
+        self._write_wav(path, [0, 0], rate=44_100)
+        engine = Engine(model="base.en", device="cpu")
+        with pytest.raises(ValueError, match="16 kHz mono"):
+            engine._load_pcm16_wav(str(path))
+
+    def test_reads_the_real_fixture_files(self):
+        # The actual audio this protocol carries in production, not a synthetic
+        # WAV -- proof the reader works on what ov-asr really writes, not just on
+        # inputs shaped to fit it.
+        fixtures = Path(__file__).parents[2] / "fixtures" / "audio"
+        if not fixtures.is_dir():
+            pytest.skip("fixtures/audio not present in this checkout")
+        engine = Engine(model="base.en", device="cpu")
+        found = False
+        for wav in fixtures.glob("*.wav"):
+            found = True
+            audio = engine._load_pcm16_wav(str(wav))
+            assert audio.dtype == np.float32
+            assert audio.ndim == 1
+            assert np.all(np.abs(audio) <= 1.0)
+        assert found, "expected at least one fixture WAV"

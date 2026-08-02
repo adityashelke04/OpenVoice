@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, Empty, Kbd, Notice, Stat, Waveform } from "../ui";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
+import type { Download } from "../engine/useLiveEngine";
 import {
   computeStats,
   humanDuration,
@@ -170,6 +171,12 @@ export function Hub() {
       <main className="hub-main" id="main" tabIndex={-1}>
         {view.error && <StartupError error={view.error} />}
 
+        {/* Takes over the whole pane rather than sitting above the normal screens.
+            On a first run there is no history, no statistics and nothing to
+            configure that will survive the model changing — showing empty states
+            behind a download makes the app look broken at the worst moment. */}
+        {!view.error && view.download && <FirstRun download={view.download} />}
+
         {view.notice && (
           <Notice
             tone={view.notice.level === "error" ? "danger" : view.notice.level === "warn" ? "warn" : "neutral"}
@@ -186,7 +193,7 @@ export function Hub() {
         {/* Settings arrive asynchronously. Rendering nothing until they do left
             every screen but Home blank for a beat, which reads as a broken app
             rather than a loading one. */}
-        {tab !== "home" && !settings && (
+        {!view.download && tab !== "home" && !settings && (
           <div className="screen">
             <div className="skeleton skeleton-title" />
             <div className="skeleton skeleton-card" />
@@ -194,7 +201,7 @@ export function Hub() {
           </div>
         )}
 
-        {tab !== "home" && settings && (
+        {!view.download && tab !== "home" && settings && (
           <>
             {tab === "dictionary" && <DictionaryScreen settings={settings} patch={patch} />}
             {tab === "style" && <ProfilesScreen settings={settings} patch={patch} />}
@@ -206,7 +213,7 @@ export function Hub() {
           </>
         )}
 
-        {tab === "home" && (
+        {!view.download && tab === "home" && (
         <>
         <header className="hub-head">
           <div>
@@ -305,6 +312,67 @@ export function Hub() {
         </>
         )}
       </main>
+    </div>
+  );
+}
+
+/** Bytes as a person reads them. Two significant figures is enough at every size
+ *  and stops the number changing width several times a second. */
+function mb(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  return `${Math.round(bytes / 1e6)} MB`;
+}
+
+/** First run: the speech model is being fetched.
+ *
+ * This is the only moment OpenVoice uses the network, and it is the first thing a
+ * new user ever sees — so it says plainly what is being downloaded, how far along
+ * it is, and that it happens once. A silent multi-minute wait on first launch is
+ * the single most likely reason someone deletes the app before using it.
+ *
+ * No spinner: a real byte count is both more honest and more reassuring than an
+ * animation that conveys nothing.
+ */
+function FirstRun({ download }: { download: Download }) {
+  const { done, total, model } = download;
+  // `total` is 0 when the size lookup failed. Showing "NaN%" or a bar stuck at
+  // zero would read as a hang, so fall back to counting up the bytes we do know.
+  const known = total > 0;
+  const pct = known ? Math.min(100, Math.round((done / total) * 100)) : 0;
+
+  return (
+    <div className="first-run">
+      <h1 className="t-title">Setting up OpenVoice</h1>
+      <p className="t-body first-run-lede">
+        Downloading the <strong>{model}</strong> speech model. This happens once —
+        afterwards OpenVoice works offline, and your voice never leaves this
+        machine.
+      </p>
+
+      <div
+        className="first-run-track"
+        role="progressbar"
+        aria-label={`Downloading the ${model} speech model`}
+        aria-valuenow={known ? pct : undefined}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuetext={known ? `${pct} percent` : `${mb(done)} downloaded`}
+      >
+        <div
+          className={known ? "first-run-fill" : "first-run-fill is-unknown"}
+          style={known ? { width: `${pct}%` } : undefined}
+        />
+      </div>
+
+      <div className="first-run-figures t-mono">
+        <span>{known ? `${mb(done)} of ${mb(total)}` : mb(done)}</span>
+        {known && <span>{pct}%</span>}
+      </div>
+
+      <p className="t-caption first-run-note">
+        Leave this window open. You can carry on working — OpenVoice will be ready
+        when the download finishes.
+      </p>
     </div>
   );
 }

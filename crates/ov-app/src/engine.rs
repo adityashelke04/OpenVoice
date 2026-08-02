@@ -31,12 +31,30 @@ pub struct Ready {
     pub mic: String,
 }
 
+/// How far the first-run model download has got.
+///
+/// `total` is 0 when the size could not be determined ahead of time; show an
+/// indeterminate bar rather than 0%.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    pub model: String,
+    pub done: u64,
+    pub total: u64,
+}
+
 /// Anything the shell must do in response to the engine.
 pub trait Shell: Send + Sync + 'static {
     /// Publish a domain event to the UI.
     fn emit(&self, event: &Event);
     /// Show or hide the floating overlay.
     fn set_overlay_visible(&self, visible: bool);
+    /// Record download progress, or `None` once there is nothing downloading.
+    ///
+    /// Recorded rather than emitted. A first run downloads over a gigabyte before
+    /// the window has finished loading, so an event would be published to nobody;
+    /// the UI polls status instead, and cannot miss what it asks for.
+    fn set_download_progress(&self, progress: Option<DownloadProgress>);
 }
 
 /// Profiles and their compiled formatters, replaced as a unit.
@@ -216,26 +234,139 @@ fn find_python(root: &Path) -> Option<PathBuf> {
     c.into_iter().find(|p| p.is_file())
 }
 
+/// Locate the frozen sidecar shipped inside an installed copy.
+///
+/// `resource_dir` is what Tauri reports; the two fallbacks cover a build that was
+/// run in place rather than installed, where the resource directory sits beside
+/// the executable instead of under it.
+fn find_bundled(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = resource_dir {
+        candidates.push(dir.join("sidecar/openvoice-asr.exe"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("resources/sidecar/openvoice-asr.exe"));
+            candidates.push(dir.join("sidecar/openvoice-asr.exe"));
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Build a configuration that runs the sidecar from a repository checkout.
+fn from_checkout(model: &str) -> Result<ov_asr::SidecarConfig, String> {
+    let root = find_root().ok_or_else(|| {
+        "Could not find the OpenVoice sources. Set OPENVOICE_ROOT to a checkout.".to_string()
+    })?;
+    let python = find_python(&root).ok_or_else(|| {
+        format!(
+            "Found the OpenVoice sources at {} but no Python environment with \
+             faster-whisper installed. Create one with `uv sync` in `sidecar/`, or \
+             set OPENVOICE_PYTHON to an interpreter that has it.",
+            root.display()
+        )
+    })?;
+    Ok(ov_asr::SidecarConfig::dev(&root, python, model))
+}
+
+/// Decide how the speech engine is going to be started.
+///
+/// Both routes are always available as a fallback; only the *order* changes,
+/// and it changes on who is running the binary rather than on what is on disk:
+///
+/// * A **release build** prefers the frozen engine it was packaged with. An
+///   installed copy must never end up depending on a repository that happens to
+///   be lying around — that works right up until the user moves the folder, and
+///   then the app breaks for no visible reason.
+/// * A **debug build**, or one where `OPENVOICE_ROOT`/`OPENVOICE_PYTHON` is set,
+///   prefers the checkout. Tauri stages bundle resources into the target
+///   directory during development too, so preferring the bundle everywhere would
+///   quietly run a developer's *last frozen* sidecar instead of the Python they
+///   are editing — and the edits would appear to do nothing.
+fn locate_sidecar(
+    resource_dir: Option<&Path>,
+    model: &str,
+) -> Result<ov_asr::SidecarConfig, String> {
+    let prefer_checkout = cfg!(debug_assertions)
+        || std::env::var_os("OPENVOICE_ROOT").is_some()
+        || std::env::var_os("OPENVOICE_PYTHON").is_some();
+
+    if prefer_checkout {
+        match from_checkout(model) {
+            Ok(cfg) => {
+                tracing::info!("using the speech engine from a checkout");
+                return Ok(cfg);
+            }
+            Err(e) => tracing::debug!(reason = %e, "no usable checkout; trying the bundle"),
+        }
+    }
+
+    if let Some(exe) = find_bundled(resource_dir) {
+        tracing::info!(path = %exe.display(), "using the bundled speech engine");
+        return Ok(ov_asr::SidecarConfig::bundled(exe, model));
+    }
+
+    // Nothing worked. Report the checkout's own diagnosis rather than a generic
+    // message: it names the directory it looked in, which is the one fact that
+    // makes this fixable.
+    from_checkout(model).map_err(|e| {
+        format!("{e} This build also has no speech engine bundled with it — reinstall the app.")
+    })
+}
+
 /// Build every adapter, start the hotkey hook, and run the event loop on a
 /// background thread. Returns once the model is warm.
+///
+/// `resource_dir` is Tauri's resource directory, or `None` when the caller has
+/// none. It is passed in rather than resolved here so this module stays free of
+/// Tauri types and testable on its own.
 pub fn start(
     shell: Arc<dyn Shell>,
     settings: &crate::settings::Settings,
     history: Arc<dyn HistoryStore>,
+    resource_dir: Option<&Path>,
 ) -> Result<(Arc<Engine>, Ready), String> {
     let config = settings.config.clone();
     let model = settings.model.as_str();
 
-    let root = find_root().ok_or_else(|| {
-        "could not find the OpenVoice sidecar directory. Set OPENVOICE_ROOT.".to_string()
-    })?;
-    let python = find_python(&root).ok_or_else(|| {
-        "could not find a Python environment with faster-whisper installed.".to_string()
-    })?;
-
-    let mut cfg = ov_asr::SidecarConfig::dev(&root, python, model);
+    let mut cfg = locate_sidecar(resource_dir, model)?;
+    let data = crate::history::data_dir();
+    // Weights and CUDA libraries live under the app's own data directory, so that
+    // uninstalling reclaims the several gigabytes they occupy. A developer's
+    // shared HF cache is left alone: `dev` leaves both as `None`, and only an
+    // installed copy sets them.
+    if cfg.package_dir.is_none() {
+        cfg.model_dir = Some(data.join("models"));
+        let cuda = data.join("cuda");
+        cfg.cuda_dir = cuda.is_dir().then_some(cuda);
+    }
     cfg.allow_download = std::env::var("OPENVOICE_ALLOW_DOWNLOAD").is_ok();
     let transcriber = ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())?;
+
+    // Fetch the weights before warming. `warm` on a model that is not present
+    // fails with a message about a missing repository, which tells a first-run
+    // user nothing; this reports a download they can watch instead.
+    //
+    // Cheap and silent when the model is already cached, which is every run after
+    // the first.
+    let name = model.to_string();
+    let reporter = shell.clone();
+    let downloaded = transcriber
+        .ensure_model(|p| {
+            reporter.set_download_progress(Some(DownloadProgress {
+                model: name.clone(),
+                done: p.done,
+                total: p.total,
+            }));
+        })
+        .map_err(|e| format!("Could not get the {model} model: {e}"))?;
+    // Cleared unconditionally: leaving a completed download in place would keep
+    // the UI on the progress screen for the whole of the model load that follows.
+    shell.set_download_progress(None);
+    if downloaded {
+        tracing::info!(model, "downloaded model weights");
+    }
+
     transcriber.warm().map_err(|e| e.to_string())?;
 
     let rules = Rules::build(settings);

@@ -242,3 +242,88 @@
     display: none;
   }
 }
+
+/* --------------------------------------------------------------- first run --
+ *
+ * Shown once, while the speech model downloads. It replaces the whole main pane
+ * rather than sitting above it: on a first run every other surface is empty, and
+ * a wall of empty states behind a progress bar reads as a broken app at exactly
+ * the moment a new user is deciding whether to keep it.
+ *
+ * Centred and narrow because there is one thing to read and one thing to watch.
+ */
+
+.first-run {
+  margin: auto 0;
+  max-width: 46ch;
+  align-self: center;
+  text-align: left;
+}
+
+.first-run-lede {
+  margin-top: var(--s-4);
+}
+
+.first-run-lede strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* 3px, full width. A progress ring here would be decoration standing in for
+   content; the one thing a person wants is the fraction, at a glance. */
+.first-run-track {
+  margin-top: var(--s-7);
+  height: 3px;
+  border-radius: 2px;
+  background: var(--surface-4);
+  overflow: hidden;
+}
+
+.first-run-fill {
+  height: 100%;
+  background: var(--live);
+  border-radius: inherit;
+  /* Long, soft ease. The value arrives in ~5 Hz steps, and a linear transition
+     between them makes the bar visibly stutter. */
+  transition: width 320ms var(--ease);
+}
+
+/* Size unknown: sweep instead of lying about a percentage. */
+.first-run-fill.is-unknown {
+  width: 35%;
+  animation: first-run-sweep 1.4s var(--ease) infinite;
+}
+
+@keyframes first-run-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(286%);
+  }
+}
+
+.first-run-figures {
+  margin-top: var(--s-4);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-5);
+  color: var(--mute);
+}
+
+.first-run-note {
+  margin-top: var(--s-7);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .first-run-fill {
+    transition: none;
+  }
+  .first-run-fill.is-unknown {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}

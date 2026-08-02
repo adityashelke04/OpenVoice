@@ -37,7 +37,13 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             config: Config::default(),
-            model: "large-v3-turbo".into(),
+            // `base.en` — not `large-v3-turbo` — because this is what a fresh
+            // install picks before the user has chosen anything. The installed
+            // engine is CPU-only (see ADR 0003), and large-v3-turbo paired with
+            // CPU is the slowest model on the slowest path: a 1.6 GB download for
+            // an experience worse than the 75 MB alternative. Anyone who wants
+            // more accuracy upgrades from the Models screen, on demand.
+            model: "base.en".into(),
             dictionary: Vec::new(),
             profiles: Profile::builtins(),
         }

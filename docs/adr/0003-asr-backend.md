@@ -50,12 +50,53 @@ decode. Two runtimes to supervise.
 **Follow-up.** Before v0.5 (distribution), revisit whisper.cpp in-process to remove
 the Python dependency from installers. Log as a tracked issue, not a vague intention.
 
+### Outcome (2026-08-01): the bundling cost, measured
+
+The cost this ADR deferred has now been paid, and it came in cheaper than feared
+— but only after being split in two.
+
+PyInstaller freezes the sidecar into a **240 MB** folder with no Python on the
+target machine (`scripts/build-sidecar.ps1`, `sidecar/openvoice-asr.spec`), which
+`tauri build` bundles as a resource. `SidecarConfig::bundled` runs it directly;
+`SidecarConfig::dev` still runs the Python package from a checkout, and a debug
+build prefers the checkout so sidecar edits are not shadowed by a stale freeze.
+
+The number that decided the shape of this was the dependency breakdown:
+
+| | |
+|---|---:|
+| `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` + nvrtc | 1985 MB |
+| ctranslate2, onnxruntime, PyAV, numpy, tokenizers, everything else | 263 MB |
+
+CUDA is 88% of the tree and does nothing without an NVIDIA GPU, so it is excluded
+from the freeze and the shipped engine runs on CPU. `engine.py` picks the
+libraries up from `OPENVOICE_CUDA_DIR` when they are present by another route.
+
+This weakens rather than strengthens the case for whisper.cpp: the remaining
+Python-specific weight is a fraction of the CUDA runtime that *any* GPU backend
+would need. The open question is no longer "how do we ship Python" but "how do we
+ship CUDA to the people who can use it", and that is the same question either way.
+
 ## Model plan
 
 | Model | Disk | VRAM | Role |
 |---|---:|---:|---|
-| `base.en` int8 | ~75 MB | CPU-ok | First-run smoke test; usable in 30 s |
+| `base.en` int8 | ~75 MB | CPU-ok | **Installed default** — see 2026-08-02 below |
 | `small.en` int8 | ~250 MB | ~0.6 GB | Low-power / battery profile |
-| `large-v3-turbo` int8_float16 | ~1.6 GB | ~1.6 GB | **Default** |
+| `large-v3-turbo` int8_float16 | ~1.6 GB | ~1.6 GB | Best accuracy, opt-in upgrade |
 
 All downloads are SHA-256 verified against a manifest committed to the repo.
+
+### Outcome (2026-08-02): the default was the wrong model for the installed engine
+
+`large-v3-turbo` was written up here as the default before v0.5 (distribution)
+had a shape, on the assumption of a GPU. The 2026-08-01 outcome above settled
+that shape: the installed engine is CPU-only. Pairing the heaviest model with
+the slowest path meant a fresh install downloaded 1.6 GB to run the model worst
+suited to the hardware it would run on.
+
+`crates/ov-app/src/settings.rs` now defaults fresh installs to `base.en`
+(~75 MB). Total footprint for someone who never opens Models is ~325 MB rather
+than ~1.9 GB. Anyone who wants more accuracy upgrades from the Models screen,
+which already downloads on demand — this changes only what a first run gets
+before anyone has chosen anything.

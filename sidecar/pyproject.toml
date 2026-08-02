@@ -12,6 +12,8 @@ dependencies = [
 dev = [
     "pytest>=8",
     "ruff>=0.6",
+    # Freezes the sidecar for distribution. See scripts/build-sidecar.ps1.
+    "pyinstaller>=6.11",
 ]
 
 [build-system]

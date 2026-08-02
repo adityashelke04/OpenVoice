@@ -54,6 +54,15 @@ impl engine::Shell for TauriShell {
             .overlay
             .set_active(&win, active);
     }
+
+    fn set_download_progress(&self, progress: Option<engine::DownloadProgress>) {
+        *self
+            .app
+            .state::<AppState>()
+            .download
+            .lock()
+            .expect("download") = progress;
+    }
 }
 
 /// Engine lifecycle as the UI sees it.
@@ -67,17 +76,28 @@ impl engine::Shell for TauriShell {
 #[serde(tag = "state", rename_all = "snake_case")]
 enum Status {
     Starting,
+    /// First run, fetching model weights. Can last several minutes.
+    Downloading(engine::DownloadProgress),
     Ready(engine::Ready),
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
 }
 
 #[tauri::command]
 fn get_status(state: tauri::State<'_, AppState>) -> Status {
+    // Order matters. A failure outranks everything; a finished engine outranks a
+    // stale download record; and only then does an in-flight download outrank the
+    // bare "starting", so the UI never shows a progress bar for a run that has
+    // already succeeded or failed.
     if let Some(e) = state.error.lock().expect("error").clone() {
         return Status::Failed { error: e };
     }
-    match state.ready.lock().expect("ready").clone() {
-        Some(r) => Status::Ready(r),
+    if let Some(r) = state.ready.lock().expect("ready").clone() {
+        return Status::Ready(r);
+    }
+    match state.download.lock().expect("download").clone() {
+        Some(p) => Status::Downloading(p),
         None => Status::Starting,
     }
 }
@@ -204,6 +224,8 @@ struct AppState {
     engine: Mutex<Option<Arc<engine::Engine>>>,
     ready: Mutex<Option<engine::Ready>>,
     error: Mutex<Option<String>>,
+    /// Set only while first-run weights are being fetched.
+    download: Mutex<Option<engine::DownloadProgress>>,
     overlay: overlay::Overlay,
     settings: settings::Store,
     store: Arc<ov_store::SqliteStore>,
@@ -216,6 +238,7 @@ impl Default for AppState {
             engine: Mutex::new(None),
             ready: Mutex::new(None),
             error: Mutex::new(None),
+            download: Mutex::new(None),
             overlay: overlay::Overlay::new(),
             store: open_history(&settings),
             settings,
@@ -466,7 +489,11 @@ fn main() {
                 }
 
                 let store = bg.state::<AppState>().store.clone();
-                match engine::start(shell, &settings, store) {
+                // Where the frozen speech engine lives in an installed copy. `Err`
+                // simply means this is not one, and the engine falls back to a
+                // repository checkout.
+                let resources = bg.path().resource_dir().ok();
+                match engine::start(shell, &settings, store, resources.as_deref()) {
                     Ok((engine, ready)) => {
                         let state = bg.state::<AppState>();
                         *state.engine.lock().expect("engine") = Some(engine);

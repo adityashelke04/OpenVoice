@@ -13,10 +13,13 @@ import os
 import sys
 import sysconfig
 import time
+import wave
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from .protocol import log
 
@@ -25,12 +28,36 @@ from .protocol import log
 _REQUIRED_CUDA_DLLS = ("cublas64_12.dll", "cudnn64_9.dll")
 
 
-def register_cuda_dll_dirs() -> list[str]:
-    """Make pip-installed CUDA libraries findable on Windows.
+def _cuda_roots() -> list[Path]:
+    """Directories that may contain an ``nvidia/<pkg>/bin`` layout.
 
-    ``nvidia-cublas-cu12`` and ``nvidia-cudnn-cu12`` drop their DLLs into
-    ``site-packages/nvidia/<pkg>/bin``, which is not on the DLL search path. Without
-    this, ctranslate2 reports a CUDA device, loads the model onto the GPU, and then
+    Two ways the CUDA libraries reach a machine, and the sidecar has to work with
+    either:
+
+    * **From pip**, in a developer's virtualenv, under ``site-packages/nvidia``.
+    * **Downloaded after install**, into a directory the app owns and names in
+      ``OPENVOICE_CUDA_DIR``. The frozen build excludes these libraries because
+      they are 1.9 GB and useless without an NVIDIA GPU, so this is the only
+      route for an installed copy.
+
+    A frozen binary has no meaningful ``sysconfig`` paths, and a developer has no
+    ``OPENVOICE_CUDA_DIR``; checking both costs two stat calls and removes an
+    entire class of "works on my machine".
+    """
+    roots: list[Path] = []
+    if override := os.environ.get("OPENVOICE_CUDA_DIR"):
+        roots.append(Path(override))
+    if not getattr(sys, "frozen", False):
+        roots += [Path(sysconfig.get_paths()[s]) / "nvidia" for s in ("purelib", "platlib")]
+    return roots
+
+
+def register_cuda_dll_dirs() -> list[str]:
+    """Make the CUDA libraries findable on Windows.
+
+    ``nvidia-cublas-cu12`` and ``nvidia-cudnn-cu12`` keep their DLLs in
+    ``<root>/<pkg>/bin``, which is not on the DLL search path. Without this,
+    ctranslate2 reports a CUDA device, loads the model onto the GPU, and then
     fails at the *first decode* with ``Library cublas64_12.dll is not found``.
 
     That timing is the problem: everything looks healthy right up until the user's
@@ -43,11 +70,15 @@ def register_cuda_dll_dirs() -> list[str]:
         return []
 
     added: list[str] = []
-    for scheme in ("purelib", "platlib"):
-        root = Path(sysconfig.get_paths()[scheme]) / "nvidia"
+    for root in _cuda_roots():
         if not root.is_dir():
             continue
-        for sub in sorted(root.glob("*/bin")) + sorted(root.glob("*/lib")):
+        # The download may be unpacked either as `nvidia/<pkg>/bin` or flattened
+        # to `<pkg>/bin`, depending on how the archive was made. Glob both rather
+        # than depend on the packaging staying still.
+        subs = sorted(root.glob("*/bin")) + sorted(root.glob("*/lib"))
+        subs += sorted(root.glob("*/*/bin")) + sorted(root.glob("*/*/lib"))
+        for sub in subs:
             if not sub.is_dir() or str(sub) in added:
                 continue
             with contextlib.suppress(OSError):
@@ -152,6 +183,136 @@ MODEL_PRESETS: dict[str, dict[str, Any]] = {
 # the decoder silently truncates, dropping whichever terms happened to land last.
 # Budget conservatively in characters so the truncation never surprises us.
 MAX_HINT_CHARS = 600
+
+# The files a CTranslate2 Whisper repository actually needs. Downloading the whole
+# repository would also pull the PyTorch weights, which this engine never reads and
+# which roughly double the transfer.
+MODEL_FILES = (
+    "config.json",
+    "preprocessor_config.json",
+    "model.bin",
+    "tokenizer.json",
+    "vocabulary.*",
+)
+
+
+@contextlib.contextmanager
+def online() -> Iterator[None]:
+    """Lift offline mode for the duration of a deliberate download.
+
+    The sidecar runs with ``HF_HUB_OFFLINE=1`` because revalidating a cached model
+    costs ~171 s per load (see :func:`enforce_offline_by_default`). Fetching weights
+    is the one operation that genuinely needs the network, and it is only ever
+    reached because the user asked for a model they do not have.
+
+    Restored in a ``finally`` so a failed or cancelled download cannot leave the
+    process online — that would silently reintroduce the 171 s load on every
+    subsequent start, with nothing to connect it back to the failure.
+    """
+    previous = os.environ.get("HF_HUB_OFFLINE")
+    os.environ.pop("HF_HUB_OFFLINE", None)
+    try:
+        yield
+    finally:
+        if previous is not None:
+            os.environ["HF_HUB_OFFLINE"] = previous
+
+
+def model_repo_id(name: str) -> str:
+    """Full Hugging Face repository id for a preset name.
+
+    The short presets are Systran's conversions of the official Whisper weights;
+    anything already containing a slash is a repository named in full.
+    """
+    if name not in MODEL_PRESETS:
+        raise ValueError(f"unknown model {name!r}; known: {', '.join(sorted(MODEL_PRESETS))}")
+    repo = MODEL_PRESETS[name]["repo"]
+    return repo if "/" in repo else f"Systran/faster-whisper-{repo}"
+
+
+def model_is_cached(name: str) -> bool:
+    """Whether `name` can be loaded without touching the network.
+
+    Asked before every start. A wrong ``True`` here strands the user on a spinner
+    while huggingface_hub blocks on a download nobody agreed to, so this resolves
+    the snapshot offline rather than guessing from directory names.
+    """
+    from huggingface_hub import snapshot_download
+
+    try:
+        snapshot_download(
+            model_repo_id(name),
+            allow_patterns=list(MODEL_FILES),
+            local_files_only=True,
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def model_download_size(name: str) -> int:
+    """Total bytes to fetch for `name`, or 0 if the total cannot be determined.
+
+    Returning 0 is a supported answer, not a failure: the caller shows an
+    indeterminate progress bar instead of a percentage. Refusing to download
+    because the size lookup failed would be a worse outcome than an imprecise bar.
+    """
+    from fnmatch import fnmatch
+
+    from huggingface_hub import HfApi
+
+    try:
+        with online():
+            info = HfApi().model_info(model_repo_id(name), files_metadata=True)
+    except Exception as exc:  # noqa: BLE001
+        log(f"could not determine download size for {name}: {exc}")
+        return 0
+    return sum(
+        f.size or 0
+        for f in (info.siblings or [])
+        if any(fnmatch(f.rfilename, pat) for pat in MODEL_FILES)
+    )
+
+
+def download_model(name: str, on_progress: Any = None) -> str:
+    """Fetch `name`'s weights, reporting progress in bytes.
+
+    ``on_progress(downloaded, total)`` is called as the transfer advances; `total`
+    is 0 when unknown. Returns the local snapshot path.
+
+    huggingface_hub reports progress by driving a tqdm instance per file, so the
+    only way to observe it is to supply the tqdm class. The subclass below adds
+    each file's increments into one running total, because a per-file bar that
+    restarts five times tells the user nothing about how long they are waiting.
+    """
+    from huggingface_hub import snapshot_download
+    from tqdm.auto import tqdm as _tqdm
+
+    total = model_download_size(name)
+    state = {"done": 0}
+
+    class ProgressTqdm(_tqdm):  # type: ignore[misc]
+        def update(self, n: int | None = 1) -> bool | None:
+            state["done"] += n or 0
+            if on_progress is not None:
+                on_progress(state["done"], total)
+            return super().update(n)
+
+    log(f"downloading {model_repo_id(name)} ({total / 1e6:.0f} MB)" if total else "downloading")
+    # Downloads write to stdout under some terminal configurations, which would
+    # corrupt the protocol stream mid-transfer.
+    with online(), guard_stdout():
+        path = snapshot_download(
+            model_repo_id(name),
+            allow_patterns=list(MODEL_FILES),
+            tqdm_class=ProgressTqdm,
+        )
+    # A resumed transfer never reports the bytes it skipped, so the final tick has
+    # to be sent explicitly or the bar stops short of full and looks stuck.
+    if on_progress is not None and total:
+        on_progress(total, total)
+    log(f"downloaded {name} to {path}")
+    return path
 
 
 @contextlib.contextmanager
@@ -286,6 +447,31 @@ class Engine:
 
     # -- inference ---------------------------------------------------------
 
+    def _load_pcm16_wav(self, path: str) -> np.ndarray:
+        """Read a 16 kHz mono 16-bit WAV straight into the array faster-whisper wants.
+
+        faster-whisper's own path (`decode_audio`) goes through PyAV, which bundles
+        an entire FFmpeg — general-purpose machinery for a format this sidecar never
+        actually needs, because `ov-asr` is the only producer of these files and it
+        always writes exactly this format (`crates/ov-asr/src/wav.rs`). Reading it
+        with the standard library and doing `decode_audio`'s own int16→float32
+        conversion by hand (`/ 32768.0`) gets byte-identical samples without the
+        ~65 MB PyAV costs in the frozen build.
+
+        Raises `ValueError` if the file is not exactly what `ov-asr` promises to
+        write, rather than silently resampling or reinterpreting it — a format
+        mismatch here means the two sides of the protocol have drifted apart, which
+        is a bug to surface, not paper over.
+        """
+        with wave.open(path, "rb") as f:
+            if f.getnchannels() != 1 or f.getsampwidth() != 2 or f.getframerate() != 16_000:
+                raise ValueError(
+                    f"expected 16 kHz mono 16-bit PCM, got {f.getnchannels()}ch "
+                    f"{f.getsampwidth() * 8}bit {f.getframerate()}Hz from {path}"
+                )
+            raw = f.readframes(f.getnframes())
+        return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
     def transcribe(
         self,
         wav_path: str,
@@ -318,8 +504,9 @@ class Engine:
     ) -> Transcription:
         assert self._model is not None
         started = time.perf_counter()
+        audio = self._load_pcm16_wav(wav_path)
         segments, info = self._model.transcribe(
-            wav_path,
+            audio,
             language=language,
             # Beam search, not greedy. beam_size=1 was chosen for latency and it
             # was a bad trade: greedy decoding falls into repetition loops, which

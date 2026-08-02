@@ -20,6 +20,13 @@ export interface Ready {
   mic: string;
 }
 
+/** First-run weight download. `total` is 0 when the size is not yet known. */
+export interface Download {
+  model: string;
+  done: number;
+  total: number;
+}
+
 export interface LiveView {
   state: EngineState;
   profile: string;
@@ -29,6 +36,8 @@ export interface LiveView {
   notice: { level: "info" | "warn" | "error"; message: string } | null;
   ready: Ready | null;
   error: string | null;
+  /** Non-null only during the first-run download. */
+  download: Download | null;
   sessions: number;
 }
 
@@ -41,6 +50,7 @@ const INITIAL: LiveView = {
   notice: null,
   ready: null,
   error: null,
+  download: null,
   sessions: 0,
 };
 
@@ -91,19 +101,33 @@ export function useLiveEngine() {
         try {
           const s = await invoke<
             | { state: "starting" }
+            | ({ state: "downloading" } & Download)
             | ({ state: "ready" } & Ready)
             | { state: "failed"; error: string }
           >("get_status");
           if (cancelled) return true;
           if (s.state === "ready") {
             const { state: _s, ...ready } = s;
-            setView((v) => ({ ...v, ready: ready as Ready, error: null }));
+            setView((v) => ({
+              ...v,
+              ready: ready as Ready,
+              error: null,
+              download: null,
+            }));
             return true;
           }
           if (s.state === "failed") {
-            setView((v) => ({ ...v, error: s.error }));
+            setView((v) => ({ ...v, error: s.error, download: null }));
             return true;
           }
+          if (s.state === "downloading") {
+            const { state: _s, ...download } = s;
+            setView((v) => ({ ...v, download: download as Download }));
+            return false;
+          }
+          // "starting" — clear any download left from a previous poll, so the bar
+          // does not linger at 100% through the model load that follows.
+          setView((v) => (v.download ? { ...v, download: null } : v));
         } catch {
           /* command not registered yet */
         }
