@@ -11,7 +11,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FlowBar } from "../ui";
+import { playCompletionChime, playStartTone } from "../ui/sound";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
+import { useSettings } from "../screens/Settings";
 import "./overlay.css";
 
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -24,11 +26,40 @@ async function call(cmd: string, args?: Record<string, unknown>) {
 
 export function Overlay() {
   const { view, levelRef } = useLiveEngine();
+  const { settings } = useSettings();
   const [menu, setMenu] = useState(false);
   const dragging = useRef(false);
 
   const live = view.state === "listening";
   const working = view.state === "transcribing" || view.state === "injecting";
+  const soundEnabled = settings?.config.sound_enabled ?? true;
+
+  // Two tones: one when the hotkey engages, one when a dictation finishes and
+  // actually landed. Tracked off the raw state transition rather than the
+  // `live`/`working` booleans above so a clipboard-fallback completion --
+  // which settles to "idle" exactly the same way a real success does, per
+  // `useLiveEngine`'s reducer -- doesn't get the success chime just because it
+  // isn't a hard failure. `view.notice` is set the moment that fallback
+  // happens and nothing in this window clears it, so its presence at the
+  // instant of the idle transition is a reliable signal the completion wasn't
+  // clean, independent of exactly when the Notice and Finished events arrive
+  // relative to each other.
+  const prevState = useRef(view.state);
+  useEffect(() => {
+    const prev = prevState.current;
+    prevState.current = view.state;
+    if (!soundEnabled) return;
+
+    if (prev !== "listening" && view.state === "listening") {
+      playStartTone();
+    } else if (
+      (prev === "transcribing" || prev === "injecting") &&
+      view.state === "idle" &&
+      !view.notice
+    ) {
+      playCompletionChime();
+    }
+  }, [view.state, view.notice, soundEnabled]);
 
   // Persist the position after a native drag. Snapping happens in Rust so the
   // rules live in one place rather than being split across the boundary.

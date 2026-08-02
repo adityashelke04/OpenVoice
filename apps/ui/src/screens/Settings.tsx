@@ -157,6 +157,16 @@ export function SettingsScreen({
             />
           </Row>
           <Row
+            label="Sound feedback"
+            hint="A short tone when you start dictating, and another when it finishes and lands."
+          >
+            <Toggle
+              on={c.sound_enabled}
+              onChange={(v) => patch((s) => (s.config.sound_enabled = v))}
+              label="Play a sound when dictating starts and finishes"
+            />
+          </Row>
+          <Row
             label="Maximum recording"
             hint="Recording stops on its own after this long, so a stuck key cannot record forever."
           >

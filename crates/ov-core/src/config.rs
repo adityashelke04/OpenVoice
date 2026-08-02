@@ -179,6 +179,11 @@ pub struct Config {
     /// borrowing no clipboard and working in terminals that do not accept `Ctrl+V`
     /// — while longer passages still paste atomically.
     pub paste_threshold_chars: usize,
+    /// Whether the UI plays a short tone when a dictation starts and another when
+    /// it finishes. Defaults on; purely a frontend concern — the Rust engine
+    /// never plays audio itself, this just persists the user's preference the
+    /// same way every other setting does.
+    pub sound_enabled: bool,
 }
 
 impl Default for Config {
@@ -193,6 +198,7 @@ impl Default for Config {
             language: Some("en".into()),
             input_device: None,
             paste_threshold_chars: 60,
+            sound_enabled: true,
         }
     }
 }
@@ -273,6 +279,13 @@ mod tests {
         assert_eq!(c.chord.key, Key::RightCtrl);
         // Must not swallow the key: users rely on Right Ctrl for normal shortcuts.
         assert!(!c.chord.exclusive);
+    }
+
+    #[test]
+    fn sound_feedback_defaults_on() {
+        // Pinned so a future refactor can't silently ship it off by default --
+        // the whole point is that most users never have to find the toggle.
+        assert!(Config::default().sound_enabled);
     }
 
     #[test]

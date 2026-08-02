@@ -31,6 +31,8 @@ export interface Config {
   language: string | null;
   input_device: string | null;
   paste_threshold_chars: number;
+  /** Whether the UI plays a short tone on start and on a successful finish. */
+  sound_enabled: boolean;
 }
 
 /** Filler-removal level. Mirrors `ov_format::profile::FillerLevel`, which

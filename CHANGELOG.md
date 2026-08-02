@@ -29,6 +29,13 @@ installer has been tested on a machine that has never had the repository on it.
 
 ### Added
 
+- **Sound feedback.** A short tone on starting a dictation, and a distinct
+  one on a successful finish — both synthesized with the Web Audio API rather
+  than shipped as audio assets, so there's nothing to license or bundle.
+  Off/on in Settings (`Config.sound_enabled`, default on). The finish chime is
+  deliberately withheld on a clipboard-fallback completion, which settles to
+  the same "idle" state a clean success does — playing it there would tell the
+  user a dictation landed cleanly when it didn't.
 - **A language setting.** `ov-asr`/the sidecar have accepted a forced-language
   parameter since day one, but it was hardcoded to English at every call site
   in `ov-app` and `ov-cli` with no way to change it. Now a real setting
