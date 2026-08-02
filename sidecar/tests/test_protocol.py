@@ -289,6 +289,16 @@ class TestStdioEncoding:
         line = proc.stdout.decode("utf-8")
         assert json.loads(line)["text"] == text
 
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason=(
+            "the bug this documents is Windows-specific: a piped child's stdout "
+            "only falls back to the ANSI code page (cp1252) on Windows. On Linux "
+            "and macOS, Python already defaults a piped stream to UTF-8, so "
+            "`write()` succeeds here with or without `_force_utf8_io()` -- there "
+            "is no broken default on this platform for the test to demonstrate."
+        ),
+    )
     def test_without_the_fix_the_same_text_breaks_a_piped_subprocess(self):
         # Documents the exact failure the fix prevents, so a future change that
         # accidentally removes `_force_utf8_io()` fails loudly here rather than
