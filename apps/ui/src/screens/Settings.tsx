@@ -18,6 +18,30 @@ import {
 } from "../engine/settings";
 import "./screens.css";
 
+/** Whisper's most commonly dictated languages, curated rather than exhaustive —
+ *  faster-whisper actually accepts ~99 ISO 639-1 codes, but a 99-item dropdown
+ *  is not a feature, it's a search problem. "Auto-detect" maps to `null`
+ *  (`Config.language: None`), which trades a little accuracy for not asking
+ *  the user to pick anything at all. */
+const LANGUAGES: readonly [code: string, name: string][] = [
+  ["en", "English"],
+  ["es", "Spanish"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["it", "Italian"],
+  ["pt", "Portuguese"],
+  ["nl", "Dutch"],
+  ["ru", "Russian"],
+  ["zh", "Chinese"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+  ["hi", "Hindi"],
+  ["ar", "Arabic"],
+  ["tr", "Turkish"],
+  ["pl", "Polish"],
+  ["sv", "Swedish"],
+];
+
 /** A labelled row. The only list primitive these screens use. */
 function Row({
   label,
@@ -114,6 +138,22 @@ export function SettingsScreen({
                 })
               }
               style={{ width: 260 }}
+            />
+          </Row>
+          <Row
+            label="Language"
+            hint="Telling OpenVoice the language beats auto-detect for a single short utterance — that's the whole reason this isn't 'Auto-detect' by default. Change it if you dictate in something other than English."
+          >
+            <Select
+              options={["Auto-detect", ...LANGUAGES.map(([, name]) => name)]}
+              value={LANGUAGES.find(([code]) => code === c.language)?.[1] ?? "Auto-detect"}
+              onChange={(e) =>
+                patch((s) => {
+                  const found = LANGUAGES.find(([, name]) => name === e.target.value);
+                  s.config.language = found ? found[0] : null;
+                })
+              }
+              style={{ width: 200 }}
             />
           </Row>
           <Row

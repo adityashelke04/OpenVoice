@@ -256,6 +256,66 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_holds_across_a_battery_of_realistic_phrases() {
+        // Regression coverage for two real idempotency breaks found by fuzzing
+        // this battery through every profile twice:
+        //
+        // 1. A resolved identifier at sentence-start got re-capitalized on a
+        //    second pass ("userName, then return" -> "UserName, then return"),
+        //    because `Tok::Lit` protection from `CaseTransforms` cannot survive
+        //    being rendered to a string and re-parsed. Fixed in `Capitalize` by
+        //    recognising the identifier shape directly (see
+        //    `looks_like_an_identifier`).
+        // 2. Literal newlines from "new line" / "new paragraph" were silently
+        //    dropped on a second pass ("\n\nOne\nTwo" -> "One Two"), because
+        //    `Doc::parse` used `split_whitespace`, which treats a newline as
+        //    just another separator to discard. Fixed by giving `Doc::parse`
+        //    explicit line-aware handling that emits a `Tok::Break` per `\n`.
+        //
+        // Deliberately excluded: any phrase using the `literally` escape hatch
+        // whose escaped words are themselves command trigger words (e.g.
+        // "literally fat arrow"). That is not a bug to fix here -- it is
+        // structurally impossible to avoid for *any* text-pattern-triggered
+        // command system: the escape consumes "literally" and is gone from the
+        // output, so a second pass over the literal text "fat arrow" has no way
+        // to know it should not be reinterpreted as the command. The very same
+        // property already applies to the single-word case ("literally comma"
+        // renders as the bare word "comma", which a second pass would also
+        // reinterpret) -- it predates every change in this file.
+        let phrases = [
+            "um so like the thing you know is broken",
+            "cube control get pods dash dash all namespaces",
+            "camel case user name comma then return",
+            "docker run dash dash rm dash it ubuntu",
+            "scratch that wrong words scratch that right words",
+            "new paragraph one new line two",
+            "use effect is a hook that runs after render",
+            "!!!!!!!! wait......... really?????",
+            "no no no that is very very good",
+            "screaming snake case max size equals ten",
+            "git commit dash m fix the overrun",
+            "open paren foo comma bar close paren",
+            "",
+            "   ",
+            "a",
+            "literally",
+            "camel case",
+        ];
+        for profile in [Profile::editor(), Profile::terminal(), Profile::prose()] {
+            let f = Formatter::with_builtins(profile.clone());
+            for p in phrases {
+                let once = f.format(p);
+                let twice = f.format(&once);
+                assert_eq!(
+                    once, twice,
+                    "not idempotent for profile {:?} on input {p:?}: {once:?} -> {twice:?}",
+                    profile.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn formatting_is_idempotent_on_already_clean_text() {
         // Re-running the formatter over its own output must not drift. History
         // replay depends on this, and drift here would be invisible in production.

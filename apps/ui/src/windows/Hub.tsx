@@ -418,6 +418,12 @@ function StartupError({ error }: { error: string }) {
 }
 
 function HistoryRow({ row }: { row: Row }) {
+  // A badge on every row was noise, not signal: "delivered" is the outcome for
+  // almost every dictation, so repeating it down the whole list said nothing a
+  // reader didn't already assume. Green is reserved elsewhere in this app for
+  // exactly one meaning -- the microphone is open -- and stacking it down every
+  // history row diluted that into decoration. Silence now means "this worked
+  // as expected"; a badge appears only when something didn't.
   const failed = row.outcome !== "delivered";
   return (
     <div className="row">
@@ -426,9 +432,11 @@ function HistoryRow({ row }: { row: Row }) {
           {row.final_text}
         </div>
         <div className="hstack" style={{ marginTop: 6 }}>
-          <Badge dot tone={failed ? "warn" : "live"}>
-            {failed ? row.outcome.replace(/_/g, " ") : "delivered"}
-          </Badge>
+          {failed && (
+            <Badge dot tone="warn">
+              {row.outcome.replace(/_/g, " ")}
+            </Badge>
+          )}
           <span className="t-caption">{row.target_app || "unknown app"}</span>
           <span className="t-caption">{Math.round(row.latency_ms)} ms</span>
           <span className="t-caption">{when(row.created_at)}</span>

@@ -12,7 +12,8 @@ export type Outcome =
   | { kind: "cancelled" }
   | { kind: "too_short" }
   | { kind: "silent" }
-  | { kind: "asr_failed"; detail: string };
+  | { kind: "asr_failed"; detail: string }
+  | { kind: "capture_failed"; detail: string };
 
 export type NoticeLevel = "info" | "warn" | "error";
 

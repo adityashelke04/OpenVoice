@@ -102,6 +102,12 @@ pub struct Engine {
     /// Last delivered text, for the tray's "paste last transcript".
     last_text: Mutex<String>,
     paste_threshold: usize,
+    /// Forced transcription language, or `None` to auto-detect.
+    ///
+    /// Unlike the model, this needs no restart: it is a per-request parameter
+    /// faster-whisper reads at decode time, not something baked into loaded
+    /// weights, so it reloads the same way the dictionary and profiles do.
+    language: Mutex<Option<String>>,
     start: Instant,
     shell: Arc<dyn Shell>,
 }
@@ -147,6 +153,15 @@ impl Engine {
             profiles = settings.profiles.len(),
             "writing rules reloaded"
         );
+    }
+
+    /// Apply an edited language preference to the next dictation.
+    ///
+    /// No restart needed, unlike the model: this only changes what gets passed
+    /// to the already-running sidecar on the next decode.
+    pub fn reload_language(&self, settings: &crate::settings::Settings) {
+        *self.language.lock().expect("language mutex") = settings.config.language.clone();
+        tracing::info!(language = ?settings.config.language, "transcription language changed");
     }
 
     /// Text of the most recent successful dictation.
@@ -396,6 +411,7 @@ pub fn start(
         history,
         last_text: Mutex::new(String::new()),
         paste_threshold: config.paste_threshold_chars,
+        language: Mutex::new(config.language.clone()),
         start: Instant::now(),
         shell,
     });
@@ -541,12 +557,13 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                     });
                     return;
                 };
-                // Decode hints are deliberately empty: measured to make output
-                // worse. See ov-format's dictionary module docs.
-                // Decode hints are deliberately empty: measured to make output worse.
+                // Vocabulary hints are deliberately left empty: measured to make
+                // output worse. See ov-format's dictionary module docs. Language is
+                // not a hint in that sense -- it is the user's own setting, read
+                // once at startup (see `language` field docs above).
                 let hint = DecodeHint {
                     vocabulary: vec![],
-                    language: Some("en".into()),
+                    language: e.language.lock().expect("language mutex").clone(),
                 };
                 match e.transcriber.transcribe(&audio, &hint) {
                     Ok(transcript) => {
@@ -580,10 +597,30 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             });
         }
 
-        Effect::Inject { session, text } => {
+        Effect::Inject {
+            session,
+            text,
+            target_exe,
+        } => {
             let e = e.clone();
             let tx = tx.clone();
             std::thread::spawn(move || {
+                // Transcription and formatting can take several seconds (multi-second
+                // decodes are routine), so focus may have moved on from whichever app
+                // was foreground when the user started speaking. Nothing here can
+                // stop a paste from landing in the wrong window if that happened, but
+                // logging the mismatch is the difference between "injection sometimes
+                // silently fails in one app" being a mystery and being a two-minute
+                // diagnosis next time it happens.
+                let now_exe = e.apps.foreground().unwrap_or_default().exe;
+                if !target_exe.is_empty() && now_exe != target_exe {
+                    tracing::warn!(
+                        pressed_in = %target_exe,
+                        injecting_into = %now_exe,
+                        "foreground app changed between press and injection"
+                    );
+                }
+
                 let mode = ov_input::mode_for(&text, e.paste_threshold);
                 match e.sink.inject(&text, mode) {
                     Ok(_) => {
@@ -594,7 +631,15 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                         });
                     }
                     Err(err) => {
-                        // Not lost: the injector leaves the text on the clipboard.
+                        // Not lost: the injector leaves the text on the clipboard. This
+                        // used to be invisible in the log entirely -- the only trace
+                        // was an in-app notice and a history badge, neither of which
+                        // helps once the moment has passed.
+                        tracing::warn!(
+                            error = %err,
+                            target = %now_exe,
+                            "injection failed; text left on the clipboard"
+                        );
                         *e.last_text.lock().expect("last text mutex") = text;
                         let _ = tx.send(Input::InjectionFailed {
                             session,

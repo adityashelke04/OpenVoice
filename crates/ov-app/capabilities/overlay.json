@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "overlay",
+  "description": "Permissions for the Flow Bar overlay only — deliberately narrower than the Hub's (default.json). The overlay's entire reason to exist is that it never takes focus or activates (WS_EX_NOACTIVATE, applied on the Rust side in main.rs::configure_overlay); it previously shared the Hub's full window-manipulation grant, which included core:window:allow-set-focus, allow-show, allow-hide and allow-unminimize — none of which apps/ui/src/windows/Overlay.tsx calls (it only calls onMoved, scaleFactor, startDragging and setSize). Capabilities gate what a window's own JavaScript can invoke over IPC; nothing here stopped legitimate code from ever calling setFocus() on the overlay, because nothing needed to, but a compromised or newly-added dependency running inside that webview could have called getCurrentWindow().setFocus() on itself and it would have been permitted — directly undermining the one property this window exists to guarantee. Grant exactly what Overlay.tsx uses today; widen this file, deliberately, the day it needs more.",
+  "windows": ["overlay"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
+    "core:window:allow-scale-factor"
+  ]
+}

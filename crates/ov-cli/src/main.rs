@@ -38,6 +38,13 @@ struct Cli {
     #[arg(long, global = true, default_value = "base.en")]
     model: String,
 
+    /// Forced language as an ISO 639-1 code, or "auto" to let the model detect it.
+    /// Forcing beats auto-detect for a single short utterance, which is why this
+    /// defaults to English rather than "auto" -- see `Config::language` in
+    /// `ov-core` for the reasoning this mirrors.
+    #[arg(long, global = true, default_value = "en")]
+    language: String,
+
     /// Python interpreter for the ASR sidecar.
     #[arg(long, global = true)]
     python: Option<PathBuf>,
@@ -152,6 +159,16 @@ fn run(cli: &Cli) -> Result<(), String> {
 }
 
 /* -- helpers ---------------------------------------------------------------- */
+
+/// `--language auto` (or any case-insensitive spelling of it) means "let the
+/// model detect it"; anything else is forced verbatim as the ISO code.
+fn language_hint(language: &str) -> Option<String> {
+    if language.eq_ignore_ascii_case("auto") {
+        None
+    } else {
+        Some(language.to_string())
+    }
+}
 
 fn pick_profile(name: &str) -> Profile {
     Profile::builtins()
@@ -567,7 +584,7 @@ fn cmd_mictest(cli: &Cli, seconds: u64) -> Result<(), String> {
             &pcm,
             &DecodeHint {
                 vocabulary: vec![],
-                language: Some("en".into()),
+                language: language_hint(&cli.language),
             },
         )
         .map_err(|e| e.to_string())?;
@@ -633,7 +650,7 @@ fn cmd_transcribe(cli: &Cli, path: &Path, profile: &str) -> Result<(), String> {
         } else {
             Vec::new()
         },
-        language: Some("en".into()),
+        language: language_hint(&cli.language),
     };
     let transcript = transcriber
         .transcribe(&Pcm16k { samples }, &hint)
@@ -659,6 +676,7 @@ struct Runtime {
     captured: Mutex<Option<Pcm16k>>,
     paste_threshold: usize,
     hint: bool,
+    language: Option<String>,
     start: Instant,
 }
 
@@ -704,6 +722,7 @@ fn cmd_dictate(cli: &Cli) -> Result<(), String> {
         captured: Mutex::new(None),
         paste_threshold: config.paste_threshold_chars,
         hint: cli.hint,
+        language: language_hint(&cli.language),
         start: Instant::now(),
     });
 
@@ -845,7 +864,7 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                     } else {
                         Vec::new()
                     },
-                    language: Some("en".into()),
+                    language: rt.language.clone(),
                 };
                 match rt.transcriber.transcribe(&audio, &hint) {
                     Ok(transcript) => {
@@ -880,10 +899,23 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
             });
         }
 
-        Effect::Inject { session, text } => {
+        Effect::Inject {
+            session,
+            text,
+            target_exe,
+        } => {
             let rt = rt.clone();
             let tx = tx.clone();
             std::thread::spawn(move || {
+                let now_exe = rt.apps.foreground().unwrap_or_default().exe;
+                if !target_exe.is_empty() && now_exe != target_exe {
+                    tracing::warn!(
+                        pressed_in = %target_exe,
+                        injecting_into = %now_exe,
+                        "foreground app changed between press and injection"
+                    );
+                }
+
                 let mode = ov_input::mode_for(&text, rt.paste_threshold);
                 match rt.sink.inject(&text, mode) {
                     Ok(_) => {
@@ -893,6 +925,11 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                         });
                     }
                     Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            target = %now_exe,
+                            "injection failed; text left on the clipboard"
+                        );
                         let _ = tx.send(Input::InjectionFailed {
                             session,
                             error: e.to_string(),
@@ -922,6 +959,7 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                     println!("   could not type into {} - press Ctrl+V", record.app.exe);
                 }
                 Outcome::AsrFailed(e) => println!("   transcription failed: {e}"),
+                Outcome::CaptureFailed(e) => println!("   microphone error: {e}"),
                 Outcome::Cancelled => println!("   cancelled"),
                 // These two were previously silent, which is the worst possible
                 // behaviour when someone is trying to work out why nothing

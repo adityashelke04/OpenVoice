@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the Hub and the Flow Bar overlay. Tauri v2 denies every core API unless it is granted here — custom commands registered through invoke_handler are always allowed, which is why an app with no capability file appears to half-work: commands succeed while every listen() silently fails and the interface freezes with no error anywhere.",
-  "windows": ["hub", "overlay"],
+  "description": "Permissions for the Hub window. Tauri v2 denies every core API unless it is granted here — custom commands registered through invoke_handler are always allowed, which is why an app with no capability file appears to half-work: commands succeed while every listen() silently fails and the interface freezes with no error anywhere. The Flow Bar overlay is deliberately NOT included: its capabilities live in overlay.json, scoped to only what its own frontend code calls. See that file for why sharing this one with the overlay was a real gap, not caution.",
+  "windows": ["hub"],
   "permissions": [
     "core:default",
     "core:event:default",

@@ -269,6 +269,39 @@ fn dash_run(doc: &Doc, i: usize) -> Option<usize> {
     Some(n)
 }
 
+/// How many tokens starting at `i` would be consumed by command interpretation,
+/// if any command matches there at all.
+///
+/// The escape hatch uses this to protect a *whole* command phrase, not just its
+/// first word. Voice commands are not all single words: a dash run is variable
+/// length, and two-word `COMMANDS` entries exist whose second word is *also* a
+/// standalone single-word entry (`"fat arrow"` -> `=>`, but bare `"arrow"` ->
+/// `->`). Escaping only one word after "literally" left the second word of a
+/// two-word phrase exposed to the very next loop iteration: `literally fat
+/// arrow` escaped `fat` and then re-interpreted the bare `arrow` as `->`,
+/// rendering `fat ->` instead of the literal words `fat arrow`.
+fn command_span(doc: &Doc, i: usize) -> usize {
+    if doc.window(i, 2).is_some_and(|w| w == ["scratch", "that"]) {
+        return 2;
+    }
+    if doc.window(i, 2).is_some_and(|w| w == ["new", "paragraph"]) {
+        return 2;
+    }
+    if doc.window(i, 2).is_some_and(|w| w == ["new", "line"]) {
+        return 2;
+    }
+    if let Some(run) = dash_run(doc, i) {
+        return run;
+    }
+    if let Some((phrase, _, _)) = COMMANDS
+        .iter()
+        .find(|(p, _, _)| doc.window(i, p.len()).is_some_and(|w| w == **p))
+    {
+        return phrase.len();
+    }
+    1
+}
+
 /// Interprets spoken punctuation and layout commands.
 pub struct VoiceCommands;
 
@@ -285,13 +318,17 @@ impl Rule for VoiceCommands {
         let mut i = 0;
 
         while i < doc.len() {
-            // Escape: emit the next token verbatim, uninterpreted.
-            if doc.toks[i].as_word_lower().as_deref() == Some(ESCAPE) {
-                if let Some(next) = doc.toks.get(i + 1) {
-                    out.push(next.clone());
-                    i += 2;
-                    continue;
+            // Escape: emit the following command phrase verbatim, uninterpreted.
+            // Must cover the *whole* phrase a command there would have consumed
+            // (see `command_span`), not just one word -- otherwise the tail of a
+            // multi-word command is left for the next iteration to reinterpret.
+            if doc.toks[i].as_word_lower().as_deref() == Some(ESCAPE) && i + 1 < doc.len() {
+                let span = command_span(&doc, i + 1).min(doc.len() - (i + 1));
+                for tok in &doc.toks[i + 1..i + 1 + span] {
+                    out.push(tok.clone());
                 }
+                i += 1 + span;
+                continue;
             }
 
             // "scratch that" discards everything dictated so far in this utterance.
@@ -528,6 +565,15 @@ fn capitalize(w: &str) -> String {
 /// Only ever touches [`Tok::Word`]. A [`Tok::Lit`] is a resolved identifier —
 /// capitalizing `useEffect` into `UseEffect` at the start of a sentence would turn
 /// working code into a compile error, so literals are left strictly alone.
+///
+/// That protection only holds *within a single pass*: `CaseTransforms` and the
+/// dictionary mark a resolved identifier by turning it into a `Tok::Lit`, but
+/// that marker cannot survive being rendered back to a plain string and
+/// re-parsed. Formatting is required to be idempotent on its own output (history
+/// replay depends on it — see `formatting_is_idempotent_on_already_clean_text`),
+/// so a second pass over `"userName, then return"` must not capitalize `userName`
+/// into `UserName` just because it is now a fresh `Tok::Word` again. See
+/// `looks_like_an_identifier`.
 pub struct Capitalize;
 
 impl Rule for Capitalize {
@@ -556,15 +602,44 @@ impl Rule for Capitalize {
                 // `user.name` does not start a sentence.
                 Tok::Tight(_) => at_sentence_start = false,
                 Tok::Word(w) => {
-                    if at_sentence_start {
+                    if at_sentence_start && !looks_like_an_identifier(w) {
                         *w = capitalize(w);
-                        at_sentence_start = false;
                     }
+                    at_sentence_start = false;
                 }
             }
         }
         Doc { toks }
     }
+}
+
+/// Whether `w` is shaped like a program identifier rather than an ordinary
+/// spoken word: lowercase first letter, with an uppercase letter somewhere
+/// after it (`userName`, `useEffect`, `xmlHttpRequest`).
+///
+/// Ordinary English speech transcribed by Whisper never produces this shape —
+/// a word is either all-lowercase, capitalized only on its first letter, or a
+/// fully uppercase acronym. A lowercase-starting word with an internal capital
+/// is, for this app's purposes, always a `camelCase` identifier that survived
+/// from an earlier formatting pass (see `Capitalize`'s doc comment).
+fn looks_like_an_identifier(w: &str) -> bool {
+    let mut chars = w.chars();
+    match chars.next() {
+        Some(first) if first.is_lowercase() => chars.any(char::is_uppercase),
+        _ => false,
+    }
+}
+
+/// Whether `w` has an uppercase letter anywhere after its first character.
+///
+/// Used by `ProfilePolicy`'s force-lowercase policy for the same reason
+/// `looks_like_an_identifier` exists: ordinary spoken English is never
+/// uppercase in the middle of a word, so a word that is (`MAX_SIZE`,
+/// `UserName`) is a constant or identifier that survived an earlier
+/// formatting pass as plain text, and touching only its first character would
+/// produce a broken, internally-inconsistent result rather than a correct one.
+fn has_internal_uppercase(w: &str) -> bool {
+    w.chars().skip(1).any(char::is_uppercase)
 }
 
 // ---------------------------------------------------------------------------
@@ -585,10 +660,21 @@ impl Rule for ProfilePolicy {
         if ctx.profile.capitalize == Capitalization::ForceLower {
             // Lowercase only the first character of the first word: `Ls` is not a
             // command, but `Git` inside a sentence may be intentional.
+            //
+            // Skip words with an uppercase letter anywhere *after* the first --
+            // `SCREAMING_SNAKE_CASE` constants and `PascalCase` identifiers are
+            // both a `Tok::Lit` and therefore untouched on the pass that builds
+            // them, but a second pass over already-formatted text re-parses them
+            // as a plain `Tok::Word`. Force-lowering just the first character of
+            // `MAX_SIZE` does not produce a valid alternate casing, it produces
+            // the broken, inconsistent `mAX_SIZE` -- so leave any such word
+            // alone entirely rather than partially mangle it.
             if let Some(Tok::Word(w)) = toks.first_mut() {
-                let mut cs = w.chars();
-                if let Some(c) = cs.next() {
-                    *w = c.to_lowercase().collect::<String>() + cs.as_str();
+                if !has_internal_uppercase(w) {
+                    let mut cs = w.chars();
+                    if let Some(c) = cs.next() {
+                        *w = c.to_lowercase().collect::<String>() + cs.as_str();
+                    }
                 }
             }
         }
@@ -799,6 +885,42 @@ mod tests {
     }
 
     #[test]
+    fn literally_escapes_a_whole_two_word_command_not_just_its_first_word() {
+        // Regression: the escape used to protect only the token right after
+        // "literally". "fat arrow" is a two-word COMMANDS entry (-> "=>"), but
+        // bare "arrow" is *also* its own standalone entry (-> "->"), so escaping
+        // only "fat" left "arrow" exposed to the very next loop iteration, which
+        // reinterpreted it: "literally fat arrow" rendered as "fat ->" instead of
+        // the literal words "fat arrow".
+        let p = Profile::default();
+        assert_eq!(run(&VoiceCommands, &p, "literally fat arrow"), "fat arrow");
+        // Same failure shape for "new line" / "new paragraph": the second word
+        // must not slip through to layout interpretation.
+        assert_eq!(run(&VoiceCommands, &p, "literally new line"), "new line");
+        assert_eq!(
+            run(&VoiceCommands, &p, "literally new paragraph"),
+            "new paragraph"
+        );
+        assert_eq!(
+            run(&VoiceCommands, &p, "literally scratch that"),
+            "scratch that"
+        );
+    }
+
+    #[test]
+    fn literally_escapes_a_whole_dash_run() {
+        // Regression: a dash run is variable length, not one word. Escaping only
+        // the first "dash" left the second free to be reinterpreted as a tight
+        // hyphen, rendering "literally dash dash all" as "dash-all" instead of
+        // the literal words "dash dash all".
+        let p = Profile::default();
+        assert_eq!(
+            run(&VoiceCommands, &p, "literally dash dash all"),
+            "dash dash all"
+        );
+    }
+
+    #[test]
     fn scratch_that_discards_what_came_before() {
         let p = Profile::default();
         assert_eq!(
@@ -881,6 +1003,28 @@ mod tests {
     }
 
     #[test]
+    fn capitalize_does_not_re_capitalize_an_identifier_on_a_second_pass() {
+        // Regression: `Tok::Lit` protection (the test above) only holds within a
+        // single pass. Once formatted output is rendered to a plain string and
+        // re-parsed -- exactly what history replay and a live "preview this
+        // phrase" feature both do -- a resolved identifier is just a `Tok::Word`
+        // again, indistinguishable from an ordinary word by tokenization alone.
+        // Feeding "userName, then return" straight into `Doc::parse` used to
+        // capitalize it into "UserName, then return" the second time around.
+        let p = Profile::default();
+        assert_eq!(
+            run(&Capitalize, &p, "userName, then return"),
+            "userName, then return"
+        );
+        assert_eq!(
+            run(&Capitalize, &p, "useEffect runs late"),
+            "useEffect runs late"
+        );
+        // An ordinary lowercase word at sentence start must still capitalize.
+        assert_eq!(run(&Capitalize, &p, "hello there"), "Hello there");
+    }
+
+    #[test]
     fn capitalize_starts_new_sentences() {
         let p = Profile::default();
         assert_eq!(
@@ -893,6 +1037,27 @@ mod tests {
     fn terminal_profile_forces_lowercase_and_adds_no_period() {
         let p = Profile::terminal();
         assert_eq!(run(&ProfilePolicy, &p, "Git status"), "git status");
+    }
+
+    #[test]
+    fn terminal_profile_does_not_partially_mangle_a_preserved_case_identifier() {
+        // Regression: force-lowercase used to touch the first character
+        // unconditionally. On a first pass a `SCREAMING_SNAKE_CASE` constant or
+        // `PascalCase` identifier from `CaseTransforms` is a `Tok::Lit` and is
+        // never reached here, but re-parsing already-formatted text (history
+        // replay, a live preview) turns it back into a plain `Tok::Word` --
+        // and force-lowering just its first letter produced the broken
+        // `mAX_SIZE` / `userName` (from `UserName`) instead of leaving either
+        // one alone.
+        let p = Profile::terminal();
+        assert_eq!(run(&ProfilePolicy, &p, "MAX_SIZE = ten"), "MAX_SIZE = ten");
+        assert_eq!(
+            run(&ProfilePolicy, &p, "UserName is set"),
+            "UserName is set"
+        );
+        // Ordinary sentence-initial capitalization from Whisper must still be
+        // undone -- this is the entire point of the terminal profile.
+        assert_eq!(run(&ProfilePolicy, &p, "Ls dash l"), "ls dash l");
     }
 
     #[test]

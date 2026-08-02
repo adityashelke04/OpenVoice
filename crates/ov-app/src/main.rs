@@ -307,6 +307,7 @@ fn save_settings(
     // require a restart, and the interface says otherwise.
     if let Some(e) = state.engine.lock().expect("engine").as_ref() {
         e.reload_rules(&saved);
+        e.reload_language(&saved);
     }
 
     if restart_needed {

@@ -204,6 +204,12 @@ pub enum Effect {
         session: SessionId,
         /// Text to deliver.
         text: String,
+        /// Executable that had focus when the user started speaking. Transcription
+        /// and formatting can take several seconds, and injection has no way of
+        /// knowing on its own whether focus moved in that window — carrying this
+        /// through lets the caller notice a mismatch and log it, rather than
+        /// silently sending a paste to whatever now happens to be foreground.
+        target_exe: String,
     },
     /// Write the session to history. Emitted exactly once per session.
     Persist {
@@ -302,7 +308,11 @@ impl SessionMachine {
                 self.on_audio(session, duration_ms, rms, at, &mut fx);
             }
             Input::AudioFailed { session, error, at } => {
-                self.fail_capture(session, at, Outcome::AsrFailed(error), &mut fx);
+                // A microphone/device failure, not a transcriber failure -- it never
+                // reached the ASR step. Keeping the outcome distinct from
+                // `AsrFailed` is what lets history and the UI tell "your mic died"
+                // apart from "the model failed".
+                self.fail_capture(session, at, Outcome::CaptureFailed(error), &mut fx);
             }
             Input::Transcribed {
                 session,
@@ -332,7 +342,22 @@ impl SessionMachine {
             } => {
                 // Not a failure from the user's point of view: the text is on the
                 // clipboard, so nothing was lost. Say what to do, not what broke.
-                let text = self.front_text(session);
+                //
+                // This notice is the only *proactive* signal the user gets. Without
+                // it, the only way to discover an injection failed is to notice a
+                // non-"delivered" badge in History later — which defeats the point
+                // of a clipboard fallback that exists to be used in the moment.
+                fx.push(Effect::Emit(Event::Notice {
+                    level: NoticeLevel::Warn,
+                    message: "Couldn't type that in — copied to your clipboard. Press Ctrl+V."
+                        .into(),
+                }));
+                // Must be the *formatted* text: that's what was actually handed to
+                // the injector and what really ended up on the clipboard (see
+                // `on_formatted`, which sets `final_text` before emitting
+                // `Effect::Inject`). Recording the raw ASR text here would make
+                // history and the clipboard disagree about what the user has.
+                let text = self.front_final_text(session);
                 self.finish_pipeline(
                     session,
                     at,
@@ -422,7 +447,7 @@ impl SessionMachine {
             // A fat-finger tap. Deliberately silent: a toast for every accidental
             // brush of the key would be far more annoying than the tap itself.
             self.persist(&active, Outcome::TooShort, String::new(), at, fx);
-            fx.push(Effect::Emit(Event::Idle));
+            self.emit_idle_if_settled(fx);
             return;
         }
 
@@ -432,7 +457,7 @@ impl SessionMachine {
                 level: NoticeLevel::Warn,
                 message: "No speech detected — is your microphone muted?".into(),
             }));
-            fx.push(Effect::Emit(Event::Idle));
+            self.emit_idle_if_settled(fx);
             return;
         }
 
@@ -458,6 +483,21 @@ impl SessionMachine {
     ) {
         if let Some(active) = self.capturing.take_if_id(session) {
             self.persist(&active, outcome, String::new(), at, fx);
+            self.emit_idle_if_settled(fx);
+        }
+    }
+
+    /// Emit `Event::Idle` only if the engine is actually settling: no capture in
+    /// progress *and* nothing left in the transcribe/format/inject pipeline.
+    ///
+    /// The three callers of this (a too-short tap, a silent capture, and a capture
+    /// failure) each know their own capture slot is now empty, but that is not the
+    /// same as the whole engine being idle: a second session queued behind one
+    /// still being transcribed is completely unaffected by the first session's
+    /// disposition. Emitting Idle unconditionally there told the UI the engine had
+    /// gone idle while a session was still actively in flight.
+    fn emit_idle_if_settled(&self, fx: &mut Vec<Effect>) {
+        if self.pipeline.is_empty() {
             fx.push(Effect::Emit(Event::Idle));
         }
     }
@@ -507,15 +547,11 @@ impl SessionMachine {
         front.final_text = text.clone();
         let chars = text.chars().count();
         fx.push(Effect::Emit(Event::Injecting { session, chars }));
-        fx.push(Effect::Inject { session, text });
-    }
-
-    fn front_text(&self, session: SessionId) -> String {
-        self.pipeline
-            .front()
-            .filter(|f| f.id == session)
-            .map(|f| f.raw_text.clone())
-            .unwrap_or_default()
+        fx.push(Effect::Inject {
+            session,
+            text,
+            target_exe: front.app.exe.clone(),
+        });
     }
 
     /// The formatted text of the in-flight session, for recording what was
@@ -861,12 +897,14 @@ mod tests {
         });
         m.handle(Input::Transcribed {
             session: SessionId(1),
-            transcript: transcript("some text"),
+            transcript: transcript("use effect"),
             at: Millis(1_500),
         });
+        // Deliberately different from the raw text, so a test that accidentally
+        // reads `raw_text` instead of `final_text` cannot pass by coincidence.
         m.handle(Input::Formatted {
             session: SessionId(1),
-            text: "Some text".into(),
+            text: "useEffect".into(),
             at: Millis(1_505),
         });
         let fx = m.handle(Input::InjectionFailed {
@@ -877,10 +915,131 @@ mod tests {
 
         let record = persists(&fx)[0];
         assert!(record.outcome.is_success(), "user still has their words");
-        assert!(matches!(record.outcome, Outcome::ClipboardFallback(_)));
         assert!(
             !record.final_text.is_empty(),
             "text must survive to history"
+        );
+        // The clipboard fallback must carry the *formatted* text: that is what was
+        // actually handed to the injector and what really ended up on the
+        // clipboard. Regression: this used to read the raw ASR transcript
+        // ("use effect"), which would silently disagree with the clipboard.
+        assert_eq!(record.final_text, "useEffect");
+        match &record.outcome {
+            Outcome::ClipboardFallback(text) => assert_eq!(text, "useEffect"),
+            other => panic!("expected ClipboardFallback, got {other:?}"),
+        }
+        // The only proactive signal the user gets that something needs a manual
+        // Ctrl+V. Without it, discovering a failed injection means noticing a
+        // non-"delivered" badge in History later -- too late to be useful in the
+        // moment the fallback exists for.
+        assert!(
+            fx.iter().any(|e| matches!(
+                e,
+                Effect::Emit(Event::Notice { message, .. }) if message.contains("Ctrl+V")
+            )),
+            "a failed injection must tell the user to paste manually, not just log it"
+        );
+    }
+
+    #[test]
+    fn microphone_failure_is_not_reported_as_a_transcriber_failure() {
+        let mut m = machine();
+        press(&mut m, 0);
+        m.handle(Input::HotkeyReleased { at: Millis(1_000) });
+        let fx = m.handle(Input::AudioFailed {
+            session: SessionId(1),
+            error: "device disconnected".into(),
+            at: Millis(1_010),
+        });
+
+        let record = persists(&fx)[0];
+        assert!(!record.outcome.is_success());
+        assert_eq!(record.outcome.code(), "capture_failed");
+        assert!(matches!(&record.outcome, Outcome::CaptureFailed(e) if e == "device disconnected"));
+    }
+
+    #[test]
+    fn a_disposed_second_session_does_not_announce_idle_while_the_first_is_still_in_flight() {
+        // Session 1 is queued behind capture and is being transcribed. Session 2
+        // starts and ends as a fat-finger tap (TooShort) while session 1 is still
+        // in flight -- the engine as a whole must not report Idle.
+        let mut m = machine();
+        press(&mut m, 0);
+        m.handle(Input::HotkeyReleased { at: Millis(1_000) });
+        m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 1_000,
+            rms: 0.1,
+            at: Millis(1_005),
+        });
+        assert_eq!(m.queue_depth(), 1, "session 1 is mid-transcription");
+
+        press(&mut m, 1_100);
+        m.handle(Input::HotkeyReleased { at: Millis(1_150) });
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(2),
+            duration_ms: 50, // below min_duration_ms: a fat-finger tap
+            rms: 0.1,
+            at: Millis(1_155),
+        });
+
+        assert_eq!(
+            persists(&fx)[0].outcome,
+            Outcome::TooShort,
+            "session 2 is disposed of as a fat-finger tap"
+        );
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::Emit(Event::Idle))),
+            "session 1 is still being transcribed; the engine is not idle"
+        );
+
+        // Same check for a silent second session.
+        press(&mut m, 1_200);
+        m.handle(Input::HotkeyReleased { at: Millis(2_200) });
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(3),
+            duration_ms: 1_000,
+            rms: 0.0001, // below silence_rms
+            at: Millis(2_205),
+        });
+        assert_eq!(persists(&fx)[0].outcome, Outcome::Silent);
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::Emit(Event::Idle))),
+            "session 1 is still being transcribed; the engine is not idle"
+        );
+
+        // And for an outright capture failure.
+        press(&mut m, 2_300);
+        m.handle(Input::HotkeyReleased { at: Millis(2_310) });
+        let fx = m.handle(Input::AudioFailed {
+            session: SessionId(4),
+            error: "device disconnected".into(),
+            at: Millis(2_315),
+        });
+        assert_eq!(persists(&fx)[0].outcome.code(), "capture_failed");
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::Emit(Event::Idle))),
+            "session 1 is still being transcribed; the engine is not idle"
+        );
+
+        // Finishing session 1 is what actually settles the engine.
+        m.handle(Input::Transcribed {
+            session: SessionId(1),
+            transcript: transcript("first"),
+            at: Millis(2_400),
+        });
+        m.handle(Input::Formatted {
+            session: SessionId(1),
+            text: "First".into(),
+            at: Millis(2_405),
+        });
+        let fx = m.handle(Input::Injected {
+            session: SessionId(1),
+            at: Millis(2_410),
+        });
+        assert!(
+            fx.iter().any(|e| matches!(e, Effect::Emit(Event::Idle))),
+            "now the pipeline really is empty"
         );
     }
 

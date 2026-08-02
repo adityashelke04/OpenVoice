@@ -84,17 +84,34 @@ impl Doc {
     /// Trailing punctuation is peeled into its own [`Tok::Lit`] so that a rule
     /// matching the word `paren` is not defeated by the model having written
     /// `paren.` — a surprisingly common source of "why didn't my command work".
+    ///
+    /// A literal newline becomes a [`Tok::Break`], not whitespace to discard.
+    /// Raw ASR text is never multi-line, but formatting is required to be
+    /// idempotent on its own *output* (history replay and any "preview this
+    /// phrase" UI depend on re-running already-formatted text through the same
+    /// pipeline) — and formatted output very much can contain newlines, from
+    /// "new line" / "new paragraph". Splitting on all whitespace uniformly
+    /// (`split_whitespace`) silently swallowed those newlines on a second pass,
+    /// collapsing "One\nTwo" back down to "One Two".
     #[must_use]
     pub fn parse(raw: &str) -> Self {
         let mut toks = Vec::new();
-        for chunk in raw.split_whitespace() {
-            let core = chunk.trim_end_matches(|c: char| TIGHT_LEFT.contains(&c));
-            let tail = &chunk[core.len()..];
-            if !core.is_empty() {
-                toks.push(Tok::Word(core.to_string()));
+        for (i, line) in raw.split('\n').enumerate() {
+            if i > 0 {
+                toks.push(Tok::Break);
             }
-            for c in tail.chars() {
-                toks.push(Tok::Lit(c.to_string()));
+            // Tolerate a `\r` left by CRLF line endings; render() never
+            // produces one, but text can arrive from anywhere.
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            for chunk in line.split_whitespace() {
+                let core = chunk.trim_end_matches(|c: char| TIGHT_LEFT.contains(&c));
+                let tail = &chunk[core.len()..];
+                if !core.is_empty() {
+                    toks.push(Tok::Word(core.to_string()));
+                }
+                for c in tail.chars() {
+                    toks.push(Tok::Lit(c.to_string()));
+                }
             }
         }
         Self { toks }
@@ -215,6 +232,22 @@ mod tests {
             toks: vec![Tok::word("one"), Tok::Break, Tok::word("two")],
         };
         assert_eq!(d.render(), "one\ntwo");
+    }
+
+    #[test]
+    fn parse_round_trips_newlines_as_breaks() {
+        // Regression: `parse` used `split_whitespace`, which treats a newline as
+        // just another separator to discard. That silently collapsed a second
+        // pass over already-formatted multi-line text ("One\nTwo" -> "One Two"),
+        // breaking the idempotency the formatter is required to have on its own
+        // output (history replay and any "preview this phrase" UI depend on it).
+        assert_eq!(Doc::parse("one\ntwo").render(), "one\ntwo");
+        assert_eq!(Doc::parse("one\n\ntwo").render(), "one\n\ntwo");
+        // CRLF must not leave a stray `\r` glued to the previous word.
+        assert_eq!(
+            Doc::parse("one\r\ntwo").toks,
+            vec![Tok::word("one"), Tok::Break, Tok::word("two")]
+        );
     }
 
     #[test]

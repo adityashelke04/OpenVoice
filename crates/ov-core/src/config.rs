@@ -147,6 +147,16 @@ pub struct Config {
     pub privacy: PrivacyConfig,
     /// Identifier of the ASR model to load.
     pub model: String,
+    /// Forced transcription language as an ISO 639-1 code (`"en"`, `"es"`, ...), or
+    /// `None` to let the model auto-detect it from the audio.
+    ///
+    /// Defaults to `"en"` rather than auto-detect. Whisper's auto-detection looks
+    /// at only the first ~30 seconds and is measurably less reliable than being
+    /// told the language outright, which matters most for exactly the case this
+    /// app is built around: a short, single push-to-talk utterance with no extra
+    /// audio to spare. Auto-detect is there for anyone who dictates in more than
+    /// one language and wants it, not the default for everyone else.
+    pub language: Option<String>,
     /// Preferred input device name, or `None` for the system default.
     pub input_device: Option<String>,
     /// Above this many characters, injection switches from synthesized keystrokes
@@ -180,6 +190,7 @@ impl Default for Config {
             limits: SessionLimits::default(),
             privacy: PrivacyConfig::default(),
             model: "base.en".into(),
+            language: Some("en".into()),
             input_device: None,
             paste_threshold_chars: 60,
         }
@@ -228,6 +239,18 @@ impl Config {
         if self.model.trim().is_empty() {
             return Err(Error::Config("model must not be empty".into()));
         }
+        // TOML happily parses `nan`/`-nan`/`inf` float literals, and a NaN here is
+        // not merely wrong, it is silent: `rms < silence_rms` is `false` for every
+        // possible `rms` when `silence_rms` is NaN (all comparisons with NaN are
+        // false), and the same holds for any negative threshold since RMS is never
+        // negative. Either one completely and quietly disables the muted-microphone
+        // check with no error anywhere -- exactly the "mysterious dead hotkey" this
+        // function exists to prevent, just for a different symptom.
+        if !self.limits.silence_rms.is_finite() || self.limits.silence_rms < 0.0 {
+            return Err(Error::Config(
+                "limits.silence_rms must be a finite, non-negative number".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -253,11 +276,55 @@ mod tests {
     }
 
     #[test]
+    fn default_language_is_forced_english_not_auto_detect() {
+        // A deliberate choice, not an oversight: auto-detection looks at only the
+        // first ~30s of audio and is measurably less reliable than being told the
+        // language, which matters most for a short single utterance. Pinned so a
+        // future refactor can't silently drift it back to `None`.
+        assert_eq!(Config::default().language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn auto_detect_language_is_a_valid_config() {
+        let c = Config {
+            language: None,
+            ..Config::default()
+        };
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
     fn rejects_inverted_duration_limits() {
         let c = Config {
             limits: SessionLimits {
                 min_duration_ms: 5_000,
                 max_duration_ms: 1_000,
+                ..SessionLimits::default()
+            },
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_nan_silence_threshold() {
+        // A NaN threshold makes `rms < silence_rms` false for every rms, silently
+        // and completely disabling muted-microphone detection with no error.
+        let c = Config {
+            limits: SessionLimits {
+                silence_rms: f32::NAN,
+                ..SessionLimits::default()
+            },
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_negative_silence_threshold() {
+        let c = Config {
+            limits: SessionLimits {
+                silence_rms: -0.01,
                 ..SessionLimits::default()
             },
             ..Config::default()

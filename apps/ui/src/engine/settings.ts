@@ -27,6 +27,8 @@ export interface Config {
     redact_patterns: string[];
   };
   model: string;
+  /** Forced ISO 639-1 code (`"en"`, `"es"`, ...), or `null` to auto-detect. */
+  language: string | null;
   input_device: string | null;
   paste_threshold_chars: number;
 }
