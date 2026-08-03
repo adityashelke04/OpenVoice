@@ -24,14 +24,19 @@ this stalls.
 Adopt ports and adapters. The domain core (`ov-core`, `ov-format`) depends on
 nothing platform-specific. All outside contact happens through six traits:
 
-| Port | Direction | Adapters (v0.1) |
-|---|---|---|
-| `HotkeyListener` | in | `WinLowLevelHook`, `Mock` |
-| `AudioSource` | in | `CpalWasapi`, `WavFile`, `Mock` |
-| `Transcriber` | out | `FasterWhisperSidecar`, `Mock` |
-| `TextSink` | out | `WinInject`, `Clipboard`, `Mock` |
-| `AppContext` | out | `WinForeground`, `Static` |
-| `HistoryStore` | out | `Sqlite`, `Memory` |
+| Port | Direction | Adapter shipped | Crate |
+|---|---|---|---|
+| `HotkeyListener` | in | `WinHotkeyListener` (`WH_KEYBOARD_LL`) | `ov-input` |
+| `AudioSource` | in | `CpalAudioSource` (WASAPI) | `ov-audio` |
+| `Transcriber` | out | `SidecarTranscriber` (faster-whisper) | `ov-asr` |
+| `TextSink` | out | `WinTextSink` (keystrokes or clipboard, chosen by length) | `ov-input` |
+| `AppContext` | out | `WinForeground` | `ov-input` |
+| `HistoryStore` | out | `SqliteStore` | `ov-store` |
+
+One real implementation per port, no mocks. That is deliberate: mocks in the hot
+path let a walking skeleton look finished while nothing is actually wired. The pure
+crates need no mocks because they have no ports to mock, and the adapter crates are
+tested through their own decision functions instead.
 
 Adding a seventh port requires a new ADR. Platform `#[cfg]` blocks are forbidden
 inside `ov-core` and `ov-format`.
@@ -46,9 +51,9 @@ boundary leaked.
 ## Consequences
 
 **Good.** The formatter and state machine test in milliseconds with no hardware.
-`ov-cli transcribe fixture.wav` exercises the entire pipeline headlessly, so CI
-covers the real code path. macOS/Linux later means writing three adapters, not
-rewriting the app. Swapping ASR runtimes is one trait impl.
+`ov transcribe fixture.wav` exercises the entire pipeline headlessly, with no window
+manager involved. macOS/Linux later means writing three adapters, not rewriting the
+app. Swapping ASR runtimes is one trait impl.
 
 **Costs.** More crates and more indirection than a single-binary app would need —
 roughly 300 lines of trait and wiring code that a monolith would not have. Composition

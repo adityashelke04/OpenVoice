@@ -5,8 +5,9 @@
 Please **do not open a public issue.** Use GitHub's private reporting:
 [Report a vulnerability](https://github.com/adityashelke04/OpenVoice/security/advisories/new).
 
-Include what you did, what happened, what you expected, and the OpenVoice version.
-A proof of concept helps enormously.
+Include what you did, what happened, what you expected, and the OpenVoice version —
+or, since no release is published yet, the commit you built from. A proof of
+concept helps enormously.
 
 You'll get an acknowledgement within 72 hours and an assessment within a week. This
 is a small project, not a company with a response team — if it's serious and you
@@ -25,9 +26,9 @@ What the design does about it:
 | Concern | Mitigation |
 |---|---|
 | Hook could log every keystroke | The hook procedure compares a virtual key code against your configured chord and discards the event. It has no storage and no path to one. Source: `crates/ov-input/`. |
-| Audio could be exfiltrated | Every crate that touches audio, transcripts, the keyboard or history — `ov-core`, `ov-format`, `ov-audio`, `ov-input`, `ov-asr`, `ov-cli` — is *sealed*: no HTTP client, TLS stack, or socket library anywhere in its transitive graph, build scripts included. A CI job (`scripts/check-no-network.sh`) fails the build if that changes. **Caveat, stated plainly:** the Tauri shell (`ov-app`) links `reqwest` transitively because Tauri depends on it unconditionally. No OpenVoice code calls it, and the same CI job asserts that `ov-app` takes no network dependency of its own, so telemetry or an update ping cannot be added without failing the build — but an HTTP client is in the shipped binary and it would be dishonest to say otherwise. |
-| Audio could be retained | Held in RAM, dropped after transcription. Writing audio to disk requires explicitly enabling `privacy.retain_audio`. |
-| Transcripts could leak secrets | Configurable regex redaction runs before anything is written to history or logs. Defaults cover common API key and token formats. |
+| Audio could be exfiltrated | Every crate that touches audio, transcripts, the keyboard or history — `ov-core`, `ov-format`, `ov-audio`, `ov-input`, `ov-asr`, `ov-store`, `ov-cli` — is *sealed*: no HTTP client, TLS stack, or socket library anywhere in its transitive graph, build scripts included. A CI job (`scripts/check-no-network.sh`) fails the build if that changes. **Caveat, stated plainly:** the Tauri shell (`ov-app`) links `reqwest` transitively because Tauri depends on it unconditionally. No OpenVoice code calls it, and the same CI job asserts that `ov-app` takes no network dependency of its own, so telemetry or an update ping cannot be added without failing the build — but an HTTP client is in the shipped binary and it would be dishonest to say otherwise. |
+| Audio could be retained | Held in RAM, with one exception worth naming: the speech engine is a separate process, and audio reaches it as a temporary WAV under `%TEMP%\openvoice\`, deleted immediately after the decode returns — success or failure (`crates/ov-asr/src/wav.rs`). Nothing else writes audio to disk. There is a `privacy.retain_audio` field in the config schema and a toggle for it in Settings, but **no code reads it today**: audio is never retained, and the switch does nothing. Treat it as reserved, not as a control. |
+| Transcripts could leak secrets | **Not yet mitigated.** `privacy.redact_patterns` exists in the config schema with sensible defaults for API-key and token shapes, but nothing applies it — history and logs currently record transcripts verbatim. If you dictate a secret, it is in `history.db` and possibly in `openvoice.log`. This is the most significant gap in this table and is tracked for v0.3. |
 | Telemetry | There is none. Not disabled by default — absent from the codebase, and kept absent by the same CI job. |
 | Malicious release binary | Releases are built by public GitHub Actions from a tagged commit, with checksums published alongside. |
 
@@ -45,8 +46,9 @@ What the design does about it:
 
 ## Supported versions
 
-Pre-1.0: only the latest release gets fixes. Once 1.0 ships, the current minor
-version and the one before it will be supported.
+No release exists yet, so in practice the supported version is `main`. Once
+releases start: pre-1.0, only the latest one gets fixes; from 1.0, the current
+minor version and the one before it.
 
 ## Disclosure
 

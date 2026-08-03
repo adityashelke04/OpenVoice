@@ -57,7 +57,10 @@ The cost this ADR deferred has now been paid, and it came in cheaper than feared
 
 PyInstaller freezes the sidecar into a **240 MB** folder with no Python on the
 target machine (`scripts/build-sidecar.ps1`, `sidecar/openvoice-asr.spec`), which
-`tauri build` bundles as a resource. `SidecarConfig::bundled` runs it directly;
+`tauri build` bundles as a resource. (Since reduced to ~173 MB by excluding PyAV,
+whose only purpose was faster-whisper's `decode_audio` — a path this sidecar does
+not use, because `engine.py` reads its own WAV files. The resulting installer is
+68 MB.) `SidecarConfig::bundled` runs it directly;
 `SidecarConfig::dev` still runs the Python package from a checkout, and a debug
 build prefers the checkout so sidecar edits are not shadowed by a stale freeze.
 
@@ -85,7 +88,14 @@ ship CUDA to the people who can use it", and that is the same question either wa
 | `small.en` int8 | ~250 MB | ~0.6 GB | Low-power / battery profile |
 | `large-v3-turbo` int8_float16 | ~1.6 GB | ~1.6 GB | Best accuracy, opt-in upgrade |
 
-All downloads are SHA-256 verified against a manifest committed to the repo.
+> **Correction (2026-08-03).** This section originally ended "all downloads are
+> SHA-256 verified against a manifest committed to the repo." No such manifest was
+> ever written and no independent hash check exists. What actually happens:
+> `huggingface_hub` fetches the weights inside the sidecar, with whatever integrity
+> checking it performs on its own transfers, and the compute type is chosen by
+> preset with a fallback — `float16` first, `int8_float16` only if the larger
+> weights will not fit. The manifest remains worth building; recorded here as a
+> known gap rather than left as a false claim.
 
 ### Outcome (2026-08-02): the default was the wrong model for the installed engine
 

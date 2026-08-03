@@ -58,7 +58,14 @@ you say:   "cube control get pods"          (in a terminal)
 you get:   "kubectl get pods"               (no capital, no period — it runs)
 ```
 
-Both of those are real output from `ov format`, not an illustration.
+Both of those are real output from `ov format`, not an illustration — they are
+asserted as tests in [`crates/ov-format/src/lib.rs`](crates/ov-format/src/lib.rs).
+You can run the formatter yourself without a microphone, a GPU, or the GUI:
+
+```sh
+cargo run -p ov-cli -- format "um so we need to call use effect here comma then return null"
+cargo run -p ov-cli -- format "cube control get pods" --profile terminal --trace
+```
 
 It works the same in an email, a chat box, a document or a terminal. What changes
 is how it formats: OpenVoice knows which app has focus and applies the rules that
@@ -81,8 +88,12 @@ app deserves.
 3. **Invisible when idle.** ~60 MB RAM, ~0% CPU. You should never notice it running.
 4. **Deterministic where it can be.** Formatting is rule-based and unit-tested.
    Probabilistic parts are isolated behind seams.
-5. **Your data is yours.** Plain SQLite, documented schema, one-click export. Audio is
-   never written to disk unless you explicitly turn that on.
+5. **Your data is yours.** History is a plain SQLite file at
+   `%APPDATA%\OpenVoice\history.db` with a [documented
+   schema](crates/ov-store/src/schema.rs) — open it with any SQLite browser, no
+   export feature required. (A built-in export is v0.3 work.) Recorded audio is
+   never kept: the only copy that touches disk is a temporary WAV handed to the
+   speech engine, deleted the moment the decode returns.
 
 ## How it works
 
@@ -106,13 +117,14 @@ The boundary is enforced mechanically: CI compiles the core crates for
 
 | Crate | Role |
 |---|---|
-| `ov-core` | Session state machine, ports, events, config. **Pure.** |
+| `ov-core` | Session state machine, the six ports, events, config. **Pure.** |
 | `ov-format` | Formatting pipeline, dictionary, voice commands. **Pure.** |
-| `ov-audio` | WASAPI capture, resampling, ring buffer, VAD |
-| `ov-asr` | Transcriber implementations, model manager |
+| `ov-audio` | WASAPI capture via cpal; downmix and resample to 16 kHz mono |
+| `ov-asr` | Supervises the speech sidecar and owns its process lifetime |
 | `ov-input` | Keyboard hook, text injection, foreground app detection |
-| `ov-store` | SQLite history |
-| `ov-app` | Tauri shell — the composition root |
+| `ov-store` | SQLite history with FTS5 search |
+| `ov-cli` | `ov` — the same pipeline, headless. The integration harness |
+| `ov-app` | `openvoice` — the Tauri shell, and the composition root |
 | `sidecar/` | faster-whisper, as a supervised child process (frozen for release) |
 
 Full design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Decisions and their
@@ -143,9 +155,15 @@ you hit them elsewhere:
 ## Requirements
 
 - Windows 10/11 (macOS and Linux planned for v0.5)
-- ~2 GB disk for the app, plus the model you choose (75 MB to 1.6 GB)
+- ~250 MB disk for the app — most of it the bundled speech engine — plus the model
+  you choose (75 MB to 1.6 GB)
 - An NVIDIA GPU with ≥2 GB VRAM is optional but makes the large model practical.
   See the note under [Installing](#installing) about what the installer ships.
+
+Building from source needs considerably more: the Rust toolchain, MSVC build
+tools, and a Python environment come to roughly 16 GB. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) if that is a problem — it can all be
+relocated to another drive.
 
 ## Installing
 
@@ -165,20 +183,38 @@ Two things worth knowing before that release exists:
 
 ## Building it yourself
 
-```sh
+```powershell
 # 1. Rust + MSVC build tools (Windows needs the C++ workload, not just VS Code)
 winget install Rustlang.Rustup
-winget install --id Microsoft.VisualStudio.2022.BuildTools \
+winget install --id Microsoft.VisualStudio.2022.BuildTools `
   --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 
-# 2. The ASR sidecar. Drop the two nvidia packages for a CPU-only setup.
-uv venv && uv pip install -e sidecar nvidia-cublas-cu12 nvidia-cudnn-cu12
+# 2. The ASR sidecar, in a virtualenv managed by uv (astral.sh/uv).
+#    Drop the two nvidia packages for a CPU-only setup.
+winget install astral-sh.uv
+uv venv
+uv pip install -e sidecar nvidia-cublas-cu12 nvidia-cudnn-cu12
 
-# 3. Run the tests
+# 3. Frontend dependencies. This also installs the Tauri CLI used in step 5.
+npm --prefix apps/ui ci
+
+# 4. Run the tests
 cargo test --workspace
 
-# 4. Run it, against the Python sidecar in your checkout
-cd crates/ov-app && node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js dev
+# 5. Run it, against the Python sidecar in your checkout
+cd crates/ov-app
+node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js dev
+```
+
+The first run downloads the `base.en` weights (~75 MB) before the window becomes
+usable; the progress is shown in the app.
+
+That sequence builds the full Windows app. You do not need any of it to work on
+the parts that matter most: `ov-core` and `ov-format` are pure Rust and build and
+test on any platform, with no MSVC, no GPU, and no microphone.
+
+```sh
+cargo test -p ov-core -p ov-format
 ```
 
 ### Producing an installer
@@ -188,15 +224,18 @@ no Python. `build-sidecar.ps1` freezes the sidecar into a standalone folder that
 `tauri build` then bundles as a resource:
 
 ```powershell
-pwsh scripts/build-sidecar.ps1 -Clean       # ~240 MB, verifies itself on the protocol
+pwsh scripts/build-sidecar.ps1 -Clean       # ~175 MB, verifies itself on the protocol
 cd crates/ov-app
 node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js build
 ```
 
-The freeze must run first. Without it `tauri build` still succeeds — and produces
-an installer with no speech engine inside, which only shows up when a user runs
-the app. The [release workflow](.github/workflows/release.yml) checks for it
-explicitly for that reason.
+The freeze must run first. Tauri's own resource step does not care whether the
+folder has anything in it, so without the freeze the build would happily produce
+an installer with no speech engine inside — a failure that only surfaces when a
+user runs the app. Two guards exist for that: `crates/ov-app/build.rs` refuses a
+release build when the frozen executable is missing, and the [release
+workflow](.github/workflows/release.yml) asserts it independently before
+bundling.
 
 Details and troubleshooting: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
@@ -210,10 +249,14 @@ What we do about that:
 
 - The hook stores nothing. It compares a virtual key code against your configured
   chord and discards the event. [Read it yourself](crates/ov-input/).
-- Audio lives in RAM and is dropped after transcription unless you enable retention.
+- Audio lives in RAM. The one exception, stated plainly: the speech engine runs as a
+  separate process, and the audio reaches it as a temporary WAV under
+  `%TEMP%\openvoice\`, deleted immediately after the decode — success or failure.
+  Nothing else writes audio to disk, and there is no retention path today.
 - No telemetry, no analytics, no crash uploads — not "off by default", **absent from
   the codebase**, with a CI job that keeps it that way.
-- Releases are built in public CI with published checksums.
+- Releases will be built by public GitHub Actions from a tagged commit, with a
+  SHA-256 published beside the installer so you can verify what you downloaded.
 
 Found something wrong? [`SECURITY.md`](SECURITY.md).
 
@@ -223,12 +266,16 @@ Found something wrong? [`SECURITY.md`](SECURITY.md).
 |---|---|---|
 | **v0.1** | Walking skeleton | hotkey → capture → transcribe → inject → history ✅ |
 | **v0.2** | The differentiator | formatting pipeline, dictionary, app profiles, settings UI ✅ |
-| **v0.3** | Feel | overlay waveform, streaming partials, sub-700 ms p50 |
+| **v0.3** | Feel | overlay waveform ✅, sound feedback ✅, history search ✅ — still to do: streaming partials, history export, sub-700 ms p50 |
 | **v0.4** | Intelligence | optional local LLM polish, prompt mode for AI agents |
 | **v0.5** | Distribution | published release, code signing, optional GPU pack, auto-update, macOS |
 | **v1.0** | Stability | plugin API for formatter rules, frozen API |
 
 Every phase ships something usable. None is a refactor-only phase.
+
+Three things have a config field or a UI toggle but no implementation behind them
+yet — listed here rather than left to be discovered: transcript redaction, audio
+retention, and toggle activation (push-to-talk is the only mode that works).
 
 ## Design
 
@@ -241,17 +288,32 @@ clearest marker of a system nobody thought about.
 <img src="docs/images/design-system.png" width="880" alt="The OpenVoice design system sheet: the surface and text ladders with their contrast ratios, the single accent colour, and the type scale">
 </div>
 
-The whole system is a live page rather than a document — run
-`npm run dev:ui` and open
-[`localhost:5199/?window=sheet`](http://localhost:5199/?window=sheet). Screenshots
-in this README are captured from the running UI by
+The whole system is a live page rather than a document. It needs no Rust and no
+Windows — the frontend runs standalone in any browser:
+
+```sh
+npm --prefix apps/ui ci
+npm run dev:ui          # then open http://localhost:5199/?window=sheet
+```
+
+`?window=hub` is the main window and `?window=overlay` is the Flow Bar on its own.
+Screenshots in this README are captured from that same running UI by
 [`scripts/screenshots.mjs`](scripts/screenshots.mjs), so they cannot drift from
 the interface they claim to show.
 
 ## Contributing
 
-The pure crates are the easiest place to start — they need no hardware and no GPU,
-and a new formatting rule is about 30 lines plus a test. See
+The pure crates are the easiest place to start, and they are also where the
+interesting work is. `ov-core` and `ov-format` need no Windows, no GPU, no
+microphone and no MSVC — `cargo test -p ov-core -p ov-format` is the whole setup. A
+new formatting rule is about thirty lines plus two tests: one that would fail
+without it, and one proving it does not fire when it shouldn't.
+
+Good first things to look at: a missing term in
+[`dictionary.rs`](crates/ov-format/src/dictionary.rs) (Whisper mistranscribes some
+tool name you use — add what it actually hears), a voice command in
+[`rules.rs`](crates/ov-format/src/rules.rs), or an app profile for an editor nobody
+has covered yet. Setup, the boundary rules, and how to write a rule that behaves:
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Prior art

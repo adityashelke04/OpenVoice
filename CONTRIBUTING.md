@@ -33,9 +33,14 @@ winget install Rustlang.Rustup
 winget install --id Microsoft.VisualStudio.2022.BuildTools `
   --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 
-# ASR sidecar
+# ASR sidecar, in a uv-managed virtualenv (https://astral.sh/uv)
+winget install astral-sh.uv
 uv venv
 uv pip install -e sidecar nvidia-cublas-cu12 nvidia-cudnn-cu12
+
+# Frontend. Also installs the Tauri CLI that "Running the app" below invokes --
+# without this step that path does not exist yet.
+npm --prefix apps/ui ci
 
 cargo test --workspace
 ```
@@ -84,6 +89,25 @@ one, so edits to `sidecar/` take effect on the next restart. A release build
 prefers the frozen engine it was packaged with. Setting `OPENVOICE_ROOT` or
 `OPENVOICE_PYTHON` forces the checkout in either case.
 
+The first launch downloads `base.en` (~75 MB) before the window becomes usable.
+
+### When something doesn't work
+
+`ov` is the same engine without the GUI, and each subcommand isolates one link in
+the chain — which is usually faster than reading a log:
+
+```powershell
+cargo run -p ov-cli -- doctor      # is the environment even ready?
+cargo run -p ov-cli -- keytest     # is the hotkey reaching us at all?
+cargo run -p ov-cli -- devices     # what microphones does Windows report?
+cargo run -p ov-cli -- mictest     # record, save, and transcribe: capture only
+cargo run -p ov-cli -- type "hi"   # injection only, no microphone, no model
+cargo run -p ov-cli -- format "..." --trace   # the formatter, rule by rule
+```
+
+The app's own log is at `%APPDATA%\OpenVoice\openvoice.log`. It may contain text
+you dictated, so read it before pasting it anywhere.
+
 ## Packaging
 
 The machine that installs OpenVoice has no Python, so the sidecar is frozen into
@@ -97,23 +121,31 @@ node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js build
 
 Three things about this that are easy to get wrong:
 
-- **The freeze must run first.** Skipping it does not fail the build — it
-  produces an installer with no speech engine, and that only surfaces when
-  someone runs the app. `.github/workflows/release.yml` asserts the frozen
-  binary exists for exactly this reason.
+- **The freeze must run first.** Tauri's resource walker accepts an empty folder,
+  so on its own the build would produce an installer with no speech engine — a
+  failure that only surfaces when someone runs the app. Two independent guards
+  exist: `crates/ov-app/build.rs` panics on a release build when
+  `sidecar/dist/openvoice-asr/openvoice-asr.exe` is missing, and
+  `.github/workflows/release.yml` asserts the same thing before invoking
+  `tauri build`. On a *debug* build the same `build.rs` creates an empty
+  placeholder instead, which is why a fresh checkout can run `cargo test` without
+  standing up Python and PyInstaller first.
 - **`build-sidecar.ps1` is not finished when PyInstaller succeeds.** A frozen
   binary can die on its first import because a hidden import was missed, which
   static analysis cannot see. The script sends a real `probe` request over the
   protocol and fails if it does not get a valid reply.
 - **CUDA is excluded on purpose.** `nvidia-cublas-cu12` and `nvidia-cudnn-cu12`
-  are 1.9 GB against 240 MB for everything else, and do nothing on a machine
-  without an NVIDIA GPU. A packaged build runs on CPU; `engine.py` picks up
-  `OPENVOICE_CUDA_DIR` when the libraries are available separately.
+  are 1.9 GB — 88% of the dependency tree — against roughly 260 MB for everything
+  else combined, and they do nothing on a machine without an NVIDIA GPU. A packaged
+  build runs on CPU; `engine.py` picks up `OPENVOICE_CUDA_DIR` when the libraries
+  are available by another route. The frozen folder comes to ~173 MB and the
+  installer to 68 MB.
 
-Build commands live in the root `package.json` rather than being spelled out as
-relative paths. `npm run` searches upwards for a manifest, so `npm run build:ui`
-resolves the same from any directory in the repo — where `npm --prefix ../../apps/ui`
-silently resolved against the wrong root depending on who invoked it.
+Tauri's own build hooks live in the root `package.json` rather than being spelled
+out as relative paths in `tauri.conf.json`. `npm run` searches upwards for a
+manifest, so `npm run build:ui` resolves identically from any directory in the repo
+— where a `--prefix ../../apps/ui` baked into the config silently resolved against
+the wrong root depending on who invoked the build.
 
 ## Working on the formatter
 
@@ -147,8 +179,18 @@ cargo check -p ov-core -p ov-format --target wasm32-unknown-unknown   # purity
 cd sidecar && uv run --with pytest pytest -q                  # sidecar protocol
 ```
 
-Tests that need model weights are `#[ignore]`d and run nightly. Downloading 1.6 GB on
-every push would make CI slower than the review it supports.
+Every one of those is model-free and runs in seconds. That is deliberate:
+downloading 1.6 GB of weights on each push would make CI slower than the review it
+supports, so nothing in the automated suite loads a model. The cost is that
+accuracy is verified by hand — record a WAV into `fixtures/audio/` (gitignored, so
+nobody's voice ends up in the repository) and run
+`cargo run -p ov-cli -- transcribe your.wav`.
+
+CI runs these on every push and pull request, split across jobs so a failure names
+its own cause: the full workspace on Windows, the platform-independent crates on
+Linux, the `wasm32` purity check, `scripts/check-no-network.sh`, `cargo deny`, the
+sidecar's ruff and pytest, and the frontend's lint, typecheck and build. See
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ### The app-compatibility matrix
 
@@ -161,7 +203,12 @@ partially delivered.
 ## Commits and PRs
 
 [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`,
-`docs:`, `refactor:`, `test:`, `chore:`. The changelog is generated from these.
+`docs:`, `refactor:`, `test:`, `chore:`.
+
+The changelog is **written by hand, in the same PR as the change** — not generated
+from commits at release time. `CHANGELOG.md` explains why, and which prefix maps to
+which section. If your change alters something a user can observe, add an entry
+under `## Unreleased` while you still have the context.
 
 Keep PRs to one concern. A PR that fixes a bug and reorganizes a module is two PRs.
 

@@ -6,12 +6,15 @@ The React frontend for the Tauri shell (`crates/ov-app`). Vite builds it to
 ## Running it
 
 ```sh
-npm install
-npm run dev        # http://localhost:5199, mock data, no Rust needed
+npm ci
+npm run dev        # http://localhost:5199, no Rust needed
 npm run build      # type-check and emit dist/
 npm run lint       # oxlint
-npx tsc --noEmit   # type-check only
+npx tsc --noEmit -p tsconfig.app.json   # type-check only
 ```
+
+Add `?window=hub` (the default), `?window=overlay`, or `?window=sheet` to pick a
+window.
 
 `npm run dev` works standalone. Anything that calls into Rust is guarded by a
 `__TAURI_INTERNALS__` check in `src/engine/settings.ts` and returns `null`
@@ -25,9 +28,9 @@ To see it inside the real window, build the Tauri shell instead — its
 
 | Path | What it is |
 |---|---|
-| `src/windows/` | One file per Tauri window: `Hub` (main), `Overlay` (the Flow Bar), `Sheet` (component gallery, `?window=sheet`) |
-| `src/screens/` | Sections of the hub: Settings, Dictionary, Profiles, Advanced |
-| `src/ui/` | The primitives everything else is built from |
+| `src/windows/` | One file per window, routed by query string: `Hub` (main), `Overlay` (the Flow Bar), `Sheet` (component gallery, `?window=sheet`, not part of the app) |
+| `src/screens/` | Sections of the hub. `Settings.tsx` also exports the Speech model screen; `Profiles.tsx` also exports Advanced. Home lives in `Hub.tsx` itself. |
+| `src/ui/` | The primitives everything else is built from, plus `sound.ts` (tones synthesized with the Web Audio API, so there is no audio asset to license or bundle) |
 | `src/engine/` | The bridge to Rust: event stream, settings, stats |
 | `src/styles/` | Design tokens, then global styles. Tokens first; components never invent a colour |
 

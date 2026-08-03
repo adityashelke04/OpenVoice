@@ -1,12 +1,20 @@
 # OpenVoice — System Design
 
-> Status: **DRAFT / awaiting approval on open decisions (§14)**
-> Owner: @adityashelke04 · Last updated: 2026-07-31
+> Owner: @adityashelke04 · Last reviewed against the code: 2026-08-03
 >
-> This document is the single source of truth for architecture. It is written to be
-> readable by both humans and coding agents: every module has an explicit contract,
-> every decision has a rationale, and every open question is listed in §14 rather
-> than being silently assumed.
+> The single source of truth for architecture: every module has an explicit
+> contract and every decision has a rationale. Where a design has since been
+> reversed by measurement or by contact with reality, the original reasoning is
+> kept and the reversal is noted inline — the wrong turns are frequently the most
+> useful part.
+>
+> **Reading this alongside the code.** Sections marked **planned** describe
+> intent, not shipped behaviour; everything else has been checked against the
+> current tree. Start with §2 (the shape), then §6 if you want to work on the
+> formatter — which is where most of the interesting work is.
+>
+> The four architectural decisions that shaped all of this are recorded
+> separately, with their rejected alternatives, in [`adr/`](adr/).
 
 ---
 
@@ -53,8 +61,9 @@ effort on the model, and it is the central architectural bet of this project.
 4. **Deterministic where it can be.** Formatting is rule-based and unit-testable.
    Probabilistic components (ASR, optional LLM) are isolated behind seams so their
    output can be golden-tested and their failures contained.
-5. **The user owns their data.** Plain SQLite, documented schema, one-click export,
-   audio never persisted unless explicitly enabled.
+5. **The user owns their data.** Plain SQLite in a folder they can open, copy or
+   delete; a documented schema (§9.1); audio never persisted. A one-click export is
+   v0.3 work — until then the file itself is the export.
 
 ---
 
@@ -94,45 +103,57 @@ This is not architecture astronautics. It buys three concrete things:
 ```rust
 // crates/ov-core/src/ports.rs  — the ONLY way core talks to the world.
 
-/// Emits Press/Release for the configured chord, globally, without stealing focus.
+/// Observes the dictation chord globally, without stealing focus.
 pub trait HotkeyListener: Send + Sync {
-    fn subscribe(&self) -> Receiver<HotkeyEvent>;
+    fn start(&self, sink: HotkeySink) -> Result<()>;   // Arc<dyn Fn(HotkeyEvent)>
     fn rebind(&self, chord: &Chord) -> Result<()>;
-}
-
-/// Streams mono f32 PCM at 16 kHz. Adapter owns resampling and device changes.
-pub trait AudioSource: Send + Sync {
-    fn start(&self) -> Result<Receiver<AudioFrame>>;   // 20 ms frames
     fn stop(&self) -> Result<()>;
-    fn devices(&self) -> Result<Vec<DeviceInfo>>;
 }
 
-/// Speech -> text. Implementations: WhisperCpp, FasterWhisperSidecar, Mock.
-#[async_trait]
+/// Captures the microphone and normalizes to 16 kHz mono. The adapter owns
+/// downmixing, resampling and device selection.
+pub trait AudioSource: Send + Sync {
+    fn start(&self, levels: Arc<dyn Fn(LevelFrame) + Send + Sync>) -> Result<()>;
+    fn stop(&self) -> Result<Pcm16k>;                  // everything since start
+    fn abort(&self) -> Result<()>;
+    fn devices(&self) -> Result<Vec<String>>;
+}
+
+/// Speech -> text. Impls: FasterWhisperSidecar (v0.1), WhisperCpp (planned), Mock.
 pub trait Transcriber: Send + Sync {
-    fn capabilities(&self) -> TranscriberCaps;         // streaming? langs? gpu?
-    async fn transcribe(&self, audio: &Pcm16k, hint: &DecodeHint) -> Result<Transcript>;
-    async fn warm(&self) -> Result<()>;                // preload weights
+    fn warm(&self) -> Result<()>;                      // preload weights
+    fn transcribe(&self, audio: &Pcm16k, hint: &DecodeHint) -> Result<Transcript>;
+    fn model_id(&self) -> String;                      // recorded in history
 }
 
-/// Puts text where the caret is. Impls: SendInputUnicode, ClipboardPaste, Mock.
+/// Puts text where the caret is. Impl: WinTextSink (picks keystrokes or paste).
 pub trait TextSink: Send + Sync {
     fn inject(&self, text: &str, mode: InjectMode) -> Result<InjectReceipt>;
 }
 
 /// Identifies the foreground app so a profile can be selected.
 pub trait AppContext: Send + Sync {
-    fn foreground(&self) -> Result<ForegroundApp>;     // exe, title, class
+    fn foreground(&self) -> Result<ForegroundApp>;     // exe, title
 }
 
-/// Durable local storage. Impl: Sqlite, Memory (tests).
-#[async_trait]
+/// Durable local storage. Impl: SqliteStore.
 pub trait HistoryStore: Send + Sync {
-    async fn append(&self, entry: &Utterance) -> Result<UtteranceId>;
-    async fn search(&self, q: &Query) -> Result<Vec<Utterance>>;
-    async fn purge(&self, older_than: Duration) -> Result<u64>;
+    fn append(&self, entry: &Utterance) -> Result<i64>;
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<Utterance>>;
+    fn purge_older_than(&self, days: u32) -> Result<u64>;
 }
 ```
+
+Two things about these signatures are deliberate and worth not undoing:
+
+- **No channel types, and no `async`.** Inbound ports push through callbacks
+  instead of returning a `Receiver`, and nothing here is a future. Either would
+  drag a specific async runtime into `ov-core`, and a runtime cannot link on
+  `wasm32` — so the purity check in CI would fail, which is exactly what it is for.
+  Adapters use whatever channels and threads they like internally.
+- **Everything is blocking.** `transcribe` takes several hundred milliseconds and
+  runs on the engine's own thread, not the UI's. Making it `async` would buy
+  nothing and cost the property above.
 
 **Rule:** if a new feature wants to reach the OS, it either uses one of these six or
 adds a seventh port with an ADR. No ad-hoc `#[cfg(windows)]` inside core. Ever.
@@ -144,16 +165,20 @@ openvoice/
 ├── crates/
 │   ├── ov-core/        # domain: FSM, events, config types, ports. NO os/io deps.
 │   ├── ov-format/      # formatting pipeline + dictionary + voice commands (pure)
-│   ├── ov-audio/       # cpal/WASAPI capture, resample, ring buffer, VAD
-│   ├── ov-asr/         # Transcriber impls + model manager (download/verify/cache)
+│   ├── ov-audio/       # cpal/WASAPI capture, downmix, resample to 16 kHz mono
+│   ├── ov-asr/         # supervises the speech sidecar; owns its process lifetime
 │   ├── ov-input/       # low-level keyboard hook + text injection + foreground app
-│   ├── ov-store/       # SQLite (sqlx) history, settings persistence, migrations
-│   └── ov-app/         # Tauri binary: composition root, wires adapters, IPC
-├── apps/ui/            # React + TS + Vite: settings window + overlay window
+│   ├── ov-store/       # SQLite (rusqlite, bundled) history + FTS5 + migrations
+│   ├── ov-cli/         # `ov`: the same pipeline, headless. Integration harness.
+│   └── ov-app/         # `openvoice`: Tauri binary, composition root, IPC
+├── apps/ui/            # React + TS + Vite: the hub window and the Flow Bar overlay
+├── sidecar/            # the Python speech engine (faster-whisper) and its protocol
+├── scripts/            # freeze the sidecar, the no-network check, screenshots
 ├── docs/
-│   ├── DESIGN.md       # this file
+│   ├── ARCHITECTURE.md # this file
 │   └── adr/            # 0001-...md  immutable decision records
-├── fixtures/           # wav + expected-transcript pairs for regression tests
+├── fixtures/audio/     # working WAVs for manual ASR checks. Gitignored: they are
+│                       # real recorded speech and do not belong in a public repo.
 ├── .github/workflows/  # ci.yml, release.yml
 └── Cargo.toml          # workspace
 ```
@@ -168,75 +193,98 @@ That is a mechanically-checked proof (in CI) that the purity boundary hasn't lea
 The single most important piece of correctness in the app. Modeled explicitly as a
 typestate-ish enum, not as a pile of booleans.
 
+A session moves through four phases (`session::Phase`); "idle" is the absence of
+any session rather than a fifth variant.
+
 ```
-        ┌──────────────────────────────── Cancel (Esc) ─────────────────────────┐
+        ┌──────────────────────── Cancel (Esc), from any phase ─────────────────┐
         │                                                                       │
         ▼                                                                       │
-    ┌────────┐  hotkey down   ┌───────────┐  hotkey up   ┌────────────┐        │
-    │  Idle  │───────────────►│ Capturing │─────────────►│ Finalizing │        │
-    └────────┘                └───────────┘              └────────────┘        │
-        ▲                          │  │                         │              │
-        │                          │  └── > max_duration ───────┤              │
-        │                          │                            ▼              │
-        │                          │                     ┌─────────────┐       │
-        │                          │                     │Transcribing │───────┤
-        │                     (VAD silence,              └─────────────┘       │
-        │                      hands-free mode)                 │              │
+    ┌────────┐  hotkey down   ┌───────────┐  hotkey up   ┌─────────────┐       │
+    │ (idle) │───────────────►│ Capturing │─────────────►│ Transcribing│       │
+    └────────┘                └───────────┘              └─────────────┘       │
+        ▲                          │                            │              │
+        │                          └── > max_duration ──────────┤              │
         │                                                       ▼              │
         │                                                ┌────────────┐        │
         │                                                │ Formatting │────────┤
         │                                                └────────────┘        │
         │                                                       │              │
-        │        ┌──────────┐         ┌──────────┐              ▼              │
-        └────────│ Recover  │◄────────│ Injecting│◄─────────────┘              │
-                 └──────────┘  fail   └──────────┘                             │
-                   (clipboard +                                                 │
-                    toast + history)                                            │
+        │                                   ┌──────────┐        ▼              │
+        └───────────────────────────────────│ Injecting│◄───────┘              │
+                                            └──────────┘                       │
+                                          on failure: clipboard                │
+                                          + notice + history ──────────────────┘
 ```
 
-**Invariants (enforced by tests):**
+**Concurrency.** Capture is concurrent; everything after it is serialized. The
+machine holds at most one live capture plus an *ordered queue* of post-capture
+sessions, so holding the hotkey again while the previous utterance is still
+decoding queues the new one rather than dropping, interleaving, or reordering it.
 
-- `Idle` is the only state with no allocated audio buffer and no GPU residency.
-- Every terminal path — success, cancel, or failure — writes exactly one `Utterance`
-  row (with a status field). No state can exit without accounting for the audio.
-- A second hotkey press during `Transcribing` **queues** a new session rather than
-  dropping it or interleaving. Transcription is serialized; capture is not.
-- `Cancel` is reachable from every non-`Idle` state and always completes in < 50 ms.
-- Recordings shorter than `min_duration` (default 300 ms) are discarded as fat-finger
-  presses, without a toast.
+**Invariants (each enforced by a test at the bottom of `session.rs`):**
+
+1. Every session that starts produces **exactly one** `Effect::Persist`. No path —
+   success, cancel, silence, or failure — can exit without accounting for the audio.
+2. `Input::Cancelled` from any phase drains the machine back to idle.
+3. A session never reaches injection without having been formatted first.
+4. Key auto-repeat cannot start a second capture.
+5. A stuck key cannot record past `max_duration_ms` (default 120 s).
+
+Recordings shorter than `min_duration_ms` (default 300 ms) are discarded as
+fat-finger presses, silently — a toast for something the user did not mean to do is
+noise.
 
 ### 3.1 Latency budget (target, 10 s utterance, RTX 3050)
+
+These are the per-stage budgets encoded in `event::Stage::budget_ms`, not measured
+averages. The sub-700 ms p50 they add up to is a v0.3 goal.
 
 | Stage | Budget | Notes |
 |---|---:|---|
 | Hotkey release → capture stop | 10 ms | hook thread does nothing but post a message |
-| Finalize + VAD trim + resample | 25 ms | already 16 kHz mono; trim leading/trailing silence |
-| ASR decode (`large-v3-turbo` q5, CUDA) | 400–600 ms | ~15–25× realtime on this GPU |
-| Format pipeline | < 5 ms | pure string work, no allocation storms |
-| Injection (clipboard path) | 60–120 ms | dominated by target app's paste handler |
+| Finalize + VAD trim | 25 ms | already 16 kHz mono; trim leading/trailing silence |
+| ASR decode (`large-v3-turbo`, CUDA) | 600 ms | ~15–25× realtime on this GPU |
+| Format pipeline | 5 ms | pure string work, no allocation storms |
+| Injection (clipboard path) | 120 ms | dominated by target app's paste handler |
 | **Total (p50)** | **~700 ms** | perceived as "instant enough" |
 
-Every stage emits a `tracing` span; the debug panel renders the last 50 sessions as a
-stacked bar so regressions are visible without profiling tooling. **Measure from day
-one** — retrofitting latency instrumentation into a shipped app never happens.
+Every stage already emits an `Event::Timing` carrying its measured duration, so the
+data is on the wire today. **Planned:** the debug panel that renders the last 50
+sessions as a stacked bar. Currently the UI keeps only the end-to-end figure. The
+instrumentation went in from day one on purpose — retrofitting latency measurement
+into a shipped app never happens.
 
 ---
 
 ## 4. Audio pipeline
 
 - **Capture:** `cpal` → WASAPI shared mode, native device rate, mono downmix.
+  `cpal::Stream` is `!Send` on Windows, so a dedicated thread owns the stream for
+  its whole life and is driven by commands over a channel.
 - **Resample:** `rubato` (sinc) to exactly 16 kHz f32. Whisper's contract.
-- **Buffering:** lock-free SPSC ring (`rtrb`) sized for `max_duration` (default 120 s).
-  The audio callback never allocates, never locks, never logs — classic realtime
-  discipline. Overrun drops the *oldest* frames and flags the session.
-- **Pre-roll:** the ring is *always* running once armed, so the ~200 ms before the
-  hotkey registers is retained. This fixes the single most common dictation
-  complaint: clipped first syllables.
-- **VAD:** Silero VAD (ONNX, ~2 MB, CPU) for (a) trimming silence before decode —
-  a real latency win, and (b) hands-free auto-stop mode.
-- **Level meter:** RMS + peak per 20 ms frame, sent to the overlay at 30 Hz for the
-  waveform. Also drives a "your mic is muted / nothing was heard" warning, which is
-  otherwise a baffling failure mode.
+- **Buffering:** the capture callback appends into a `Vec` behind a mutex, which
+  `stop()` takes whole. A lock-free SPSC ring was the original plan and remains the
+  right answer if the callback ever shows up in a profile; it does not today, at
+  16 kHz mono with a 20 ms callback.
+- **The stream is open only while the key is held.** The original design kept the
+  device recording continuously so the ~200 ms before the hotkey registered could
+  be retained, defeating the clipped-first-syllable problem. **That was dropped**,
+  and the reason is worth keeping: continuous recording contradicts the central
+  privacy property of push-to-talk, and would leave Windows' own microphone
+  indicator lit whenever OpenVoice was running. Opening on press costs 10–30 ms of
+  WASAPI startup, against which human reaction time is generous — and in exchange
+  the operating system's indicator becomes an *independent* confirmation of the
+  guarantee. `SessionLimits::preroll_ms` is a leftover of that design and is
+  currently unread.
+- **VAD:** performed inside the speech engine, not here. faster-whisper's built-in
+  Silero VAD filter (`vad_filter=True`) trims silence before decode and reports
+  `duration_after_vad`, which the sidecar uses to reject an utterance that turned
+  out to be nothing but room tone. There is no VAD in `ov-audio`, and hands-free
+  auto-stop (which would need one) is not implemented.
+- **Level meter:** RMS + peak per callback, sent to the overlay at roughly 30 Hz for
+  the waveform. The overall RMS of a finished capture also drives the "your mic is
+  muted / nothing was heard" warning, which is otherwise a baffling failure mode.
 
 ---
 
@@ -244,21 +292,31 @@ one** — retrofitting latency instrumentation into a shipped app never happens.
 
 ### 5.1 Model selection for 4 GB VRAM
 
-| Model | Size on disk | VRAM | Quality | Verdict |
-|---|---:|---:|---|---|
-| `large-v3-turbo` q5_0 | ~574 MB | ~1.6 GB | Excellent | Best accuracy, opt-in upgrade |
-| `distil-large-v3` | ~750 MB | ~1.9 GB | Very good, EN-only | Alternate |
-| `small.en` q5_1 | ~190 MB | ~0.6 GB | Good | Low-VRAM / battery profile |
-| `base.en` q5_1 | ~60 MB | CPU-ok | Mediocre | **Installed default.** First-run smoke test. |
+Three presets ship, defined in `sidecar/openvoice_asr/engine.py::MODEL_PRESETS`.
+Adding a fourth is a dict entry, not a code change.
+
+| Preset | Compute type | Size on disk | VRAM | Role |
+|---|---|---:|---:|---|
+| `base.en` | `int8` | ~75 MB | CPU-ok | **Installed default.** Mediocre accuracy, but instant on any machine. |
+| `small.en` | `float16` → `int8_float16` | ~250 MB | ~0.6 GB | Low-VRAM / battery profile |
+| `large-v3-turbo` | `float16` → `int8_float16` | ~1.6 GB | ~1.6 GB | Best accuracy, opt-in upgrade |
+
+The arrow is a fallback: `float16` is tried first and `int8_float16` is used only
+if the larger weights will not fit, because a 4 GB laptop GPU also has a desktop
+compositor and a browser on it. `float16` is preferred despite being bigger
+because it measured *faster* here — a median 623 ms decode against
+`int8_float16`'s 661 ms, and half the load time (3.7 s vs 7.2 s), with
+byte-identical transcripts. Int8 weights have to be dequantized on every forward
+pass, and on a GPU that costs more than the memory bandwidth it saves.
 
 > **Corrected on 2026-08-02.** This originally shipped `large-v3-turbo` as the
 > default with a plan to prompt an upgrade *from* `base.en` in the background —
 > that upgrade prompt was never built, and the plain default landed as
-> `large-v3-turbo` instead. Distribution turned out CPU-only (§14, ADR 0003
-> outcome), which makes `large-v3-turbo` the heaviest model on the slowest path:
-> a 1.6 GB download for worse-than-necessary latency. `base.en` is now the actual
-> default in `crates/ov-app/src/settings.rs`; upgrading is a Models-screen action,
-> not a background surprise.
+> `large-v3-turbo` instead. Distribution turned out CPU-only (see ADR 0003's
+> outcome note), which makes `large-v3-turbo` the heaviest model on the slowest
+> path: a 1.6 GB download for worse-than-necessary latency. `base.en` is now the
+> actual default in `crates/ov-app/src/settings.rs`; upgrading is a Models-screen
+> action, not a background surprise.
 
 ### 5.2 Decode hints — tried, measured, and turned off
 
@@ -294,66 +352,129 @@ A/B test to overturn. Prefer the experiment to the argument.
 
 ### 5.3 Model manager
 
-Downloads from Hugging Face over HTTPS with **SHA-256 verification against a manifest
-committed to the repo**. Resumable, cancellable, stored in `%LOCALAPPDATA%\OpenVoice\models`.
-A model is never loaded unless its hash matches — this is the app's one network
-surface, so it gets the strictest handling.
+This is the app's one network surface, so it is worth describing exactly rather
+than approximately.
+
+Weights are fetched from Hugging Face by `huggingface_hub`, inside the sidecar —
+the Rust side never opens a socket, which is what lets every Rust crate stay
+*sealed* under `scripts/check-no-network.sh` (§9.2). The host asks over the
+protocol (`ensure_model`), the sidecar reports byte progress as interim messages,
+and the download resumes from where it stopped if the connection drops. Integrity
+is whatever `huggingface_hub` enforces on its own transfers; **there is no
+SHA-256 manifest committed to this repository, and no independent hash check
+before load.** An earlier draft of this document promised one. Adding it is worth
+doing and is not done.
+
+Only the files a CTranslate2 Whisper repository actually needs are fetched
+(`config.json`, `preprocessor_config.json`, `model.bin`, `tokenizer.json`,
+`vocabulary.*`). Downloading the whole repository would also pull PyTorch weights
+this engine never reads, roughly doubling the transfer.
+
+An installed copy stores weights under `%APPDATA%\OpenVoice\models`, so
+uninstalling reclaims the space. A development checkout leaves the shared Hugging
+Face cache alone.
+
+**Offline is the default, and this matters more than it sounds.**
+`huggingface_hub` revalidates a cached model over the network on every load,
+which measured at **171 seconds** per load before falling back to the cache it
+already had. `enforce_offline_by_default()` sets `HF_HUB_OFFLINE` at import time,
+and the `online()` context manager lifts it only for the duration of a download
+the user asked for.
 
 ---
 
 ## 6. The formatting pipeline (the differentiator)
 
-An ordered list of composable, individually-testable stages. Each is
-`fn apply(&self, doc: &mut Doc, ctx: &FormatCtx)` where `Doc` carries the token
-stream plus spans, so later stages know what earlier ones touched.
+An ordered list of composable, individually-testable stages. Each implements
+`fn apply(&self, doc: Doc, ctx: &Ctx) -> Doc`, where `Doc` is a token stream rather
+than a string — so a later stage can see that an earlier one produced a literal
+identifier and must leave it alone.
 
 | # | Stage | Example |
 |---|---|---|
-| 1 | `NormalizeWhitespace` | collapse ASR artifacts |
-| 2 | `StripFillers` | "um, so like, the thing" → "the thing" (3 aggressiveness levels) |
-| 3 | `VoiceCommands` | "new line", "new paragraph", "open paren", "semicolon", "tab", **"scratch that"** |
-| 4 | `Dictionary` | "use effect" → `useEffect`; "cube cuttle" → `kubectl` |
-| 5 | `CaseTransforms` | "camel case user name" → `userName`; "snake case" / "kebab case" / "screaming" |
-| 6 | `Punctuation` | fix sentence-initial caps; strip trailing period in terminal profile |
-| 7 | `ProfilePolicy` | per-app trailing newline, lowercase-first, wrap width |
-| 8 | `LlmPolish` *(opt-in, off)* | local Qwen3-1.7B via llama.cpp for prose cleanup |
+| 0 | `Doc::parse` | tokenize; not a rule, but shown in the trace |
+| 1 | `CollapseRepeats` | `kkkkkkkkkkkk` → `kkk`; a decoding artefact nothing downstream should have to cope with |
+| 2 | `StripFillers` | "um, so like, the thing" → "the thing" (off / light / aggressive) |
+| 3 | `VoiceCommands` | "new line", "new paragraph", "open paren", "semicolon", "tab" |
+| 4 | `ApplyDictionary` | "use effect" → `useEffect`; "cube control" → `kubectl` |
+| 5 | `CaseTransforms` | "camel case user name" → `userName`; "snake case" / "kebab case" / "screaming snake case" |
+| 6 | `Capitalize` | sentence-initial caps, or force-lowercase for a shell |
+| 7 | `ProfilePolicy` | trailing period, and other per-app policy |
+
+**Planned:** an `LlmPolish` stage (local model, opt-in, off by default) for prose
+cleanup. Nothing of it exists yet.
+
+**The order is load-bearing.** Fillers go first so a stray "um" cannot break a
+multi-word command match. Commands run before the dictionary so spoken punctuation
+becomes literal tokens the dictionary will not try to interpret. Capitalization runs
+late, after identifiers have been resolved into `Tok::Lit` tokens it is *forbidden*
+to touch — capitalizing `useEffect` into `UseEffect` turns working code into a
+compile error.
 
 **Design decisions inside the pipeline:**
 
 - **Escape hatch is mandatory.** "literally new line" emits the words. Without this,
   voice commands make certain sentences untypeable, which is infuriating.
-- **Dictionary matching is phonetic, not literal.** Double Metaphone + edit distance
-  over the ASR output, because Whisper's errors are phonetic errors. A literal
-  `HashMap<String,String>` catches maybe 40% of what a phonetic index catches.
-- **Every stage is reversible for debugging.** The debug panel shows the text after
-  each stage, so when the output is wrong you know exactly which rule did it. This
-  turns "the formatter is weird" into a 10-second diagnosis.
-- **Golden-file tests.** `fixtures/format/*.txt` — input, profile, expected output.
-  Adding a rule that breaks a past case fails CI. This is what makes the pipeline
-  safe to extend for years.
+- **Dictionary matching is exact-phrase over enumerated mistranscriptions**, with a
+  longest-match window bounded by the longest entry. Whisper's errors are *phonetic*
+  errors, so the entries list what the model actually produces — "cube control",
+  "cube c t l", "coup control", "cube cuddle" all map to `kubectl` — rather than the
+  correct pronunciation. Each spoken form is also indexed space-free, because
+  Whisper often returns an identifier already welded together but miscased.
+  **Considered and not built:** a phonetic index (Double Metaphone plus edit
+  distance) generalizing to mistranscriptions nobody enumerated. It is the obvious
+  next step if the enumerated list starts feeling like whack-a-mole.
+- **Formatting must be idempotent on its own output.** History replay and any
+  "preview this phrase" UI depend on it, and four real bugs were found by fuzzing
+  realistic phrases through every profile twice. Any new rule inherits this
+  obligation.
+- **Every stage is recorded.** `format_traced` returns the text after each rule, and
+  the Writing style screen renders it. "The formatter did something weird" is
+  otherwise an unfalsifiable bug report; with the trace, the offending rule is
+  obvious in about ten seconds.
+- **Tests live beside the rules**, as ordinary `#[test]` functions in
+  `rules.rs` and `lib.rs`, and run in milliseconds. (An earlier draft specified
+  golden files under `fixtures/format/`; that directory was never created, and
+  inline tests have turned out to be the lower-friction form for rules this small.)
 
 ### 6.1 App profiles
 
-Keyed by executable name, matched most-specific-first, with a fallback default:
+Keyed by executable name, matched case-insensitively, with a fallback default.
+Three ship as builtins (`ov_format::profile::Profile`), seeded into the user's
+settings on first run so they are edited rather than invented:
 
 ```toml
-[profile.terminal]
-match      = ["WindowsTerminal.exe", "powershell.exe", "wt.exe"]
-capitalize = false          # `git status`, not `Git status`
-end_period = false
-dictionary = ["shell", "git"]
+[[profiles]]
+name          = "terminal"
+matches       = ["WindowsTerminal.exe", "powershell.exe", "pwsh.exe",
+                 "cmd.exe", "wt.exe", "alacritty.exe"]
+capitalize    = "force_lower"   # `git status`, not `Git status`
+end_period    = false           # a trailing period breaks a command
+dictionaries  = ["shell", "code"]
 
-[profile.editor]
-match      = ["Code.exe", "Cursor.exe", "idea64.exe"]
-capitalize = "sentence"
-dictionary = ["code", "user"]
-llm_polish = false          # never rewrite code identifiers
+[[profiles]]
+name          = "editor"
+matches       = ["Code.exe", "Cursor.exe", "idea64.exe", "devenv.exe",
+                 "zed.exe", "sublime_text.exe"]
+capitalize    = "sentence"
+end_period    = false           # code comments rarely want one
+dictionaries  = ["code"]
 
-[profile.prose]
-match      = ["slack.exe", "chrome.exe", "Notion.exe"]
-capitalize = "sentence"
-llm_polish = true           # opt-in, if the model is loaded
+[[profiles]]
+name            = "prose"
+matches         = ["slack.exe", "Discord.exe", "Notion.exe", "chrome.exe",
+                   "msedge.exe", "firefox.exe", "olk.exe"]
+capitalize      = "sentence"
+end_period      = true
+fillers         = "aggressive"  # chat tolerates rewriting; code does not
+case_transforms = false         # "camel case" is a phrase here, not a command
 ```
+
+Every profile carries the same fields: `fillers` (`off`/`light`/`aggressive`,
+default `light`), plus `voice_commands` and `case_transforms` booleans — so a
+profile can turn an entire class of rewriting off without a code change. `prose` is
+the one that differs most, and deliberately: it is the only surface where
+"camel case" is far more likely to be two ordinary words than an instruction.
 
 ### 6.2 "Prompt mode" — a deliberate bet
 
@@ -373,18 +494,46 @@ Genuinely the hardest thing to get right; it fails in different ways per target 
 |---|---|---|---|
 | **A. `SendInput` + `KEYEVENTF_UNICODE`** | synthesize per-codepoint key events | short text, terminals, games, anything | slow above ~200 chars; some apps drop fast input |
 | **B. Clipboard + `Ctrl+V`** | set clipboard, synthesize paste, restore | long text, instant regardless of length | clobbers clipboard; blocked in some secure fields; app may not honor Ctrl+V |
-| **C. UI Automation `TextPattern`** | insert via accessibility API | cleanest where supported | inconsistent support; heavier |
+| **C. UI Automation `TextPattern`** *(not implemented)* | insert via accessibility API | cleanest where supported | inconsistent support; heavier |
 
-**Chosen policy:** length-based with restore and verification.
-- `len <= 120` → **A** (no clipboard side effects, the common case).
-- `len > 120` → **B**, saving *all* clipboard formats and restoring them after a
-  120 ms delay. Restoring only `CF_TEXT` — which most tools do — silently destroys
-  copied images and rich text. We restore the full format set.
-- Injection returns an `InjectReceipt`. On any failure the text is left on the
-  clipboard and a toast says "copied — press Ctrl+V", never a silent loss.
-- Modifier hygiene: if the push-to-talk key is a modifier (e.g. Right Ctrl), it must
-  be released in the synthetic input stream before pasting, or `Ctrl+V` becomes
-  `Ctrl+Ctrl+V` and nothing happens. This bug eats an afternoon if unplanned.
+**Chosen policy:** length-based, with restore and verification.
+
+- `len <= paste_threshold_chars` (default **60**) → **A**, sent in small paced
+  chunks. No clipboard side effects, and it works in terminals that do not accept
+  `Ctrl+V` at all.
+- Longer → **B**, saving *all* clipboard formats and restoring them afterwards.
+  Restoring only `CF_UNICODETEXT` — which most tools do — silently destroys a
+  copied image or rich text. The full format set goes back.
+
+The threshold sits where it does because both directions fail. Too high, and
+synthesized keystrokes corrupt: Windows coalesces adjacent `VK_PACKET` events when
+the target cannot drain its input queue, turning `Are you the best?` into
+`Are ?????????????`. Too low, and everything routes through the clipboard, which is
+atomic but depends on the target honouring `Ctrl+V` and reading the clipboard
+promptly — an Electron editor did neither, and text vanished while the engine
+recorded "delivered".
+
+- **The clipboard hold is 15 seconds, and the restore is conditional.** It was
+  originally 1 second, chosen to give the target app time to read the clipboard.
+  That is nowhere near long enough for a *person* to notice a failed paste and
+  press `Ctrl+V` themselves — and worse, the restore fired even down the
+  known-failure path, undoing the exact fallback the error branch had just set up.
+  `should_restore` now also asks whether the paste chord actually sent, because
+  "succeeded" and "failed, and the caller is using the clipboard as a safety net"
+  otherwise look identical: the text is sitting on the clipboard either way.
+- **Injection returns an `InjectReceipt`.** On failure — on *both* paths, short and
+  long; the short one had no fallback at all until it was fixed — the text is left
+  on the clipboard and a notice tells the user to press `Ctrl+V`. Never a silent
+  loss.
+- **Modifier hygiene:** the push-to-talk key is itself a modifier (Right Ctrl), so
+  it must be released in the synthetic input stream before pasting, or `Ctrl+V`
+  becomes `Ctrl+Ctrl+V` and nothing happens. This bug eats an afternoon if
+  unplanned.
+- **The foreground window can change mid-flight.** Transcription and formatting take
+  seconds, so the window that had focus when the user started speaking is not
+  guaranteed to still have it at injection time. The injector logs a warning naming
+  both windows when they differ, which turns "it sometimes doesn't paste into app X"
+  into one greppable log line.
 
 ---
 
@@ -397,14 +546,21 @@ down/up, so push-to-talk is impossible. We install a **low-level keyboard hook**
 Non-negotiable constraints for that thread:
 - The hook callback must return in **well under 10 ms** or Windows silently evicts
   the hook and all hotkeys stop working. It therefore does *nothing* but compare a
-  key code and post to a channel. No logging, no locks, no allocation.
-- Never swallow the key unless it's a dedicated dictation key, so normal typing is
-  untouched.
-- Self-heal: watchdog re-installs the hook if Windows drops it (happens after UAC
-  prompts and some full-screen transitions).
+  key code and hand the event off. No logging, no locks, no allocation.
+- Never swallow the key unless the user has explicitly bound a dedicated dictation
+  key and set `exclusive`. The default is `false`, so binding to Right Ctrl cannot
+  break anyone's normal shortcuts.
+- **Planned:** a watchdog that re-installs the hook if Windows drops it, which
+  happens after UAC prompts and some full-screen transitions. Not built; today the
+  recovery is restarting the app, and `ov keytest` is the tool for telling "the
+  hotkey is not reaching us" apart from every other cause.
 
 **Default binding:** `Right Ctrl` held (push-to-talk) — rarely used, easy to reach,
-not a chord. Alternates: `Ctrl+Space` toggle, `F13`+ for those with a macro key.
+not a chord. The bindable set is a closed enum (`config::Key`): Right Ctrl, Right
+Alt, Right Shift, Caps Lock, F13, F14, Scroll Lock. Deliberately closed rather than
+a raw virtual-key code, so the config file stays readable and nobody binds dictation
+to `A`. `ActivationMode::Toggle` exists in the config schema but **no code reads it
+yet**; activation is push-to-talk only.
 
 ---
 
@@ -412,41 +568,84 @@ not a chord. Alternates: `Ctrl+Space` toggle, `F13`+ for those with a macro key.
 
 ### 9.1 Storage
 
-`%APPDATA%\OpenVoice\` — `config.toml` (versioned, migrated on load),
-`history.db` (SQLite via `sqlx`, migrations in-tree), `logs/` (rotating, 7 days).
+Everything lives under `%APPDATA%\OpenVoice\`:
+
+| File | What it is |
+|---|---|
+| `settings.toml` | Config, dictionary and profiles in one document. Versioned; migrated and validated on load. Written atomically (temp file, then rename) because the dictionary represents real accumulated effort. |
+| `history.db` | SQLite via `rusqlite` with `bundled` SQLite compiled in, FTS5 for search, migrations in-tree keyed off `PRAGMA user_version`. |
+| `models/` | Weights, for an installed copy. A development checkout uses the shared Hugging Face cache instead. |
+| `openvoice.log` | Single appending log file. **Planned:** rotation; today it grows without bound. |
+
+An unreadable `settings.toml` is copied aside as `settings.toml.broken` rather than
+overwritten — it is the only copy of whatever the user had — and the app starts on
+defaults. A dictation tool that refuses to launch because one field is malformed is
+worse than one that launches with a stale setting.
 
 ```sql
 CREATE TABLE utterance (
-  id            INTEGER PRIMARY KEY,
-  created_at    INTEGER NOT NULL,      -- unix ms
-  duration_ms   INTEGER NOT NULL,
-  raw_text      TEXT NOT NULL,         -- straight from ASR
-  final_text    TEXT NOT NULL,         -- after formatting
-  profile       TEXT NOT NULL,
-  target_app    TEXT,
-  model         TEXT NOT NULL,
-  status        TEXT NOT NULL,         -- ok | cancelled | asr_error | inject_failed
-  latency_ms    INTEGER,
-  audio_path    TEXT                   -- NULL unless debug.retain_audio
+  id           INTEGER PRIMARY KEY,
+  created_at   INTEGER NOT NULL,   -- unix milliseconds
+  duration_ms  INTEGER NOT NULL,
+  raw_text     TEXT    NOT NULL,   -- straight from the model
+  final_text   TEXT    NOT NULL,   -- after formatting; what was delivered
+  profile      TEXT    NOT NULL,
+  target_app   TEXT    NOT NULL DEFAULT '',
+  window_title TEXT    NOT NULL DEFAULT '',
+  model        TEXT    NOT NULL DEFAULT '',
+  status       TEXT    NOT NULL,   -- Outcome::code(): delivered |
+                                   -- clipboard_fallback | cancelled | too_short |
+                                   -- silent | asr_failed | capture_failed
+  latency_ms   INTEGER NOT NULL DEFAULT 0,
+  word_count   INTEGER NOT NULL DEFAULT 0
 );
-CREATE VIRTUAL TABLE utterance_fts USING fts5(final_text, content='utterance');
+
+CREATE VIRTUAL TABLE utterance_fts USING fts5(
+  final_text, content = 'utterance', content_rowid = 'id',
+  tokenize = 'unicode61 remove_diacritics 2'
+);
 ```
 
-Keeping `raw_text` alongside `final_text` is what makes the formatter improvable:
-you can replay the entire history through a new pipeline version and diff the
-results before shipping it. That is the core of the day-by-day improvement loop.
+Two details that are easy to get wrong and expensive to fix later:
+
+- **FTS5 uses an external content table**, so the index stores no copy of the text —
+  only pointers into `utterance`. That halves the storage and, more importantly,
+  makes it impossible for the two to disagree. The cost is that the index does not
+  maintain itself, hence the three triggers; without them a deleted row keeps
+  matching searches forever.
+- **Keeping `raw_text` alongside `final_text` is what makes the formatter
+  improvable.** The entire history can be replayed through a new rule set and diffed
+  before the change ships. Discard the raw text and every past session becomes
+  useless as evidence.
+
+Durability is WAL with `synchronous = NORMAL`. A dictation tool writes one small row
+every few seconds; `FULL` would mean an fsync per utterance for a guarantee nobody
+needs on a transcript of "hello".
 
 ### 9.2 Privacy, enforced not promised
 
 - **No telemetry. No analytics. No crash reporting uploads.** Not configurable-off —
   simply absent from the codebase.
-- Audio is held in RAM and dropped after transcription unless `debug.retain_audio`.
-- A CI check greps the dependency tree and fails the build if any HTTP client is
-  reachable from a crate other than `ov-asr::model_manager`. The privacy claim is
-  a test, not a README sentence.
-- Redaction: a configurable regex list scrubs secrets (API keys, tokens) from
-  history and logs before they are written.
-- "Panic purge": a hotkey/menu item that wipes history and audio immediately.
+- **`scripts/check-no-network.sh` is a CI job, not a README sentence.** It walks
+  `cargo tree --edges normal,build --target all` and enforces two distinct
+  guarantees, kept separate because they are not equally strong:
+  - **SEALED** — `ov-core`, `ov-format`, `ov-audio`, `ov-input`, `ov-store`,
+    `ov-cli`, `ov-asr` have no path to an HTTP client, TLS stack or socket library
+    anywhere in their transitive graph, build scripts included. Nothing in them can
+    phone home, because nothing in them can open a socket. This is why the model
+    download lives in the Python sidecar: it keeps every Rust crate sealed.
+  - **NO_DIRECT** — `ov-app` links `reqwest` transitively, because Tauri depends on
+    it unconditionally. The script cannot honestly claim otherwise, so it enforces
+    the weaker, still-useful property instead: no OpenVoice crate names a network
+    client *itself*. Telemetry, an update ping, or a crash uploader would have to
+    appear as a direct dependency, and that fails the build.
+- Audio is held in RAM, with the temporary-WAV exception described in §5 —
+  `%TEMP%\openvoice\ov-<id>.wav`, deleted immediately after each decode.
+- **Not implemented, despite having config fields:** `privacy.retain_audio`
+  (nothing reads it; audio is never retained) and `privacy.redact_patterns`
+  (nothing applies it; transcripts reach history and logs verbatim). Redaction is
+  the more serious of the two and is the main open privacy gap in the project.
+- **Planned:** a "panic purge" menu item that wipes history immediately.
 
 ### 9.3 Threat model (brief, honest)
 
@@ -461,108 +660,154 @@ buried, because users *should* be suspicious of this class of software.
 
 ## 10. UI
 
-Two windows plus a tray icon.
+Two windows plus a tray icon. Both are the same Vite bundle, routed by query
+string (`?window=hub`, `?window=overlay`) — plus `?window=sheet`, a design-system
+review page that is not part of the shipped app but is reachable in a browser.
 
-**Overlay** — a ~280×64 frameless, always-on-top, **non-activating**
-(`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`) pill near the bottom-center. Never steals
-focus — if it does, the caret position is lost and the whole product breaks. Shows
-state (idle/listening/thinking), a live waveform from the RMS stream, elapsed time,
-and the ~last 300 ms of partial text once streaming lands. Fades in ~120 ms.
+**Stack:** React 19 + TypeScript + Vite. No component library and no state
+manager — the design system is hand-written CSS custom properties in
+`src/styles/tokens.css`, and state is `useState` over the event stream. That is a
+deliberate consequence of the frontend discipline below: a UI that holds no
+business logic has very little state to manage.
 
-**Main window** — React + TypeScript + Vite + Tailwind + shadcn/ui, Zustand for state:
-- *Dictate* — big status, recent utterances, re-insert / copy / delete per row.
-- *History* — FTS search, filter by app/date/status, export JSON/CSV/Markdown.
-- *Dictionary* — add terms, import from a repo (scan symbols), test a phrase live.
-- *Profiles* — per-app rules with a live preview pane.
-- *Models* — download/switch/benchmark, VRAM and speed shown honestly.
-- *Settings* — hotkeys, mic, VAD, privacy, launch-at-login.
-- *Debug* — the stage-by-stage formatter trace and the latency waterfall.
+**The Flow Bar** (`overlay`) — a 280×52 frameless, transparent, always-on-top,
+**non-activating** pill. `WS_EX_NOACTIVATE` is applied on the Rust side after
+creation. If this window ever takes focus, the caret in the user's editor is lost
+and the dictated text goes nowhere — the whole product failing. The flag prevents
+*focus*, not *input*, which is the only reason an interactive always-on-top overlay
+is viable here: it can still be dragged and right-clicked while the editor keeps the
+caret. Its Tauri capability grant is deliberately narrower than the Hub's
+(`capabilities/overlay.json`), listing only the four window APIs `Overlay.tsx`
+actually calls — sharing the Hub's grant meant `core:window:allow-set-focus` was
+permitted on the one window that must never use it.
+
+**The Hub** (`hub`) — six sections, all shipped:
+- *Home* — live status, speaking speed against typing and average-speech baselines,
+  time saved, day streak, and searchable recent dictations with copy and re-insert.
+- *Dictionary* — add and edit terms, grouped, merged ahead of the builtins.
+- *Writing style* — the per-app profiles.
+- *Speech model* — switch and download models.
+- *Settings* — shortcut, microphone, language, sound, maximum recording length,
+  history retention.
+- *Advanced* — the stage-by-stage formatter trace for a phrase you type, and the
+  paths to the log and data folder.
+
+**Planned:** streaming partial text in the Flow Bar, history export, and a latency
+waterfall panel.
 
 **Frontend discipline:** the UI holds **no business logic**. It renders events from
-the core's bus and issues commands. Any logic in the UI is logic that cannot be
-tested headlessly and cannot be reused by a future CLI. A `ov-cli` binary that
-transcribes a wav file through the identical pipeline is the forcing function that
-keeps this honest — and it doubles as the integration test harness.
+`ov-core` and issues commands; it computes nothing the engine could compute. Any
+logic here is logic that cannot be tested headlessly. `src/engine/types.ts` is a
+hand-maintained mirror of `ov_core::event::Event` — a mirror, not a place to add
+fields; if you find yourself deriving state in the UI, add it to the event instead.
+The `ov` binary, which runs the identical pipeline over a WAV file with no window
+manager involved, is the forcing function that keeps this honest.
 
 ---
 
 ## 11. Testing strategy
 
-| Layer | Approach | Runs in |
+| Layer | Approach | Where |
 |---|---|---|
-| `ov-core` FSM | exhaustive transition tests + `proptest` for cancel-at-any-point | ms, CI |
-| `ov-format` | golden files in `fixtures/format/` | ms, CI |
-| Dictionary/phonetics | property tests: no rule may alter text lacking its trigger | ms, CI |
-| `ov-asr` | fixture wavs → WER threshold, `#[ignore]` by default (needs weights) | nightly |
-| `ov-input` | mock `TextSink`; manual matrix doc for real apps | CI + manual |
-| End-to-end | `ov-cli transcribe fixture.wav --profile editor` | CI |
-| Latency | criterion benches on the format pipeline; runtime spans in prod | CI + app |
+| `ov-core` FSM | exhaustive transition tests, including cancel from every phase and the queued-session cases | `session.rs`, CI |
+| `ov-core` config | migration, validation, and the shipped defaults pinned by test | `config.rs`, CI |
+| `ov-core` wire format | the `Event` JSON round-trip the UI depends on | `event.rs`, CI |
+| `ov-format` | per-rule tests plus end-to-end formatting per profile | `rules.rs` / `lib.rs`, CI |
+| `ov-input` | pure decision functions (`should_restore`, `mode_for`) unit-tested; the Win32 itself is not | `inject.rs`, CI |
+| `ov-store` | schema, migration, search and purge against a temp database | `lib.rs`, CI |
+| Sidecar protocol | request parsing, error shapes, progress framing, WAV reading, and a real piped subprocess for the UTF-8 stdio fix | `sidecar/tests/`, CI |
+| Frozen binary | `build-sidecar.ps1` drives a real `probe` request over the protocol and fails if the reply is missing or reports a broken import | packaging |
+| End-to-end, by hand | `ov transcribe file.wav`, `ov mictest`, `ov type`, `ov keytest` | manual |
+
+**Nothing in CI loads a model.** Downloading 1.6 GB of weights on every push would
+make CI slower than the review it supports, so accuracy is verified by hand against
+WAVs in `fixtures/audio/` — which is gitignored, because those recordings are a
+maintainer's actual voice and do not belong in a public repository. The consequence
+worth stating plainly: **there is no automated accuracy regression test.** A WER
+threshold suite on a committed, licensed corpus is the obvious thing missing.
 
 The **app-compatibility matrix** (VS Code, Cursor, Windows Terminal, Chrome, Slack,
-Discord, Notion, IntelliJ, Obsidian) is a checklist in `docs/compat.md`, re-run
-before each release. Injection breaks per-app in ways no unit test can catch.
+Discord, Notion, IntelliJ, Obsidian) is re-run by hand before each release, per
+`CONTRIBUTING.md`. Injection breaks per-app in ways no unit test can catch.
 
 ---
 
 ## 12. Open-source engineering from day one
 
 - **License:** Apache-2.0 (explicit patent grant; the safer choice for a tool
-  companies may adopt) — see §14 Q4.
-- **Docs:** README with a demo GIF above the fold, `CONTRIBUTING.md`,
-  `CODE_OF_CONDUCT.md` (Contributor Covenant), `SECURITY.md`, `ARCHITECTURE.md`
-  pointing here, and **ADRs** in `docs/adr/` — immutable, numbered, one per real
-  decision. Six months from now the ADRs are what stop you from re-litigating.
-- **Commits:** Conventional Commits → `release-please` generates CHANGELOG + tags.
-- **CI** (`ci.yml`): `cargo fmt --check`, `clippy -D warnings`, `cargo test`,
-  `cargo deny` (licenses + advisories), the wasm purity check, `tsc --noEmit`,
-  eslint, vitest. Required for merge.
-- **Release** (`release.yml`, built): tag → freeze the sidecar with PyInstaller →
-  Tauri NSIS bundle → draft GitHub Release. MSI is not produced; NSIS alone keeps
-  one artifact to test and one to sign. The workflow asserts the frozen sidecar
-  exists before bundling, because its absence does not fail the build — it
-  produces an installer with no speech engine, which only surfaces when a user
-  runs the app. `cargo-dist` later for multi-platform.
-- **Repo hygiene:** `rust-toolchain.toml` pinned, `.editorconfig`, issue/PR
-  templates, `CODEOWNERS`, `good-first-issue` labels, dependabot.
+  companies may adopt). See ADR 0004.
+- **Docs:** `README.md` with real screenshots above the fold, `CONTRIBUTING.md`,
+  `CODE_OF_CONDUCT.md` (Contributor Covenant), `SECURITY.md`, this file, and
+  **ADRs** in [`adr/`](adr/) — numbered, one per real decision, amended with an
+  outcome note rather than rewritten when reality disagrees. Six months from now
+  the ADRs are what stop a settled question from being re-litigated.
+- **Commits:** Conventional Commits. The changelog is written by hand in the same
+  PR as the change, *not* generated at release time — see the note at the top of
+  `CHANGELOG.md` for why. (`release-please` was considered and not adopted.)
+- **CI** (`ci.yml`), seven jobs, all required: the full workspace on Windows (fmt,
+  clippy, test, `cargo doc` with `-D warnings`); the platform-independent crates on
+  Linux; the `wasm32` purity check; `scripts/check-no-network.sh`; `cargo deny check
+  bans licenses advisories sources`; the sidecar's ruff and pytest; and the
+  frontend's oxlint, `tsc --noEmit` and build. `RUSTFLAGS: -D warnings` applies to
+  workspace crates only — Cargo passes `--cap-lints allow` to registry
+  dependencies, so someone else's warning cannot fail this build.
+- **Release** (`release.yml`): tag → freeze the sidecar with PyInstaller → assert
+  the frozen binary exists → Tauri NSIS bundle → SHA-256 → draft GitHub Release.
+  MSI is not produced; NSIS alone keeps one artifact to test and one to sign. A
+  `workflow_dispatch` run exercises the whole packaging path and publishes nothing,
+  so the release path is never first tried at tag time. `cargo-dist` later for
+  multi-platform.
+- **Repo hygiene:** `rust-toolchain.toml` pinned (stable, with the `wasm32` target
+  preinstalled), `deny.toml` with every advisory exception annotated, issue and PR
+  templates, dependabot grouped weekly. **Not yet:** `.editorconfig`, `CODEOWNERS`,
+  `good-first-issue` labels.
 - **Naming caution:** "OpenVoice" is already a well-known TTS project from MyShell
   (~30k stars). Discoverability will suffer and users will confuse the two. Worth
   a rename before the repo gains traction — e.g. *Vox*, *Dictate*, *Utter*,
-  *Speakeasy*, *Larynx*. Your call; flagging it now because renaming later is
+  *Speakeasy*, *Larynx*. Still open; flagged here because renaming later is
   expensive.
 
 ---
 
 ## 13. Roadmap
 
-| Phase | Contents | Definition of done |
-|---|---|---|
-| **v0.1** — walking skeleton | PTT hotkey → capture → whisper → inject → tray → history. All six ports real (no mocks in the hot path), even if each impl is minimal. | You dictate a sentence into VS Code and it appears, correctly. |
-| **v0.2** — the differentiator | Formatting pipeline, dictionary + phonetic matching, voice commands, app profiles, settings UI. | Dictating code comments and shell commands stops being annoying. |
-| **v0.3** — feel | Overlay + waveform, streaming partials, model manager UI, latency panel, pre-roll buffer. | p50 under 700 ms, and it *feels* instant. |
-| **v0.4** — intelligence | Optional local LLM polish, prompt mode, repo-symbol dictionary import. | Rambling speech → a clean agent prompt. |
-| **v0.5** — distribution | Auto-update, signed installer, macOS adapters, docs site. | Someone who isn't you can install and use it. |
-| **v1.0** | Plugin API for formatter stages, benchmark suite, stability. | API frozen, semver honored. |
+| Phase | Contents | Definition of done | State |
+|---|---|---|---|
+| **v0.1** — walking skeleton | PTT hotkey → capture → whisper → inject → tray → history. All six ports real (no mocks in the hot path), even if each impl is minimal. | You dictate a sentence into VS Code and it appears, correctly. | **done** |
+| **v0.2** — the differentiator | Formatting pipeline, dictionary, voice commands, app profiles, settings UI. | Dictating code comments and shell commands stops being annoying. | **done** |
+| **v0.3** — feel | Overlay + waveform, sound feedback, model manager UI, history search — all shipped. Remaining: streaming partials, history export, latency panel. | p50 under 700 ms, and it *feels* instant. | in progress |
+| **v0.4** — intelligence | Optional local LLM polish, prompt mode, repo-symbol dictionary import. | Rambling speech → a clean agent prompt. | not started |
+| **v0.5** — distribution | Published release, code signing, optional GPU pack, auto-update, macOS adapters, docs site. | Someone who isn't you can install and use it. | installer builds in CI; nothing published |
+| **v1.0** | Plugin API for formatter stages, benchmark suite, stability. | API frozen, semver honored. | not started |
 
 Each phase must ship a usable app. No phase is a refactor-only phase.
 
+The pre-roll buffer that appeared under v0.3 in earlier drafts is **cancelled**, not
+pending — see §4 for why continuous recording is incompatible with the privacy
+property push-to-talk exists to provide.
+
 ---
 
-## 14. Open decisions — need your approval
+## 14. Decisions, once open, now settled
 
-**Q1 — Stack.** Rust/Tauri is the right long-term answer (60 MB idle vs Electron's
-~250 MB, native hooks without native-module pain, single 12 MB binary), but Rust
-isn't installed on this machine — rustup + MSVC Build Tools is a ~3–5 GB, ~25 min
-setup. Electron gets you testing today at a permanent cost in footprint and in the
-quality of the OS integration. See options in the question prompt.
+The four questions this document was originally written to force answers to have
+all been answered, and each has an ADR recording the alternatives that were
+rejected and why. They are listed here so the reasoning is one click away rather
+than rediscovered.
 
-**Q2 — Day-1 ASR backend.** `faster-whisper` in a Python sidecar (CUDA works out of
-the box, `uv` already installed, fastest path to good accuracy, costs a bundled
-Python runtime at distribution time) vs `whisper.cpp` in-process (pure native, clean
-distribution, but Windows GPU builds need CUDA Toolkit or a prebuilt binary).
-Either way it sits behind `Transcriber`, so this is reversible.
+| Question | Answer | Record |
+|---|---|---|
+| Stack — Rust/Tauri or Electron? | Tauri v2 + Rust core, React/TS frontend | [ADR 0002](adr/0002-tauri-rust-stack.md) |
+| Day-one ASR backend — faster-whisper sidecar or whisper.cpp in-process? | faster-whisper in a supervised Python sidecar, behind the `Transcriber` trait so the swap stays cheap | [ADR 0003](adr/0003-asr-backend.md) |
+| Activation — push-to-talk, toggle, or both? | Push-to-talk on Right Ctrl. Toggle deferred, and will be a *second* binding rather than a mode switch. | [ADR 0004](adr/0004-activation-and-license.md) |
+| License — Apache-2.0 or MIT? | Apache-2.0, for the explicit patent grant | [ADR 0004](adr/0004-activation-and-license.md) |
 
-**Q3 — Activation.** Push-to-talk vs toggle vs both, and the default binding.
+Two of those have since been amended by contact with reality, and the amendments
+are the interesting part: ADR 0003 carries the measured cost of bundling Python
+(cheaper than feared, and the remaining weight is CUDA, which any GPU backend would
+also need) and the reversal of the default model from `large-v3-turbo` to `base.en`
+once distribution turned out CPU-only.
 
-**Q4 — License.** Apache-2.0 vs MIT.
-
-Once these are settled, ADRs 0001–0004 get written and v0.1 implementation begins.
+**Still genuinely open:** the name (§12), transcript redaction (§9.2), and an
+automated accuracy regression suite (§11). Anything that changes the shape of the
+system from here gets ADR 0005 or later.

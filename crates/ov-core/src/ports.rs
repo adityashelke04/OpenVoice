@@ -88,8 +88,12 @@ pub trait AudioSource: Send + Sync {
     /// Start capturing. `levels` is called roughly every 20 ms for UI metering.
     fn start(&self, levels: Arc<dyn Fn(LevelFrame) + Send + Sync>) -> Result<()>;
 
-    /// Stop capturing and return everything recorded since [`AudioSource::start`],
-    /// including the pre-roll retained before the hotkey registered.
+    /// Stop capturing and return everything recorded since [`AudioSource::start`].
+    ///
+    /// The device is opened on start and closed here, so the operating system's own
+    /// microphone indicator is lit for exactly the duration of the capture. That
+    /// costs the first ~10–30 ms of WASAPI startup and is worth it; see the
+    /// `ov-audio` module docs for why continuous pre-roll capture was rejected.
     fn stop(&self) -> Result<Pcm16k>;
 
     /// Discard the current capture without returning it.
@@ -101,9 +105,14 @@ pub trait AudioSource: Send + Sync {
 
 /// Hints that bias decoding toward the vocabulary the user actually uses.
 ///
-/// Correcting `kubectl` or `useMemo` *during* decoding is strictly better than
-/// repairing it afterwards with fuzzy string replacement, because the decoder can
-/// use acoustic evidence that post-processing has already thrown away.
+/// **`vocabulary` is off by default, and that is a measured result rather than an
+/// oversight.** Seeding Whisper's initial prompt with the user's terms was supposed
+/// to beat repairing them afterwards, because the decoder still has acoustic
+/// evidence that post-processing has thrown away. An A/B on identical audio showed
+/// the opposite: a prompt full of camelCase identifiers teaches the model to *write*
+/// camelCase, so it welds ordinary spoken words together — including the very
+/// command words the formatter needs to see. See the `ov_format::dictionary` module
+/// docs and `docs/ARCHITECTURE.md` §5.2 for the transcripts.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DecodeHint {
     /// Vocabulary terms, packed into the model's initial prompt budget.

@@ -31,8 +31,8 @@ claimed by common IDE keymaps.
 
 `RegisterHotKey` is unusable — it delivers a single "pressed" notification with no
 key-up event, so push-to-talk cannot be built on it. This forces
-`SetWindowsHookEx(WH_KEYBOARD_LL)`. See `docs/DESIGN.md` §8 for the constraints that
-imposes on the hook thread.
+`SetWindowsHookEx(WH_KEYBOARD_LL)`. See [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
+§8 for the constraints that imposes on the hook thread.
 
 Because the trigger is itself a modifier key, the injector must explicitly release
 Ctrl in the synthetic input stream before sending `Ctrl+V` for clipboard paste.
@@ -43,8 +43,13 @@ painfully.
 ### Consequences
 
 Not ideal for very long dictation — holding a key for 90 seconds is uncomfortable.
-That is what the v0.2 toggle binding is for. Some keyboards lack a right Ctrl; the
+That is what the toggle binding is for. Some keyboards lack a right Ctrl; the
 binding is user-configurable.
+
+> **Status note (2026-08-03).** The toggle binding slipped past v0.2 and is still
+> unbuilt. `ActivationMode::Toggle` exists in the config schema and nothing reads
+> it; activation is push-to-talk only. The bindable keys are a closed enum — Right
+> Ctrl, Right Alt, Right Shift, Caps Lock, F13, F14, Scroll Lock.
 
 ## License: Apache-2.0
 

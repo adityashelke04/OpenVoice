@@ -30,7 +30,7 @@
 //! [`types::Millis`] stamped by the caller — and performs no IO. The composition
 //! root in `ov-app` owns every adapter, feeds inputs in, and executes effects out.
 //!
-//! See `docs/DESIGN.md` and `docs/adr/0001-hexagonal-architecture.md`.
+//! See `docs/ARCHITECTURE.md` and `docs/adr/0001-hexagonal-architecture.md`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]

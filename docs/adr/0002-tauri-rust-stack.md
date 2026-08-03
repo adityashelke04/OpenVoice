@@ -26,10 +26,14 @@ Rust core, Tauri v2 shell, React + TypeScript + Vite frontend.
 | | Tauri + Rust | Electron + Node |
 |---|---|---|
 | Idle RAM | ~60 MB | ~250 MB |
-| Installer | ~15 MB | ~120 MB |
+| Installer | ~15 MB* | ~120 MB |
 | Keyboard hook | native, in-process, no GC | native module (node-gyp) or helper exe |
 | Realtime audio callback | no GC pauses | GC pauses in the callback path |
 | Setup cost | rustup + MSVC (~6 GB, one time) | none |
+
+\* The shell alone. The shipped installer is **68 MB**, because it also carries the
+frozen speech engine — a cost belonging to ADR 0003, not to this decision, and one
+Electron would have paid identically.
 
 The Electron path front-loads convenience and back-loads permanent cost, in exactly
 the areas (footprint, hook latency) where this product cannot compromise. The Rust

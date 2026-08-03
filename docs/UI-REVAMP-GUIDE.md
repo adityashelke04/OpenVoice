@@ -1,5 +1,31 @@
 # OpenVoice UI Revamp — Step-by-Step Implementation Guide
 
+> **Status, 2026-08-03 — partially executed. Read this box first.**
+>
+> This is a working plan, not a description of the shipped UI. Where it disagrees
+> with the code, the code is right.
+>
+> | Step | State |
+> |---|---|
+> | 1 — failure state in the Flow Bar | **not done.** `FlowBar` still has no failure variant. |
+> | 2 — completion feedback | **sound shipped** (`ui/sound.ts`, `Config.sound_enabled`); the visual confirmation blink is not. |
+> | 3 — real glow | **not done.** |
+> | 4 — VU ballistics on the waveform | **not done.** |
+> | 5 — cancel while recording | **not done in the UI.** `Input::Cancelled` already exists end to end in `ov-core`; only the affordance is missing. |
+> | 6 — design-doc drift | **partly.** `--faint` is now `#7a7a7a` at 4.6:1 in `tokens.css` and on the sheet. |
+> | 7 — minor polish | **partly.** The always-green History badge is gone. |
+>
+> **Two files this guide tells you to read are not in the repository.**
+> `PRODUCT.md`, `DESIGN.md` and `docs/UI-RESEARCH.md` are working notes, gitignored
+> on purpose (see `.gitignore`) because they are scaffolding rather than something a
+> contributor needs. Everything durable from them lives in `docs/ARCHITECTURE.md`,
+> `docs/adr/`, and — for the visual system — the live design sheet at
+> `?window=sheet`, which is the actual source of truth for tokens. Read the
+> references to those files below as historical citations, not as instructions.
+>
+> The design critique this guide derives from *is* in the repository, at
+> `.impeccable/critique/2026-08-02T12-08-55Z__openvoice-hub-flow-bar-overlay.md`.
+
 This is a standalone implementation spec. It assumes the reader has not seen any
 prior conversation about this project — everything needed to execute each step is
 included inline: exact file paths, exact current code, exact proposed changes, why
@@ -53,22 +79,25 @@ five things while quietly breaking a sixth is not a net improvement:
    persona red flags, the reasoning behind each priority below).
 3. **Do not touch the app icon, wordmark, or the seven-bar waveform mark.** That
    was explicitly settled and is out of scope for this pass.
-4. Run these after every step, from the repo root:
+4. Run these after every step. From `apps/ui`:
    ```
-   npx tsc --noEmit --project apps/ui
+   npm run lint
+   npx tsc --noEmit -p tsconfig.app.json
    ```
-   and, if any Rust file changed:
+   and, if any Rust file changed, from the repo root:
    ```
    cargo fmt --all --check
    cargo clippy --workspace --all-targets --all-features
    cargo test --workspace --all-features
    ```
-   A dev build is already runnable via `cargo tauri dev` from `crates/ov-app`
-   (or whatever task already starts it). The app also has a component sheet
-   reachable via the Advanced screen for previewing primitives — `FlowBar`,
-   `Waveform`, `Badge`, etc. — without needing a live dictation to trigger every
-   state; use it to check each new prop/variant in isolation before testing the
-   real overlay.
+   Fastest loop for pure frontend work: `npm run dev:ui` from the repo root, then
+   `http://localhost:5199/?window=overlay` for the Flow Bar on its own, or
+   `?window=sheet` for the component sheet — every primitive in every state on one
+   page, so a new prop or variant can be checked without triggering a real
+   dictation. (The sheet has no in-app link; the query string is the only route to
+   it, by design — it is a review surface, not a feature.) For the real window,
+   `node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js dev` from
+   `crates/ov-app`, which starts the dev server for you.
 
 ---
 

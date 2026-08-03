@@ -1,6 +1,7 @@
 <!--
 Title this PR as a Conventional Commit: feat: / fix: / docs: / refactor: / test: / chore:
-The changelog is generated from those.
+The prefix decides which CHANGELOG section your entry belongs in; the entry itself
+is written by hand, in this PR. See CHANGELOG.md.
 -->
 
 ## What and why
