@@ -6,19 +6,23 @@
 Hold a key, speak, release — correctly formatted text appears at your cursor, in any app.
 No cloud, no account, no telemetry.
 
+[![Release](https://img.shields.io/github/v/release/adityashelke04/OpenVoice?include_prereleases&label=release&color=44D62C)](https://github.com/adityashelke04/OpenVoice/releases)
 [![CI](https://github.com/adityashelke04/OpenVoice/actions/workflows/ci.yml/badge.svg)](https://github.com/adityashelke04/OpenVoice/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
+
+**[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/v0.1.0/OpenVoice_0.1.0_x64-setup.exe)** — one `.exe`, speech engine included.
+[All releases →](https://github.com/adityashelke04/OpenVoice/releases)
 
 <img src="docs/images/flow-bar.png" width="420" alt="The Flow Bar: a small floating pill reading &quot;Hold Right Ctrl&quot;">
 
 </div>
 
 > **Status: alpha.** It runs end to end — hotkey, capture, transcription,
-> formatting, injection, and history all work on Windows. What is not done is
-> distribution polish: the installer is built by CI but no release is published
-> yet, and nothing is code-signed, so Windows will warn you about an unknown
-> publisher.
+> formatting, injection, and history all work on Windows, and `v0.1.0` is
+> published as a pre-release you can install today. What is not done is
+> distribution polish: nothing is code-signed, so Windows will warn you about an
+> unknown publisher, and the bundled speech engine is CPU-only.
 
 ---
 
@@ -167,19 +171,38 @@ relocated to another drive.
 
 ## Installing
 
-**No release is published yet.** When one is, it will be a single
-`OpenVoice_0.1.0_x64-setup.exe` on the [releases
-page](https://github.com/adityashelke04/OpenVoice/releases), built by
-[CI](.github/workflows/release.yml) — nothing to configure, no Python to install.
+Download **[`OpenVoice_0.1.0_x64-setup.exe`](https://github.com/adityashelke04/OpenVoice/releases/download/v0.1.0/OpenVoice_0.1.0_x64-setup.exe)**
+from the [releases page](https://github.com/adityashelke04/OpenVoice/releases) and run it.
+Nothing to configure, no Python to install — the speech engine is inside the
+installer. On first launch it downloads the `base.en` weights (~75 MB), with
+progress shown in the app; everything after that works offline.
 
-Two things worth knowing before that release exists:
+Then hold **Right Ctrl**, speak, and release.
+
+Two things worth knowing before you install:
 
 - **The installer is not code-signed.** Windows SmartScreen will warn about an
-  unknown publisher. A certificate is on the v0.5 roadmap.
+  unknown publisher, and you will have to click *More info → Run anyway*. A
+  certificate is on the v0.5 roadmap. Because you are being asked to override
+  that warning, every release ships a SHA-256 beside the installer and is built
+  by a public [GitHub Actions run](.github/workflows/release.yml) from the
+  tagged commit — so you can check that what you downloaded is what CI built:
+
+  ```powershell
+  Get-FileHash .\OpenVoice_0.1.0_x64-setup.exe -Algorithm SHA256
+  ```
+
+  Compare that against the hash in the release notes and the `.sha256` file
+  published next to the installer.
 - **The bundled speech engine is CPU-only.** The CUDA libraries are 1.9 GB — 88%
   of the dependency tree — and useless without an NVIDIA GPU, so they are not
   shipped. An installed copy runs on the CPU, which works everywhere but is
   markedly slower on the large model. To use the GPU today, run from source.
+
+To uninstall, use Windows *Add or remove programs*. Your history
+(`%APPDATA%\OpenVoice\history.db`) and downloaded models
+(`%APPDATA%\OpenVoice\models`) are yours — delete that folder if you want them
+gone too.
 
 ## Building it yourself
 
@@ -255,8 +278,10 @@ What we do about that:
   Nothing else writes audio to disk, and there is no retention path today.
 - No telemetry, no analytics, no crash uploads — not "off by default", **absent from
   the codebase**, with a CI job that keeps it that way.
-- Releases will be built by public GitHub Actions from a tagged commit, with a
+- Releases are built by public GitHub Actions from a tagged commit, with a
   SHA-256 published beside the installer so you can verify what you downloaded.
+  The [build log](https://github.com/adityashelke04/OpenVoice/actions/workflows/release.yml)
+  for every release is public.
 
 Found something wrong? [`SECURITY.md`](SECURITY.md).
 
@@ -268,7 +293,7 @@ Found something wrong? [`SECURITY.md`](SECURITY.md).
 | **v0.2** | The differentiator | formatting pipeline, dictionary, app profiles, settings UI ✅ |
 | **v0.3** | Feel | overlay waveform ✅, sound feedback ✅, history search ✅ — still to do: streaming partials, history export, sub-700 ms p50 |
 | **v0.4** | Intelligence | optional local LLM polish, prompt mode for AI agents |
-| **v0.5** | Distribution | published release, code signing, optional GPU pack, auto-update, macOS |
+| **v0.5** | Distribution | published Windows installer ✅ — still to do: code signing, optional GPU pack, auto-update, macOS |
 | **v1.0** | Stability | plugin API for formatter rules, frozen API |
 
 Every phase ships something usable. None is a refactor-only phase.

@@ -113,7 +113,13 @@ jobs:
           files: |
             ${{ steps.collect.outputs.path }}
             ${{ steps.collect.outputs.sumfile }}
+          # Published as a draft so the attached installer can be checked before
+          # anyone can download it; flipped to public with
+          # `gh release edit <tag> --draft=false` once it has been.
           draft: true
+          # Alpha, and unsigned. "Pre-release" is the honest label until there is
+          # a signing certificate and a tested upgrade path.
+          prerelease: true
           generate_release_notes: true
           body: |
             Windows installer. Runs entirely on your machine — no account, no

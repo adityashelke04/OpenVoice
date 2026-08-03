@@ -5,9 +5,9 @@
 Please **do not open a public issue.** Use GitHub's private reporting:
 [Report a vulnerability](https://github.com/adityashelke04/OpenVoice/security/advisories/new).
 
-Include what you did, what happened, what you expected, and the OpenVoice version —
-or, since no release is published yet, the commit you built from. A proof of
-concept helps enormously.
+Include what you did, what happened, what you expected, and the OpenVoice version
+(shown in Settings, and in the installer filename) — or the commit you built
+from, if you are running from source. A proof of concept helps enormously.
 
 You'll get an acknowledgement within 72 hours and an assessment within a week. This
 is a small project, not a company with a response team — if it's serious and you
@@ -46,9 +46,15 @@ What the design does about it:
 
 ## Supported versions
 
-No release exists yet, so in practice the supported version is `main`. Once
-releases start: pre-1.0, only the latest one gets fixes; from 1.0, the current
-minor version and the one before it.
+Pre-1.0, only the latest release gets fixes — currently `v0.1.0`. Fixes land on
+`main` first and reach you in the next release. From 1.0: the current minor
+version and the one before it.
+
+| Version | Supported |
+|---|---|
+| `v0.1.0` (latest) | ✅ |
+| `main` | ✅ |
+| Anything older | ❌ |
 
 ## Disclosure
 

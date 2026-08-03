@@ -22,10 +22,20 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
-Nothing has been released yet, so there is no upgrade path to describe and no
-compatibility promise in force. Hotkey → capture → transcribe → inject → history
-now works end to end, and the installer builds; `v0.1.0` is tagged once that
-installer has been tested on a machine that has never had the repository on it.
+Nothing yet.
+
+## [0.1.0] - 2026-08-03
+
+The first published build. Hotkey → capture → transcribe → format → inject →
+history works end to end on Windows, and it installs from a single `.exe` with
+no Python, no Rust and no Node on the target machine.
+
+This is an alpha, and the version number is the promise: there is no upgrade
+path from anything, and nothing here is a compatibility commitment yet. Two
+things to know before installing, both covered in the README: the installer is
+**not code-signed**, so SmartScreen will warn about an unknown publisher (verify
+the published SHA-256 instead), and the bundled speech engine is **CPU-only** —
+using an NVIDIA GPU still means running from source.
 
 ### Added
 
@@ -47,7 +57,7 @@ installer has been tested on a machine that has never had the repository on it.
   restart — it's a per-request decode parameter, not something baked into
   loaded weights, so it reloads the same way the dictionary does. `ov-cli`
   gained a matching `--language` flag (`auto` for auto-detect).
-- **An installer.** `OpenVoice_0.1.0_x64-setup.exe`, 68 MB, with the speech
+- **An installer.** `OpenVoice_0.1.0_x64-setup.exe`, 47 MB, with the speech
   engine inside it. No Python, no virtualenv, no Rust on the target machine.
   Built by `release.yml` on a tag, with a SHA-256 published beside it.
 - **A frozen speech engine.** PyInstaller packages the sidecar into a standalone
@@ -210,20 +220,5 @@ installer has been tested on a machine that has never had the repository on it.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-<!--
-Template for the first real release. Delete the placeholders above when using it.
-
-## [0.1.0] - YYYY-MM-DD
-
-### Added
-### Changed
-### Deprecated
-### Removed
-### Fixed
-### Security
-
 [Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/adityashelke04/OpenVoice/releases/tag/v0.1.0
--->
-
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/commits/main
