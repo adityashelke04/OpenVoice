@@ -14,7 +14,6 @@ body,
 }
 
 body {
-  background: var(--canvas);
   color: var(--body);
   font: 400 14px/1.55 var(--font-sans);
   font-feature-settings: "calt", "kern", "liga", "ss03";
@@ -23,17 +22,23 @@ body {
   overflow: hidden;
 }
 
-/* The overlay window is transparent so the OS composites the pill over whatever
-   the user is working in.
+/* The canvas is opted into per window rather than being the global default.
  *
- * Transparency has to be declared on *every* element in the chain. Setting it on
- * `body` alone left `html` painting the platform's default page colour, which
- * showed as a translucent rectangle around the pill — the window's own bounds
- * made visible. `#root` is included for the same reason. */
-html[data-window="overlay"],
-html[data-window="overlay"] body,
-html[data-window="overlay"] #root {
-  background: transparent !important;
+ * The overlay is a transparent window: the OS composites the pill over whatever
+ * the user is working in, and *any* element in the chain — `html`, `body`,
+ * `#root` — that paints a background draws the window's own rectangle around it.
+ *
+ * Stating it this way round is the whole point. `data-window` is set by script,
+ * but a background on bare `body` paints from the moment the stylesheet is
+ * applied, which is before any script has run — so the overlay showed that
+ * rectangle for the entire gap. The Hub declares the same black natively
+ * (`backgroundColor` in tauri.conf.json), so it has nothing to flash to; the
+ * overlay deliberately has no such fallback. */
+html[data-window="hub"],
+html[data-window="hub"] body,
+html[data-window="sheet"],
+html[data-window="sheet"] body {
+  background: var(--canvas);
 }
 
 h1,

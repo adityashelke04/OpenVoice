@@ -85,6 +85,15 @@ pub struct Overlay {
     placement: Mutex<Placement>,
     /// True while a dictation session is running.
     active: Mutex<bool>,
+    /// Where this side last told the window to go.
+    ///
+    /// The frontend reports every move the OS makes, including the ones caused by
+    /// [`Self::park`], and filters them with a "the user is dragging" flag. That
+    /// flag is not trustworthy: `startDragging` hands the pointer to the Windows
+    /// move loop, which swallows the mouse-up, so a press on the bar that moved
+    /// nothing leaves it set — and the next auto-placement then comes back as a
+    /// drag, gets snapped, and is written to disk as a position the user chose.
+    commanded: Mutex<Option<(f64, f64)>>,
 }
 
 impl Overlay {
@@ -92,6 +101,7 @@ impl Overlay {
         Self {
             placement: Mutex::new(Placement::load()),
             active: Mutex::new(false),
+            commanded: Mutex::new(None),
         }
     }
 
@@ -101,6 +111,9 @@ impl Overlay {
 
     /// Record a new position after a drag, snapping to nearby screen edges.
     pub fn move_to(&self, win: &WebviewWindow, x: f64, y: f64) {
+        if self.is_echo(x, y) {
+            return;
+        }
         let (x, y) = snap(win, x, y);
         {
             let mut p = self.placement.lock().expect("placement");
@@ -108,7 +121,7 @@ impl Overlay {
             p.y = y;
             p.save();
         }
-        let _ = win.set_position(LogicalPosition::new(x, y));
+        self.command(win, x, y);
     }
 
     pub fn set_always_visible(&self, win: &WebviewWindow, on: bool) {
@@ -162,7 +175,7 @@ impl Overlay {
     pub fn park(&self, win: &WebviewWindow) {
         let p = self.placement();
         if p.x.is_finite() && p.y.is_finite() && on_screen(win, p.x, p.y) {
-            let _ = win.set_position(LogicalPosition::new(p.x, p.y));
+            self.command(win, p.x, p.y);
             return;
         }
 
@@ -172,11 +185,36 @@ impl Overlay {
         let size = win_size(win);
         let x = origin.0 + (area.0 - size.0) / 2.0;
         let y = origin.1 + area.1 - size.1 - BOTTOM_GAP;
-        let _ = win.set_position(LogicalPosition::new(x, y));
+        self.command(win, x, y);
         tracing::debug!(x, y, "overlay auto-placed");
+    }
+
+    /// Move the window, remembering that this side asked for it.
+    fn command(&self, win: &WebviewWindow, x: f64, y: f64) {
+        *self.commanded.lock().expect("commanded") = Some((x, y));
+        let _ = win.set_position(LogicalPosition::new(x, y));
+    }
+
+    /// Whether a reported position is one of our own moves coming back.
+    ///
+    /// Compared with a tolerance rather than for equality: the round trip is
+    /// logical -> physical -> logical, and on a fractional display scale a
+    /// coordinate does not survive it intact. Two logical pixels is far below what
+    /// a deliberate drag covers and far above the rounding error.
+    fn is_echo(&self, x: f64, y: f64) -> bool {
+        matches!(
+            *self.commanded.lock().expect("commanded"),
+            Some((cx, cy)) if (cx - x).abs() < 2.0 && (cy - y).abs() < 2.0
+        )
     }
 }
 
+/// The bar's current size, which auto-placement centres on.
+///
+/// The window is declared in `tauri.conf.json` at the same size the frontend gives
+/// the idle pill, so this answers the same thing whether it is asked before or
+/// after the webview's first resize. When the two disagreed, a bar parked during
+/// startup and a bar parked later landed tens of pixels apart.
 fn win_size(win: &WebviewWindow) -> (f64, f64) {
     let scale = win.scale_factor().unwrap_or(1.0);
     win.outer_size()
@@ -184,7 +222,7 @@ fn win_size(win: &WebviewWindow) -> (f64, f64) {
             let l = s.to_logical::<f64>(scale);
             (l.width, l.height)
         })
-        .unwrap_or((260.0, 60.0))
+        .unwrap_or((150.0, 40.0))
 }
 
 fn monitor_logical(win: &WebviewWindow) -> Option<((f64, f64), (f64, f64))> {

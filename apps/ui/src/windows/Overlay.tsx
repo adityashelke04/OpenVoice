@@ -72,6 +72,9 @@ export function Overlay() {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       const win = getCurrentWindow();
       un = await win.onMoved(({ payload }) => {
+        // A first filter, not the only one. The OS move loop eats the mouse-up, so
+        // this flag can be left standing by a press that moved nothing; Rust drops
+        // positions it just commanded itself. See `Overlay::commanded`.
         if (!dragging.current) return;
         // Debounced: onMoved fires continuously through a drag, and only the
         // resting place is worth storing.
@@ -109,6 +112,11 @@ export function Overlay() {
   //  2. A transparent window still swallows OS-level clicks across its whole
   //     rectangle — `pointer-events: none` governs the webview, not the window. An
   //     oversized window would punch a dead zone into whatever is underneath.
+  //
+  // The idle case, 150x40, is also what `tauri.conf.json` declares the window at.
+  // They have to agree: the window exists before this code does, Rust shows and
+  // auto-places it from `overlay.rs` without waiting to be told a size, and when
+  // the two disagreed the bar was briefly a rectangle and then moved.
   const width = menu ? 280 : live ? 218 : working ? 170 : 150;
   const height = menu ? 226 : 40;
 
@@ -120,13 +128,26 @@ export function Overlay() {
     })();
   }, [width, height]);
 
-  // Dismiss the menu on any outside interaction, including losing the pointer.
+  // Close the menu when a session starts.
+  //
+  // `blur` cannot do this job here, however much it looks like it should: this
+  // window never takes focus (`WS_EX_NOACTIVATE`), so it never loses it either,
+  // and the listener below only ever fires in the component sheet, where the same
+  // component runs in an ordinary browser window. Without the state check, right-
+  // clicking the bar and then dictating left the 226px menu panel open behind the
+  // pill — an opaque rectangle around a window whose entire job is to be a pill,
+  // and one the user cannot dismiss by clicking away from, because there is
+  // nowhere to click that this window can see.
   useEffect(() => {
     if (!menu) return;
+    if (live || working) {
+      setMenu(false);
+      return;
+    }
     const close = () => setMenu(false);
     window.addEventListener("blur", close);
     return () => window.removeEventListener("blur", close);
-  }, [menu]);
+  }, [menu, live, working]);
 
   // State changes are announced. A person using a screen reader gets no benefit
   // from a waveform, and the whole point of this window is knowing whether the

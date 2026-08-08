@@ -440,8 +440,23 @@ fn main() {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "OpenVoice starting");
 
     tauri::Builder::default()
+        // Registered first, because it is the only thing here that decides whether
+        // this process should exist at all.
+        //
+        // Closing the Hub hides it (see `on_window_event`), so the app is still
+        // running when the user launches the shortcut again — and without this,
+        // that launch started a *second* complete app: another `WH_KEYBOARD_LL`
+        // hook answering the same Right Ctrl, another Flow Bar parked at the same
+        // spot, another 1.6 GB of weights, and two processes writing the same
+        // history database and `overlay.json`. Holding the hotkey then popped up
+        // one bar per process. Plugin setup hooks run before any window is created,
+        // so the loser exits having built nothing.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // Launching an app that is already running means "show me the window",
+            // which is the same thing the tray does.
+            show_hub(app);
+        }))
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_ready,
@@ -463,6 +478,14 @@ fn main() {
             restart_app
         ])
         .setup(|app| {
+            // Built here rather than handed to `manage` in the builder chain: that
+            // argument is evaluated before `run` starts, so a second launch would
+            // open the history database and apply the retention purge on its way to
+            // being killed by the single-instance guard above. Nothing can ask for
+            // this state before setup returns — the webviews created a few lines
+            // earlier cannot run script until the event loop turns.
+            app.manage(AppState::default());
+
             let handle = app.handle().clone();
 
             configure_overlay(&handle);

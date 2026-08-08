@@ -24,6 +24,52 @@ least context, at the moment they have the least time.
 
 Nothing yet.
 
+## [0.1.1] - 2026-08-08
+
+A fix release. The visible complaint was that the Flow Bar could multiply into
+several copies of itself, each drawn inside an opaque rectangle. The bar was
+innocent: OpenVoice could be running several times over, and each copy was
+showing its own.
+
+Worth upgrading to even if you never saw duplicate bars — the same fault meant
+several copies could be holding the microphone, decoding the same audio, and
+writing the same history database at once, none of which is visible from the
+interface.
+
+### Fixed
+
+- **Launching OpenVoice while it is already running no longer starts a second
+  copy of it.** Closing the Hub hides it rather than quitting, which is
+  deliberate — a dictation tool that stops working when you close its window is
+  not available when you need it. But nothing stopped the *next* launch from
+  starting a complete second app: another global keyboard hook on the same
+  chord, another Flow Bar, another 1.6 GB of weights, and two processes writing
+  the same history database and overlay placement. Every hotkey hold then opened
+  the microphone once per copy, transcribed the same audio that many times, and
+  raced to inject the results into each other. Launching again now raises the
+  window of the copy already running, which is what it was always meant to mean.
+  The duplicates were easiest to notice after "Hide for an hour", because that
+  kept each new copy's bar hidden until a dictation forced it on screen — so
+  they arrived all at once, on one keypress, looking like one window gone wrong.
+- **The Flow Bar no longer flashes a dark rectangle around itself.** The
+  overlay window is transparent, but transparency was applied from a script that
+  runs after the first paint, while the app's black canvas was painted the
+  moment the stylesheet loaded. The window filled itself in for the whole gap
+  between the two. The canvas is now something each window opts into, so the
+  overlay has nothing to fall back to; the window is also declared at the size
+  of the idle pill rather than 280×52, so it no longer appears oversized and
+  then shrinks.
+- **The Flow Bar's right-click menu now closes when you start dictating.** Its
+  only dismissal path was losing window focus — which cannot happen to a window
+  built never to take focus. Opening the menu and then dictating left the panel
+  standing open behind the bar as an opaque block, with no way to click away
+  from it.
+- **Auto-placement is no longer recorded as a position you chose.** The Windows
+  move loop swallows the mouse-up that ends a drag, so a click on the bar that
+  moved nothing could leave it looking permanently dragged; the next time the
+  app placed the bar itself, that placement came back as a drag, got snapped to
+  an edge, and was saved.
+
 ## [0.1.0] - 2026-08-03
 
 The first published build. Hotkey → capture → transcribe → format → inject →
@@ -220,5 +266,6 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/adityashelke04/OpenVoice/releases/tag/v0.1.0

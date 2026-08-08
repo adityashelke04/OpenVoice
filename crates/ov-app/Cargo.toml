@@ -24,6 +24,10 @@ ov-store.workspace = true
 
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
+# Closing the Hub only hides it, so a second launch would otherwise start a whole
+# second app: another keyboard hook on the same chord, another Flow Bar, another
+# 1.6 GB model. See the plugin registration in main.rs.
+tauri-plugin-single-instance = "2"
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
