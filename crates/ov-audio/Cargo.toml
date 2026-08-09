@@ -11,7 +11,7 @@ repository.workspace = true
 ov-core.workspace = true
 tracing.workspace = true
 cpal = "0.15"
-rubato = "0.15"
+rubato = "4.0"
 
 [lints.rust]
 missing_docs = "warn"
