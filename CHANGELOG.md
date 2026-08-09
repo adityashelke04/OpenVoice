@@ -61,6 +61,25 @@ never done anything now do what they say.
 
 ### Fixed
 
+- **Downloading a model works at all.** No model could ever be fetched by an
+  installed copy — including the very first download on a fresh machine, which
+  made a new install unusable unless it happened to find weights already cached.
+  Offline mode is read once by the download library when it starts and could not
+  be lifted afterwards, so every fetch failed claiming outgoing traffic was
+  disabled. This was present before this release and was invisible on any
+  machine that already had the models.
+- **The Speech model screen looks in the right place.** It reported "using
+  nothing on this computer" and offered to download models already present,
+  because it always looked under `%APPDATA%\OpenVoice\models`. That is only where
+  weights live for a standard install; if `OPENVOICE_PYTHON` or `HF_HOME` is set
+  the app uses a different cache, and the screen now asks the running engine
+  which one it is actually using.
+- **A model you have chosen but not downloaded no longer claims to be "In use".**
+  It reads "Selected — not downloaded", next to the Download button that will
+  fetch it.
+- **A failed update check reads like information rather than a fault.** Nothing
+  is wrong if no release has been published yet, or if you are offline, and the
+  message now says so while keeping the underlying detail.
 - **"Maximum recording" now has an effect.** Choosing 5 minutes still cut the
   recording off at 2: the whole `[limits]` section was written to disk and then
   ignored, because the engine started the session machine with built-in defaults

@@ -36,14 +36,47 @@ pub fn cache_dir_name(repo: &str) -> String {
     format!("models--{}", repo.replace('/', "--"))
 }
 
-/// Where a model's files live under the app's model root.
+/// The directory `huggingface_hub` will actually read and write.
 ///
-/// `root` is what the app passes as `HF_HOME`; `huggingface_hub` puts its blobs
-/// under a `hub` subdirectory of that, which is why this is not simply
-/// `root.join(name)`.
+/// This is not a constant, and assuming it was is what made the Models screen
+/// report "using nothing on this computer" on a machine holding 1.6 GB of
+/// weights. Three cases, in the order the library itself resolves them:
+///
+/// * `model_dir` — what the app sets for an **installed** copy, so weights land
+///   somewhere uninstalling can reclaim.
+/// * `HF_HUB_CACHE` / `HF_HOME` — set by the user or by a developer with a shared
+///   cache. An installed copy that falls back to a repository checkout (because
+///   `OPENVOICE_PYTHON` is set, which the setup instructions tell people to do)
+///   takes this path, not the one above.
+/// * The library's own default, `~/.cache/huggingface/hub`.
+///
+/// The caller passes whatever the running sidecar was configured with, so the
+/// screen reports on the cache actually in use rather than the one it would have
+/// used under different circumstances.
 #[must_use]
-pub fn cache_path(root: &Path, spec: &ModelSpec) -> PathBuf {
-    root.join("hub").join(cache_dir_name(spec.repo))
+pub fn hub_dir(model_dir: Option<&Path>) -> PathBuf {
+    if let Some(dir) = model_dir {
+        return dir.join("hub");
+    }
+    // `HF_HUB_CACHE` already points *at* the hub directory; `HF_HOME` is its
+    // parent. Getting that distinction backwards would look like an empty cache.
+    if let Some(cache) = std::env::var_os("HF_HUB_CACHE") {
+        return PathBuf::from(cache);
+    }
+    if let Some(home) = std::env::var_os("HF_HOME") {
+        return PathBuf::from(home).join("hub");
+    }
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    home.join(".cache").join("huggingface").join("hub")
+}
+
+/// Where a model's files live inside a hub directory.
+#[must_use]
+pub fn cache_path(hub: &Path, spec: &ModelSpec) -> PathBuf {
+    hub.join(cache_dir_name(spec.repo))
 }
 
 /// Bytes a model occupies, or `None` when it is not present at all.
@@ -52,8 +85,8 @@ pub fn cache_path(root: &Path, spec: &ModelSpec) -> PathBuf {
 /// directory left behind by a failed transfer is present-but-empty, and the UI
 /// should offer to remove it rather than claim there is nothing there.
 #[must_use]
-pub fn installed_bytes(root: &Path, spec: &ModelSpec) -> Option<u64> {
-    let path = cache_path(root, spec);
+pub fn installed_bytes(hub: &Path, spec: &ModelSpec) -> Option<u64> {
+    let path = cache_path(hub, spec);
     if !path.is_dir() {
         return None;
     }
@@ -141,8 +174,8 @@ pub fn purge_recordings(dir: &Path, days: u32) -> Result<u64> {
 ///
 /// Removing a model that is not there succeeds. The caller is asking for it to be
 /// gone, and it is.
-pub fn remove(root: &Path, spec: &ModelSpec) -> Result<()> {
-    let path = cache_path(root, spec);
+pub fn remove(hub: &Path, spec: &ModelSpec) -> Result<()> {
+    let path = cache_path(hub, spec);
     if !path.exists() {
         return Ok(());
     }
@@ -177,18 +210,18 @@ mod tests {
         // and somehow empty" -- which is a broken transfer worth offering to
         // clear rather than something to hide.
         let dir = std::env::temp_dir().join(format!("ov-store-{}", std::process::id()));
-        assert_eq!(installed_bytes(&dir, spec()), None);
+        assert_eq!(installed_bytes(&dir.join("hub"), spec()), None);
     }
 
     #[test]
     fn counts_the_bytes_in_a_present_model() {
         let root = std::env::temp_dir().join(format!("ov-store-present-{}", std::process::id()));
-        let path = cache_path(&root, spec());
+        let path = cache_path(&root.join("hub"), spec());
         std::fs::create_dir_all(path.join("snapshots/abc")).unwrap();
         std::fs::write(path.join("snapshots/abc/model.bin"), vec![0u8; 2048]).unwrap();
         std::fs::write(path.join("refs"), vec![0u8; 16]).unwrap();
 
-        assert_eq!(installed_bytes(&root, spec()), Some(2064));
+        assert_eq!(installed_bytes(&root.join("hub"), spec()), Some(2064));
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -196,9 +229,9 @@ mod tests {
     #[test]
     fn an_empty_directory_is_present_with_zero_bytes() {
         let root = std::env::temp_dir().join(format!("ov-store-empty-{}", std::process::id()));
-        std::fs::create_dir_all(cache_path(&root, spec())).unwrap();
+        std::fs::create_dir_all(cache_path(&root.join("hub"), spec())).unwrap();
 
-        assert_eq!(installed_bytes(&root, spec()), Some(0));
+        assert_eq!(installed_bytes(&root.join("hub"), spec()), Some(0));
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -206,15 +239,15 @@ mod tests {
     #[test]
     fn remove_deletes_the_tree_and_is_idempotent() {
         let root = std::env::temp_dir().join(format!("ov-store-rm-{}", std::process::id()));
-        let path = cache_path(&root, spec());
+        let path = cache_path(&root.join("hub"), spec());
         std::fs::create_dir_all(path.join("snapshots/abc")).unwrap();
         std::fs::write(path.join("snapshots/abc/model.bin"), vec![0u8; 32]).unwrap();
 
-        remove(&root, spec()).unwrap();
-        assert_eq!(installed_bytes(&root, spec()), None);
+        remove(&root.join("hub"), spec()).unwrap();
+        assert_eq!(installed_bytes(&root.join("hub"), spec()), None);
 
         // Asking again is not an error: the caller wants it gone, and it is.
-        remove(&root, spec()).unwrap();
+        remove(&root.join("hub"), spec()).unwrap();
 
         std::fs::remove_dir_all(&root).ok();
     }

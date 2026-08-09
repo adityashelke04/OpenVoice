@@ -206,12 +206,38 @@ def online() -> Iterator[None]:
     Restored in a ``finally`` so a failed or cancelled download cannot leave the
     process online — that would silently reintroduce the 171 s load on every
     subsequent start, with nothing to connect it back to the failure.
+
+    # Why the environment variable is not enough
+
+    ``huggingface_hub`` reads ``HF_HUB_OFFLINE`` **once, at import**, into
+    ``huggingface_hub.constants.HF_HUB_OFFLINE``. Every download path then consults
+    that constant, not the environment. So clearing the variable here — which is
+    all this function used to do — changed nothing at all once the library had been
+    imported, and it always had been: :func:`model_is_cached` runs first and
+    imports it.
+
+    The result was that *no* download ever succeeded on an installed copy. Every
+    fetch failed with ``LocalEntryNotFoundError`` complaining that outgoing traffic
+    was disabled, including the first-run fetch of the default model — which made
+    a fresh install unusable on any machine without a pre-populated cache. It went
+    unnoticed because a developer's machine always has one.
+
+    So the constant is patched too, and restored alongside the variable.
     """
     previous = os.environ.get("HF_HUB_OFFLINE")
     os.environ.pop("HF_HUB_OFFLINE", None)
+
+    # Imported here rather than at module scope: this module is imported by the
+    # protocol layer at startup, and pulling in huggingface_hub eagerly would add
+    # its import cost to every launch.
+    from huggingface_hub import constants as hf_constants
+
+    was_offline = hf_constants.HF_HUB_OFFLINE
+    hf_constants.HF_HUB_OFFLINE = False
     try:
         yield
     finally:
+        hf_constants.HF_HUB_OFFLINE = was_offline
         if previous is not None:
             os.environ["HF_HUB_OFFLINE"] = previous
 

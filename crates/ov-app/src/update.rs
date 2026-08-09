@@ -79,7 +79,40 @@ pub async fn check(app: &AppHandle) -> Result<UpdateStatus, String> {
             current_version: update.current_version.clone(),
         }),
         Ok(None) => Ok(UpdateStatus::none()),
-        Err(e) => Err(format!("could not check for updates: {e}")),
+        Err(e) => Err(explain(&e.to_string())),
+    }
+}
+
+/// Turn an updater failure into something worth reading.
+///
+/// The raw text is written for whoever wrote the plugin. "Could not fetch a valid
+/// release JSON from the remote" describes an HTTP response; it does not tell
+/// someone whether their app is broken, their network is down, or nothing has
+/// been published yet — and the alarming reading is the wrong one, because by far
+/// the most common cause is the last.
+///
+/// The detail is kept, after the explanation, so a real fault is still
+/// diagnosable from a screenshot.
+fn explain(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    // A missing or unparseable manifest is what a repository with no published
+    // update feed returns, and it is indistinguishable from being offline
+    // without inspecting the status code the plugin has already discarded.
+    let benign = lower.contains("release json")
+        || lower.contains("404")
+        || lower.contains("not found")
+        || lower.contains("status code")
+        || lower.contains("dns")
+        || lower.contains("connect");
+
+    if benign {
+        format!(
+            "No update information was available. You may be offline, or no \
+             release has been published yet — either way this copy keeps working. \
+             ({raw})"
+        )
+    } else {
+        format!("Could not check for updates: {raw}")
     }
 }
 
@@ -140,4 +173,37 @@ pub fn check_on_launch(app: &AppHandle, enabled: bool) {
             Err(e) => tracing::info!(reason = %e, "update check did not complete"),
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::explain;
+
+    #[test]
+    fn a_missing_manifest_reads_as_ordinary_rather_than_broken() {
+        // The exact string a repository with no published update feed produces.
+        let msg = explain("Could not fetch a valid release JSON from the remote");
+        assert!(
+            msg.starts_with("No update information was available"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn being_offline_reads_the_same_way() {
+        assert!(explain("failed to connect to host").starts_with("No update information"));
+    }
+
+    #[test]
+    fn the_original_text_is_always_kept_for_diagnosis() {
+        // A screenshot has to remain enough to debug from.
+        assert!(explain("some novel failure").contains("some novel failure"));
+        assert!(explain("404 not found").contains("404 not found"));
+    }
+
+    #[test]
+    fn an_unrecognised_failure_is_not_dressed_up_as_routine() {
+        let msg = explain("signature verification failed");
+        assert!(msg.starts_with("Could not check for updates"), "{msg}");
+    }
 }

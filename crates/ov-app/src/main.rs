@@ -18,6 +18,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![warn(clippy::all)]
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ov_core::event::Event;
@@ -358,12 +359,12 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 /// be unusable during exactly the first-run download it needs to explain.
 #[tauri::command]
 fn list_models(state: tauri::State<'_, AppState>) -> Vec<ModelRow> {
-    let root = history::data_dir().join("models");
+    let hub = model_hub_dir(&state);
     let in_use = state.settings.get().model;
     ov_asr::catalog::CATALOG
         .iter()
         .map(|spec| {
-            let installed = ov_asr::store::installed_bytes(&root, spec);
+            let installed = ov_asr::store::installed_bytes(&hub, spec);
             ModelRow {
                 spec: *spec,
                 installed: installed.is_some(),
@@ -372,6 +373,29 @@ fn list_models(state: tauri::State<'_, AppState>) -> Vec<ModelRow> {
             }
         })
         .collect()
+}
+
+/// The model cache in use, asked of the running engine wherever possible.
+///
+/// The engine is the only thing that knows: an installed copy keeps weights under
+/// its own data directory, but falls back to a repository checkout when
+/// `OPENVOICE_PYTHON` is set — and then the cache is wherever `HF_HOME` points.
+/// Hardcoding the first case made the Models screen report an empty cache on a
+/// machine holding 1.6 GB of weights, and offer to download models already
+/// present.
+///
+/// Before the engine is up, resolve the same way it will: the installed default,
+/// unless the environment overrides it.
+fn model_hub_dir(state: &tauri::State<'_, AppState>) -> PathBuf {
+    if let Some(engine) = state.engine.lock().expect("engine").as_ref() {
+        return engine.hub_dir();
+    }
+    let installed_default = history::data_dir().join("models");
+    if std::env::var_os("HF_HUB_CACHE").is_some() || std::env::var_os("HF_HOME").is_some() {
+        ov_asr::store::hub_dir(None)
+    } else {
+        ov_asr::store::hub_dir(Some(&installed_default))
+    }
 }
 
 /// A catalogue entry plus what this machine knows about it.
@@ -427,8 +451,8 @@ fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<(), Str
         );
     }
     let spec = ov_asr::catalog::resolve(&id).map_err(|e| e.to_string())?;
-    let root = history::data_dir().join("models");
-    ov_asr::store::remove(&root, spec).map_err(|e| e.to_string())?;
+    let hub = model_hub_dir(&state);
+    ov_asr::store::remove(&hub, spec).map_err(|e| e.to_string())?;
     tracing::info!(model = %id, "deleted model weights");
     Ok(())
 }

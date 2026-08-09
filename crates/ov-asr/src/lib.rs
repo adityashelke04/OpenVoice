@@ -461,6 +461,18 @@ impl SidecarTranscriber {
         self.ensure_model_named(&self.cfg.model, on_progress)
     }
 
+    /// The cache directory this sidecar is actually using.
+    ///
+    /// Must be asked of the live configuration rather than assumed. An installed
+    /// copy normally keeps weights under its own data directory, but it falls
+    /// back to a repository checkout when `OPENVOICE_PYTHON` is set — and then
+    /// the cache is wherever `HF_HOME` points instead. Guessing produced a Models
+    /// screen that reported an empty cache on a machine holding 1.6 GB.
+    #[must_use]
+    pub fn hub_dir(&self) -> PathBuf {
+        store::hub_dir(self.cfg.model_dir.as_deref())
+    }
+
     /// Fetch *any* catalogued model's weights, not only the loaded one.
     ///
     /// Backs the per-model Download button. Downloading is independent of

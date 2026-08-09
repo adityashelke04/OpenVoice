@@ -499,11 +499,16 @@ export function ModelsScreen({
                 <div className="model-main">
                 <div className="hstack">
                   <span className="t-subheading">{name}</span>
-                  {active && (
+                  {/* "In use" only when it is both chosen *and* present. A model
+                      you have selected but not downloaded is Selected, not in
+                      use — claiming otherwise next to a Download button was
+                      simply contradictory. */}
+                  {active && m.installed && (
                     <Badge dot tone="live">
                       In use
                     </Badge>
                   )}
+                  {active && !m.installed && <Badge>Selected — not downloaded</Badge>}
                   {m.englishOnly && <Badge>English only</Badge>}
                   {m.installed && !active && <Badge>On this computer</Badge>}
                 </div>

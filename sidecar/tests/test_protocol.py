@@ -208,6 +208,40 @@ class TestOnline:
             pass
         assert "HF_HUB_OFFLINE" not in os.environ
 
+    def test_actually_lifts_offline_mode_in_huggingface_hub(self):
+        # The regression that made every download fail on an installed copy,
+        # including the first-run fetch of the default model.
+        #
+        # huggingface_hub reads HF_HUB_OFFLINE once at import into a module
+        # constant, and every download path consults that constant rather than
+        # the environment. Clearing the variable -- which is all this used to do
+        # -- therefore changed nothing, and the failure was invisible on any
+        # machine with a warm cache, which is every developer's.
+        from huggingface_hub import constants as hf_constants
+
+        before = hf_constants.HF_HUB_OFFLINE
+        hf_constants.HF_HUB_OFFLINE = True
+        try:
+            with online():
+                assert hf_constants.HF_HUB_OFFLINE is False, (
+                    "the environment variable alone does not re-enable downloads"
+                )
+            assert hf_constants.HF_HUB_OFFLINE is True, "offline mode must come back"
+        finally:
+            hf_constants.HF_HUB_OFFLINE = before
+
+    def test_restores_the_constant_after_a_failure(self):
+        from huggingface_hub import constants as hf_constants
+
+        before = hf_constants.HF_HUB_OFFLINE
+        hf_constants.HF_HUB_OFFLINE = True
+        try:
+            with pytest.raises(RuntimeError), online():
+                raise RuntimeError("connection reset")
+            assert hf_constants.HF_HUB_OFFLINE is True
+        finally:
+            hf_constants.HF_HUB_OFFLINE = before
+
 
 class TestLoadPcm16Wav:
     """The reader that replaced PyAV for this sidecar's own WAV files.

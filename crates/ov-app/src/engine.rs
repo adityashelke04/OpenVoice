@@ -193,6 +193,12 @@ impl Engine {
         tracing::info!(language = ?settings.config.language, "transcription language changed");
     }
 
+    /// The model cache this engine is really using, for the Models screen.
+    #[must_use]
+    pub fn hub_dir(&self) -> std::path::PathBuf {
+        self.transcriber.hub_dir()
+    }
+
     /// Fetch a model's weights now, without switching to it or restarting.
     ///
     /// Downloading and loading are separate things. This writes to the shared
