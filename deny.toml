@@ -66,6 +66,21 @@ allow = ["MPL-2.0"]
 name = "option-ext"
 allow = ["MPL-2.0"]
 
+# CDLA-Permissive-2.0 is a *data* licence, and this crate is data: Mozilla's
+# root CA bundle, shipped so TLS can verify a certificate chain without asking
+# the operating system. It arrived with `tauri-plugin-updater` (ADR 0005) —
+# checking for a new release means an HTTPS request, and an HTTPS request means
+# a trust store.
+#
+# The licence is permissive with no copyleft and no source-disclosure
+# obligation; it governs redistribution of the certificate list, not our code.
+# Scoped to this crate rather than added to the blanket allowlist, because the
+# next crate arriving under a data licence should be a decision someone makes
+# rather than something that inherits an exemption granted here.
+[[licenses.exceptions]]
+name = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
+
 [bans]
 # Duplicate versions are noise, not danger, in a workspace pulling in Tauri.
 # Warn so the number stays visible; don't fail a PR over a transitive bump.
