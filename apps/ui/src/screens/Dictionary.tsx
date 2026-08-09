@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Empty, Input, Notice } from "../ui";
-import { previewFormat, type Settings as S } from "../engine/settings";
+import { addDictionaryTerm, previewFormat, type Settings as S } from "../engine/settings";
 import "./screens.css";
 
 export function DictionaryScreen({
@@ -56,17 +56,8 @@ export function DictionaryScreen({
   }, [trial, terms, run]);
 
   const add = () => {
-    const w = written.trim();
-    const h = heard.trim().toLowerCase();
-    if (!w || !h) return;
-    patch((s) => {
-      const existing = s.dictionary.find((t) => t.written === w);
-      if (existing) {
-        if (!existing.spoken.includes(h)) existing.spoken.push(h);
-      } else {
-        s.dictionary.unshift({ written: w, spoken: [h], group: "code" });
-      }
-    });
+    if (!written.trim() || !heard.trim()) return;
+    patch((s) => addDictionaryTerm(s, heard, written));
     setHeard("");
     setWritten("");
   };

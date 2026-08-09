@@ -48,6 +48,12 @@ never done anything now do what they say.
 - **The dictation key can be changed.** Eighteen keys to choose from, including
   F13–F24 for anyone with a macro key or a remapper. The Hub and the tray now name
   the key you actually bound instead of always saying "Right Ctrl".
+- **Teach it from a dictation that came out wrong.** Every entry in Recent now
+  has a **Fix a word** button. It shows what OpenVoice actually *heard* — which
+  you have never been able to see before — and you click the words it got wrong,
+  type what you meant, and save. It applies to the very next thing you dictate.
+  Knowing that `kubectl` arrived as "cube control" is most of the work; guessing
+  it from the tidied-up output is not.
 - **Models can be downloaded and removed from the app.** The Speech model screen
   now shows which models are on your disk, how much room each takes, and the
   total. Download fetches a model without switching to it or restarting, so you

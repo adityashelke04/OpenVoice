@@ -309,6 +309,68 @@
   opacity: 1;
 }
 
+/* A row that can expand. The grid above assumes two columns on one line, so a
+   row with a panel underneath becomes a single column holding both. */
+.row-stack {
+  grid-template-columns: 1fr;
+}
+
+.row-main {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--s-5);
+  align-items: start;
+}
+
+/* --------------------------------------------------------- Fix a word ----- */
+
+.fix {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+  padding: var(--s-4);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+}
+
+.fix-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+/* Each heard word is a button because the spoken form is nearly always a couple
+   of adjacent words lifted straight out of this line. Monospace so a
+   mistranscription is read as data rather than as prose. */
+.fix-word {
+  padding: 2px var(--s-3);
+  background: var(--surface-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  color: var(--body);
+  font: 400 13px/1.5 var(--font-mono);
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.fix-word:hover {
+  border-color: var(--live);
+  color: var(--ink);
+}
+
+.fix-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-3);
+}
+
+.fix-form > label {
+  flex: 1 1 180px;
+}
+
 /* ------------------------------------------------------------------ Tabs -- */
 
 .tabs {

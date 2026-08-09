@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Badge, Button, Card, Empty, Kbd, Notice, Stat, Waveform } from "../ui";
+import { Badge, Button, Card, Empty, Input, Kbd, Notice, Stat, Waveform } from "../ui";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
 import type { Download } from "../engine/useLiveEngine";
 import {
@@ -21,6 +21,10 @@ import {
   type Row,
   type Totals,
 } from "../engine/stats";
+import {
+  addDictionaryTerm,
+  type Settings as SettingsDoc,
+} from "../engine/settings";
 import { DictionaryScreen } from "../screens/Dictionary";
 import { AdvancedScreen, ProfilesScreen } from "../screens/Profiles";
 import { ModelsScreen, SettingsScreen, useSettings } from "../screens/Settings";
@@ -305,7 +309,9 @@ export function Hub() {
                 }
               />
             ) : (
-              shown.map((r, i) => <HistoryRow key={`${r.created_at}-${i}`} row={r} />)
+              shown.map((r, i) => (
+                <HistoryRow key={`${r.created_at}-${i}`} row={r} patch={patch} />
+              ))
             )}
           </div>
         </Card>
@@ -422,7 +428,90 @@ function StartupError({ error }: { error: string }) {
   );
 }
 
-function HistoryRow({ row }: { row: Row }) {
+/** Teach the dictionary from a dictation that came out wrong.
+ *
+ * The whole point is the first line: it shows what the model actually *heard*,
+ * which is information the user has never had access to. Knowing that "kubectl"
+ * arrived as "cube control" is most of the work — once you can see the
+ * mishearing, correcting it is obvious. Guessing at it from the formatted output
+ * is not.
+ *
+ * The heard words are buttons because the spoken form is almost always a couple
+ * of adjacent words lifted straight out of that line, and retyping them by hand
+ * to teach a tool that a word was misheard is exactly the kind of friction that
+ * stops people bothering.
+ */
+function FixRow({
+  row,
+  patch,
+  onDone,
+}: {
+  row: Row;
+  patch: (fn: (s: SettingsDoc) => void) => void;
+  onDone: () => void;
+}) {
+  const [heard, setHeard] = useState("");
+  const [written, setWritten] = useState("");
+
+  const words = row.raw_text.split(/\s+/).filter(Boolean);
+  const canSave = heard.trim().length > 0 && written.trim().length > 0;
+
+  const save = () => {
+    if (!canSave) return;
+    patch((s) => addDictionaryTerm(s, heard, written));
+    onDone();
+  };
+
+  return (
+    <div className="fix">
+      <div className="t-caption">OpenVoice heard — click the words it got wrong</div>
+      <div className="fix-words">
+        {words.map((w, i) => (
+          <button
+            key={`${w}-${i}`}
+            type="button"
+            className="fix-word"
+            onClick={() => setHeard((h) => (h ? `${h} ${w}` : w))}
+          >
+            {w}
+          </button>
+        ))}
+      </div>
+      <div className="fix-form">
+        <Input
+          label="You said"
+          placeholder="cube control"
+          value={heard}
+          onChange={(e) => setHeard(e.target.value)}
+        />
+        <Input
+          label="Write it as"
+          placeholder="kubectl"
+          value={written}
+          onChange={(e) => setWritten(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+        />
+        <Button variant="primary" onClick={save} disabled={!canSave}>
+          Save
+        </Button>
+        <Button variant="ghost" onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+      <p className="t-caption">
+        Applies to the next thing you dictate. Nothing already written changes.
+      </p>
+    </div>
+  );
+}
+
+function HistoryRow({
+  row,
+  patch,
+}: {
+  row: Row;
+  patch: (fn: (s: SettingsDoc) => void) => void;
+}) {
   // A badge on every row was noise, not signal: "delivered" is the outcome for
   // almost every dictation, so repeating it down the whole list said nothing a
   // reader didn't already assume. Green is reserved elsewhere in this app for
@@ -430,39 +519,69 @@ function HistoryRow({ row }: { row: Row }) {
   // history row diluted that into decoration. Silence now means "this worked
   // as expected"; a badge appears only when something didn't.
   const failed = row.outcome !== "delivered";
+  const [fixing, setFixing] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // A copy that says nothing is indistinguishable from a copy that failed, and
+  // the failure is silent: `navigator.clipboard` is undefined without a secure
+  // context and `writeText` rejects when the window is not focused.
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(row.final_text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
-    <div className="row">
-      <div style={{ minWidth: 0 }}>
-        <div className="t-body" style={{ color: "var(--ink)" }}>
-          {row.final_text}
+    <div className="row row-stack">
+      <div className="row-main">
+        <div style={{ minWidth: 0 }}>
+          <div className="t-body" style={{ color: "var(--ink)" }}>
+            {row.final_text}
+          </div>
+          <div className="hstack" style={{ marginTop: 6 }}>
+            {failed && (
+              <Badge dot tone="warn">
+                {row.outcome.replace(/_/g, " ")}
+              </Badge>
+            )}
+            <span className="t-caption">{row.target_app || "unknown app"}</span>
+            <span className="t-caption">{Math.round(row.latency_ms)} ms</span>
+            <span className="t-caption">{when(row.created_at)}</span>
+          </div>
         </div>
-        <div className="hstack" style={{ marginTop: 6 }}>
-          {failed && (
-            <Badge dot tone="warn">
-              {row.outcome.replace(/_/g, " ")}
-            </Badge>
-          )}
-          <span className="t-caption">{row.target_app || "unknown app"}</span>
-          <span className="t-caption">{Math.round(row.latency_ms)} ms</span>
-          <span className="t-caption">{when(row.created_at)}</span>
+        <div className="row-actions">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setFixing((f) => !f)}
+            aria-expanded={fixing}
+          >
+            {fixing ? "Close" : "Fix a word"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={copy}>
+            {copied ? "Copied" : "Copy"}
+          </Button>
         </div>
       </div>
-      <div className="row-actions">
-        <Button size="sm" variant="ghost" onClick={() => navigator.clipboard?.writeText(row.final_text)}>
-          Copy
-        </Button>
-      </div>
+      {fixing && <FixRow row={row} patch={patch} onDone={() => setFixing(false)} />}
     </div>
   );
 }
 
 function when(ms: number): string {
-  const mins = Math.round((Date.now() - ms) / 60000);
+  // Floor, not round, at every step. Rounding twice made 55 minutes read "1h
+  // ago" and 20 hours read "1d ago" -- an elapsed time should never claim more
+  // time has passed than actually has.
+  const mins = Math.floor((Date.now() - ms) / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
-  const h = Math.round(mins / 60);
+  const h = Math.floor(mins / 60);
   if (h < 24) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
 export { elapsed };

@@ -68,6 +68,41 @@ export interface Profile {
   dictionaries: string[];
 }
 
+/** Teach the dictionary one correction, in place.
+ *
+ * Shared by the Dictionary screen and the Fix action on a history row, so both
+ * behave identically — and so the matching rule below lives in exactly one file.
+ *
+ * Written forms are matched **case-insensitively** when deciding whether an
+ * entry already exists. `useEffect` and `useeffect` are the same word to a
+ * person, and letting both exist produced two entries competing for the same
+ * spoken phrase, of which the formatter silently keeps whichever was compiled
+ * first. The user's own capitalisation is kept — it is the thing they are
+ * teaching — but a second spelling extends the existing entry instead of
+ * starting a rival one.
+ *
+ * Returns what happened, so the caller can say so rather than leaving the user
+ * unsure whether anything was saved.
+ */
+export function addDictionaryTerm(
+  s: Settings,
+  spoken: string,
+  written: string,
+): "added" | "extended" | "already-known" {
+  const heard = spoken.trim().toLowerCase();
+  const write = written.trim();
+  if (!heard || !write) return "already-known";
+
+  const existing = s.dictionary.find((t) => t.written.toLowerCase() === write.toLowerCase());
+  if (!existing) {
+    s.dictionary.unshift({ written: write, spoken: [heard], group: "code" });
+    return "added";
+  }
+  if (existing.spoken.includes(heard)) return "already-known";
+  existing.spoken.push(heard);
+  return "extended";
+}
+
 export interface Settings {
   config: Config;
   model: string;
