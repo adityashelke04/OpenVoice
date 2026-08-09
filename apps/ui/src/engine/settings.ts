@@ -91,6 +91,33 @@ export const openDataDir = () => call<void>("open_data_dir");
 export const getLogPath = () => call<string>("get_log_path");
 export const restartApp = () => call<void>("restart_app");
 
+/** Keys that can be bound, and how to name them on screen.
+ *
+ *  Mirrors `ov_core::config::Key::ALL` and `Key::label()`. The serde name is the
+ *  snake_case value stored in settings.toml; the label is what a person reads.
+ *  Ordered by how likely the key is to be free, not alphabetically.
+ */
+export const HOTKEYS: readonly [value: string, label: string][] = [
+  ["right_ctrl", "Right Ctrl"],
+  ["right_alt", "Right Alt"],
+  ["right_shift", "Right Shift"],
+  ["caps_lock", "Caps Lock"],
+  ["scroll_lock", "Scroll Lock"],
+  ["pause", "Pause"],
+  ["f13", "F13"],
+  ["f14", "F14"],
+  ["f15", "F15"],
+  ["f16", "F16"],
+  ["f17", "F17"],
+  ["f18", "F18"],
+  ["f19", "F19"],
+  ["f20", "F20"],
+  ["f21", "F21"],
+  ["f22", "F22"],
+  ["f23", "F23"],
+  ["f24", "F24"],
+];
+
 /** What an update check found. Mirrors `ov_app::update::UpdateStatus`. */
 export interface UpdateStatus {
   available: boolean;

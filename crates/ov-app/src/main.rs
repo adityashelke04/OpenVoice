@@ -642,6 +642,18 @@ fn configure_overlay(app: &AppHandle) {
 #[cfg(not(windows))]
 fn configure_overlay(_app: &AppHandle) {}
 
+/// The tray hint, built from the binding the user actually has.
+fn tray_tooltip(app: &AppHandle) -> String {
+    use ov_core::config::ActivationMode;
+
+    let config = app.state::<AppState>().settings.get().config;
+    let key = config.chord.key.label();
+    match config.activation {
+        ActivationMode::PushToTalk => format!("OpenVoice — hold {key} to dictate"),
+        ActivationMode::Toggle => format!("OpenVoice — press {key} to start and stop"),
+    }
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open OpenVoice", true, None::<&str>)?;
     let paste = MenuItem::with_id(app, "paste", "Paste last transcript", true, None::<&str>)?;
@@ -653,7 +665,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().expect("bundled icon").clone())
-        .tooltip("OpenVoice — hold Right Ctrl to dictate")
+        // Names the key that is actually bound, and the gesture that matches the
+        // activation mode. A tray tooltip telling the user to hold a key they
+        // rebound is a small lie in the one place they look when confused.
+        .tooltip(tray_tooltip(app))
         .menu(&menu)
         // The menu must not open on a plain left click: left click shows the Hub,
         // which is what people reach for.

@@ -11,7 +11,6 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ov_core::config::SessionLimits;
 use ov_core::event::Event;
 use ov_core::ports::{
     AppContext, AudioSource, DecodeHint, HistoryStore, HotkeyEvent, HotkeyListener, LevelFrame,
@@ -441,7 +440,11 @@ pub fn start(
     let ready = Ready {
         model: model.to_string(),
         device: transcriber.model_id(),
-        shortcut: "Right Ctrl".into(),
+        // The key actually bound, not a guess. This was the literal string
+        // "Right Ctrl", which was true only until someone rebound it — and the
+        // Hub shows this on the home screen as the instruction for how to use
+        // the app, so being wrong here is worse than being absent.
+        shortcut: config.chord.key.label().into(),
         mic,
     };
 
@@ -502,8 +505,16 @@ pub fn start(
     {
         let e = engine.clone();
         let tx2 = tx.clone();
+        let limits = config.limits;
+        let activation = config.activation;
         std::thread::spawn(move || {
-            let mut machine = SessionMachine::new(SessionLimits::default());
+            // The user's own limits and activation style, not the defaults.
+            //
+            // This was `SessionLimits::default()`, which quietly discarded the
+            // whole `[limits]` section: the "Maximum recording" setting in the UI
+            // wrote a value to disk that nothing ever read, so choosing 5 minutes
+            // still cut the recording off at 2.
+            let mut machine = SessionMachine::with_activation(limits, activation);
             for input in rx {
                 for effect in machine.handle(input) {
                     execute(&e, &tx2, effect);

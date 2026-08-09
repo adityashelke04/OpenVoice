@@ -6,10 +6,11 @@
  */
 
 import { useEffect, useState } from "react";
-import { Badge, Button, Card, Kbd, Notice, Select, Toggle } from "../ui";
+import { Badge, Button, Card, Notice, Select, Toggle } from "../ui";
 import {
   checkForUpdate,
   formatSize,
+  HOTKEYS,
   installUpdate,
   listMicrophones,
   listModels,
@@ -209,8 +210,41 @@ export function SettingsScreen({
 
       <Card title="Dictation">
         <div className="srows">
-          <Row label="Shortcut" hint="Hold this key while you speak, then let go.">
-            <Kbd>Right Ctrl</Kbd>
+          <Row
+            label="Shortcut"
+            hint={
+              c.activation === "toggle"
+                ? "Press this key to start, and press it again to stop. Takes effect after a restart."
+                : "Hold this key while you speak, then let go. Takes effect after a restart."
+            }
+          >
+            <Select
+              options={HOTKEYS.map(([, label]) => label)}
+              value={HOTKEYS.find(([v]) => v === c.chord.key)?.[1] ?? "Right Ctrl"}
+              onChange={(e) =>
+                patch((s) => {
+                  const found = HOTKEYS.find(([, label]) => label === e.target.value);
+                  if (found) s.config.chord.key = found[0];
+                })
+              }
+              style={{ width: 160 }}
+            />
+          </Row>
+          <Row
+            label="How it starts"
+            hint="Hold to talk keeps the microphone open only while the key is down, so it cannot be left listening by accident. Press to start and stop is easier on your hand for anything long. Takes effect after a restart."
+          >
+            <Select
+              options={["Hold to talk", "Press to start and stop"]}
+              value={c.activation === "toggle" ? "Press to start and stop" : "Hold to talk"}
+              onChange={(e) =>
+                patch((s) => {
+                  s.config.activation =
+                    e.target.value === "Press to start and stop" ? "toggle" : "push_to_talk";
+                })
+              }
+              style={{ width: 220 }}
+            />
           </Row>
           <Row
             label="Microphone"

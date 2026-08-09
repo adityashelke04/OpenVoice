@@ -26,7 +26,7 @@
 //! 4. Key auto-repeat cannot start a second capture.
 //! 5. A stuck key cannot record past `max_duration_ms`.
 
-use crate::config::SessionLimits;
+use crate::config::{ActivationMode, SessionLimits};
 use crate::event::{Event, NoticeLevel};
 use crate::types::{ForegroundApp, Millis, Outcome, SessionId, Transcript};
 use std::collections::VecDeque;
@@ -255,6 +255,19 @@ impl Active {
 #[derive(Debug)]
 pub struct SessionMachine {
     limits: SessionLimits,
+    /// Whether the key is held to speak, or pressed once to start and again to
+    /// stop.
+    activation: ActivationMode,
+    /// Whether the trigger key is physically down right now.
+    ///
+    /// Tracked even in push-to-talk, where the capture state would almost serve
+    /// instead, because toggle mode genuinely cannot work without it: Windows
+    /// delivers auto-repeat key-down events every ~30 ms while a key is held, and
+    /// they are indistinguishable from a real second press by any other means. A
+    /// second press is only genuine if a release came between, so this is what
+    /// separates "the user pressed again to stop" from "the user is still holding
+    /// the key down".
+    key_down: bool,
     next_id: u64,
     /// At most one live capture.
     capturing: Option<Active>,
@@ -264,11 +277,19 @@ pub struct SessionMachine {
 }
 
 impl SessionMachine {
-    /// Create a machine in the idle state.
+    /// Create a machine in the idle state, holding the key to speak.
     #[must_use]
     pub fn new(limits: SessionLimits) -> Self {
+        Self::with_activation(limits, ActivationMode::PushToTalk)
+    }
+
+    /// Create a machine in the idle state with an explicit activation style.
+    #[must_use]
+    pub fn with_activation(limits: SessionLimits, activation: ActivationMode) -> Self {
         Self {
             limits,
+            activation,
+            key_down: false,
             next_id: 1,
             capturing: None,
             pipeline: VecDeque::new(),
@@ -380,10 +401,24 @@ impl SessionMachine {
     ) {
         // The Windows low-level keyboard hook delivers auto-repeat key-down events
         // while a key is held. Without this guard a held hotkey would start a new
-        // capture roughly every 30 ms.
-        if self.capturing.is_some() {
+        // capture roughly every 30 ms — and in toggle mode it would start and stop
+        // one that often, which is worse.
+        if self.key_down {
             return;
         }
+        self.key_down = true;
+
+        // In toggle mode a press while capturing means "stop", which is the whole
+        // difference between the two modes. In push-to-talk it can only be a
+        // stray event, because the release that would have ended the capture has
+        // not arrived yet.
+        if self.capturing.is_some() {
+            if self.activation == ActivationMode::Toggle {
+                self.stop_capture(at, fx);
+            }
+            return;
+        }
+
         let id = SessionId(self.next_id);
         self.next_id += 1;
         self.capturing = Some(Active {
@@ -405,11 +440,29 @@ impl SessionMachine {
     }
 
     fn on_released(&mut self, at: Millis, fx: &mut Vec<Effect>) {
+        // Recorded in both modes. In toggle it is what arms the *next* press to be
+        // treated as genuine rather than as auto-repeat.
+        self.key_down = false;
+
+        if self.activation == ActivationMode::Toggle {
+            // Letting go does nothing: the session ends on the next press, or at
+            // the maximum-recording cutoff.
+            return;
+        }
+        self.stop_capture(at, fx);
+    }
+
+    /// End the live capture, keeping whatever audio it gathered.
+    ///
+    /// Shared by the key release in push-to-talk, the second press in toggle, and
+    /// the maximum-duration cutoff, so all three produce exactly the same effects.
+    /// They used to be written out separately, which is how they would drift.
+    fn stop_capture(&mut self, at: Millis, fx: &mut Vec<Effect>) {
         let Some(active) = self.capturing.as_mut() else {
             return;
         };
         if active.released_at.is_some() {
-            return; // already releasing; ignore duplicate key-up
+            return; // already stopping; ignore a duplicate
         }
         active.released_at = Some(at);
         fx.push(Effect::StopCapture { session: active.id });
@@ -595,7 +648,7 @@ impl SessionMachine {
     }
 
     fn on_tick(&mut self, at: Millis, fx: &mut Vec<Effect>) {
-        let Some(active) = self.capturing.as_mut() else {
+        let Some(active) = self.capturing.as_ref() else {
             return;
         };
         if active.released_at.is_some() {
@@ -604,8 +657,10 @@ impl SessionMachine {
         if at.since(active.started_at) >= self.limits.max_duration_ms {
             // A stuck or forgotten key must not record indefinitely. Treat it
             // exactly as a release so the audio is kept, not thrown away.
-            active.released_at = Some(at);
-            fx.push(Effect::StopCapture { session: active.id });
+            //
+            // This is also the backstop for toggle mode, where there is no release
+            // to rely on at all: a session started and never stopped ends here.
+            self.stop_capture(at, fx);
             fx.push(Effect::Emit(Event::Notice {
                 level: NoticeLevel::Info,
                 message: "Maximum recording length reached".into(),
@@ -719,6 +774,161 @@ mod tests {
             at: Millis(2_600),
         }));
         all
+    }
+
+    fn toggle_machine() -> SessionMachine {
+        SessionMachine::with_activation(SessionLimits::default(), ActivationMode::Toggle)
+    }
+
+    fn release(m: &mut SessionMachine, t: u64) -> Vec<Effect> {
+        m.handle(Input::HotkeyReleased { at: Millis(t) })
+    }
+
+    fn stops(fx: &[Effect]) -> usize {
+        fx.iter()
+            .filter(|e| matches!(e, Effect::StopCapture { .. }))
+            .count()
+    }
+
+    fn starts(fx: &[Effect]) -> usize {
+        fx.iter()
+            .filter(|e| matches!(e, Effect::StartCapture { .. }))
+            .count()
+    }
+
+    #[test]
+    fn toggle_starts_on_the_first_press_and_stops_on_the_second() {
+        let mut m = toggle_machine();
+
+        let first = press(&mut m, 0);
+        assert_eq!(starts(&first), 1, "first press must start capturing");
+        assert_eq!(stops(&first), 0);
+
+        // Letting go does nothing at all -- that is the whole point of the mode.
+        let up = release(&mut m, 100);
+        assert_eq!(stops(&up), 0, "releasing must not stop a toggled session");
+
+        let second = press(&mut m, 3_000);
+        assert_eq!(stops(&second), 1, "second press must stop capturing");
+        assert_eq!(starts(&second), 0, "and must not start a new one");
+    }
+
+    #[test]
+    fn toggle_ignores_autorepeat_while_the_key_is_held() {
+        // The trap this mode exists to fall into: Windows delivers a key-down
+        // every ~30 ms while a key is held. Treating those as real presses would
+        // start and stop a session dozens of times a second, and the user would
+        // see a hotkey that does nothing at all.
+        let mut m = toggle_machine();
+        press(&mut m, 0);
+
+        let mut repeats = Vec::new();
+        for t in 1..=20 {
+            repeats.extend(press(&mut m, t * 30));
+        }
+
+        assert_eq!(stops(&repeats), 0, "auto-repeat must not stop the session");
+        assert_eq!(starts(&repeats), 0, "nor start another");
+    }
+
+    #[test]
+    fn toggle_requires_a_release_before_a_press_counts_again() {
+        // The rule that makes auto-repeat detectable: a second press is only
+        // genuine if a release came between.
+        let mut m = toggle_machine();
+        press(&mut m, 0);
+        release(&mut m, 50);
+        let stop = press(&mut m, 100);
+        assert_eq!(stops(&stop), 1);
+
+        // And after that stop, a further held-down repeat cannot resurrect it.
+        let repeat = press(&mut m, 130);
+        assert_eq!(starts(&repeat), 0);
+    }
+
+    #[test]
+    fn toggle_can_run_a_second_session_after_the_first_completes() {
+        let mut m = toggle_machine();
+        press(&mut m, 0);
+        release(&mut m, 50);
+        press(&mut m, 2_000);
+        release(&mut m, 2_050);
+
+        m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 2_000,
+            rms: 0.1,
+            at: Millis(2_060),
+        });
+
+        let again = press(&mut m, 5_000);
+        assert_eq!(starts(&again), 1, "a new toggled session must be startable");
+    }
+
+    #[test]
+    fn the_maximum_length_cutoff_still_ends_a_toggled_session() {
+        // Toggle mode has no release to fall back on, so this is the only thing
+        // standing between a forgotten session and an unbounded recording.
+        let limits = SessionLimits::default();
+        let mut m = toggle_machine();
+        press(&mut m, 0);
+        release(&mut m, 50);
+
+        let before = m.handle(Input::Tick {
+            at: Millis(limits.max_duration_ms - 1),
+        });
+        assert_eq!(stops(&before), 0);
+
+        let at_limit = m.handle(Input::Tick {
+            at: Millis(limits.max_duration_ms),
+        });
+        assert_eq!(stops(&at_limit), 1, "the cutoff must end a toggled session");
+    }
+
+    #[test]
+    fn push_to_talk_is_unchanged_by_the_key_down_tracking() {
+        // The regression risk of adding `key_down`: push-to-talk must still stop
+        // on release, not wait for a second press.
+        let mut m = machine();
+        let down = press(&mut m, 0);
+        assert_eq!(starts(&down), 1);
+        let up = release(&mut m, 1_000);
+        assert_eq!(
+            stops(&up),
+            1,
+            "push-to-talk must stop when the key is let go"
+        );
+    }
+
+    #[test]
+    fn a_duplicate_release_is_still_ignored_in_push_to_talk() {
+        let mut m = machine();
+        press(&mut m, 0);
+        release(&mut m, 1_000);
+        let second = release(&mut m, 1_010);
+        assert_eq!(stops(&second), 0, "a duplicate key-up must not stop twice");
+    }
+
+    #[test]
+    fn escape_during_a_toggled_session_cancels_it() {
+        let mut m = toggle_machine();
+        press(&mut m, 0);
+        release(&mut m, 50);
+
+        let cancelled = m.handle(Input::Cancelled { at: Millis(1_000) });
+        assert!(
+            cancelled
+                .iter()
+                .any(|e| matches!(e, Effect::AbortCapture { .. })),
+            "Escape must abort a toggled capture"
+        );
+        assert!(m.is_idle());
+
+        // And the machine is usable afterwards: the key was never released during
+        // the cancel, so the next press must still be able to start a session
+        // once the user does let go.
+        release(&mut m, 1_100);
+        assert_eq!(starts(&press(&mut m, 1_200)), 1);
     }
 
     fn persists(fx: &[Effect]) -> Vec<&SessionRecord> {

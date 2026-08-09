@@ -312,10 +312,10 @@ Found something wrong? [`SECURITY.md`](SECURITY.md).
 
 Every phase ships something usable. None is a refactor-only phase.
 
-One thing still has a config field but no implementation behind it — listed here
-rather than left to be discovered: **toggle activation** (push-to-talk is the only
-mode that works). Transcript redaction and audio retention were in this list until
-v0.2.0 and now both do what they say.
+Nothing in the settings is decorative any more. Transcript redaction, audio
+retention, toggle activation and the maximum-recording limit were all fields or
+toggles with no implementation behind them until v0.2.0; each now does what it
+says.
 
 ## Design
 

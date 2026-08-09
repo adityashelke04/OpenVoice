@@ -22,7 +22,7 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// Deliberately a closed enum rather than a raw virtual-key code: it keeps the
 /// config file readable, keeps the TOML validated at parse time, and stops users
 /// binding dictation to something catastrophic like `A`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Key {
     /// Right Control. The default: present on nearly every keyboard, rarely used,
@@ -34,12 +34,91 @@ pub enum Key {
     RightShift,
     /// Caps Lock, remapped. Popular with users who have already disabled it.
     CapsLock,
-    /// F13 through F24 — unreachable on normal keyboards but emitted by macro keys.
+    /// F13 — unreachable on a normal keyboard, but emitted by macro keys and by
+    /// remapping tools, which makes it the safest binding there is: nothing else
+    /// can possibly be using it.
     F13,
     /// See [`Key::F13`].
     F14,
+    /// See [`Key::F13`].
+    F15,
+    /// See [`Key::F13`].
+    F16,
+    /// See [`Key::F13`].
+    F17,
+    /// See [`Key::F13`].
+    F18,
+    /// See [`Key::F13`].
+    F19,
+    /// See [`Key::F13`].
+    F20,
+    /// See [`Key::F13`].
+    F21,
+    /// See [`Key::F13`].
+    F22,
+    /// See [`Key::F13`].
+    F23,
+    /// See [`Key::F13`].
+    F24,
     /// Scroll Lock.
     ScrollLock,
+    /// Pause/Break. Like Scroll Lock, present on most keyboards and used by
+    /// almost nothing.
+    Pause,
+}
+
+impl Key {
+    /// Every key that can be bound, in the order a picker should offer them.
+    ///
+    /// Ordered by how safe the binding is rather than alphabetically: the keys
+    /// most likely to be free come first. The UI renders this directly, so adding
+    /// a variant above and forgetting it here would make it unreachable — which
+    /// is what the test below is for.
+    pub const ALL: &'static [Key] = &[
+        Key::RightCtrl,
+        Key::RightAlt,
+        Key::RightShift,
+        Key::CapsLock,
+        Key::ScrollLock,
+        Key::Pause,
+        Key::F13,
+        Key::F14,
+        Key::F15,
+        Key::F16,
+        Key::F17,
+        Key::F18,
+        Key::F19,
+        Key::F20,
+        Key::F21,
+        Key::F22,
+        Key::F23,
+        Key::F24,
+    ];
+
+    /// The name to show a person, as opposed to the name serde writes.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Key::RightCtrl => "Right Ctrl",
+            Key::RightAlt => "Right Alt",
+            Key::RightShift => "Right Shift",
+            Key::CapsLock => "Caps Lock",
+            Key::ScrollLock => "Scroll Lock",
+            Key::Pause => "Pause",
+            Key::F13 => "F13",
+            Key::F14 => "F14",
+            Key::F15 => "F15",
+            Key::F16 => "F16",
+            Key::F17 => "F17",
+            Key::F18 => "F18",
+            Key::F19 => "F19",
+            Key::F20 => "F20",
+            Key::F21 => "F21",
+            Key::F22 => "F22",
+            Key::F23 => "F23",
+            Key::F24 => "F24",
+        }
+    }
 }
 
 /// The key combination that triggers dictation.
@@ -74,7 +153,17 @@ pub enum ActivationMode {
     /// microphone open — a guarantee the user can verify with their own fingers
     /// rather than trust a settings toggle.
     PushToTalk,
-    /// Press to start, press again to stop, with silence auto-stop as a backstop.
+    /// Press to start, press again to stop.
+    ///
+    /// The microphone stays open between those two presses, which is the point —
+    /// holding a key for a two-minute passage is unpleasant — and also the risk.
+    /// The backstop is [`SessionLimits::max_duration_ms`], the same cutoff that
+    /// catches a stuck key in push-to-talk: a session nobody stops ends there
+    /// rather than recording indefinitely.
+    ///
+    /// Stopping automatically on silence would be a nicer backstop and is not
+    /// implemented; the state machine never sees audio levels, only the capture's
+    /// summary once it has ended.
     Toggle,
 }
 
@@ -443,6 +532,26 @@ mod tests {
         assert_eq!(c.language.as_deref(), Some("en"));
         // The new section arrives at its default rather than missing.
         assert!(c.updates.check_on_launch);
+    }
+
+    #[test]
+    fn every_key_is_offerable_and_labelled() {
+        // `Key::ALL` drives the picker in Settings, so a variant missing from it
+        // is a key nobody can select. Counting is enough to catch the omission,
+        // and the match in `label` makes the compiler catch the other direction.
+        let mut seen = std::collections::HashSet::new();
+        for k in Key::ALL {
+            assert!(seen.insert(*k), "{k:?} appears twice in Key::ALL");
+            assert!(!k.label().is_empty());
+        }
+        // Bump this deliberately when adding a key, so adding one is a decision
+        // rather than an accident.
+        assert_eq!(seen.len(), 18);
+    }
+
+    #[test]
+    fn the_default_chord_is_offerable() {
+        assert!(Key::ALL.contains(&Chord::default().key));
     }
 
     #[test]

@@ -40,8 +40,21 @@ never done anything now do what they say.
   saved or logged. Defaults cover OpenAI, GitHub and AWS credentials. The text
   delivered to your application is never altered — only the stored copy.
 
+- **Press once to start, press again to stop.** Holding a key is fine for a
+  sentence and unpleasant for a paragraph, so there is now a choice under
+  Settings → Dictation. Hold-to-talk is still the default, because it is the only
+  mode where the microphone cannot be left open by accident. A session you forget
+  to stop still ends at the maximum recording length.
+- **The dictation key can be changed.** Eighteen keys to choose from, including
+  F13–F24 for anyone with a macro key or a remapper. The Hub and the tray now name
+  the key you actually bound instead of always saying "Right Ctrl".
+
 ### Fixed
 
+- **"Maximum recording" now has an effect.** Choosing 5 minutes still cut the
+  recording off at 2: the whole `[limits]` section was written to disk and then
+  ignored, because the engine started the session machine with built-in defaults
+  instead of your settings.
 - **"Keep recordings" now keeps recordings.** The toggle had nothing behind it.
   Turned on, captured audio is kept under `%APPDATA%\OpenVoice\audio` from the
   next restart instead of being deleted after each decode. It remains off by
