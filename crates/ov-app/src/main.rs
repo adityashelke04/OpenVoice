@@ -347,8 +347,57 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 /// and a settings screen that cannot render until the speech engine is warm would
 /// be unusable during exactly the first-run download it needs to explain.
 #[tauri::command]
-fn list_models() -> Vec<ov_asr::catalog::ModelSpec> {
-    ov_asr::catalog::CATALOG.to_vec()
+fn list_models(state: tauri::State<'_, AppState>) -> Vec<ModelRow> {
+    let root = history::data_dir().join("models");
+    let in_use = state.settings.get().model;
+    ov_asr::catalog::CATALOG
+        .iter()
+        .map(|spec| {
+            let installed = ov_asr::store::installed_bytes(&root, spec);
+            ModelRow {
+                spec: *spec,
+                installed: installed.is_some(),
+                installed_bytes: installed.unwrap_or(0),
+                in_use: spec.id == in_use,
+            }
+        })
+        .collect()
+}
+
+/// A catalogue entry plus what this machine knows about it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelRow {
+    #[serde(flatten)]
+    spec: ov_asr::catalog::ModelSpec,
+    /// Whether any files for it are on disk.
+    installed: bool,
+    /// How much room they take. Zero when `installed` is false, and also when a
+    /// transfer failed before writing anything — the two are told apart by
+    /// `installed`, not by this.
+    installed_bytes: u64,
+    /// Whether this is the model the app is configured to load.
+    in_use: bool,
+}
+
+/// Delete a model's weights.
+///
+/// Refuses to remove the model currently in use. Deleting it would leave the app
+/// configured to load something that is no longer there, and the next start would
+/// silently re-download over a gigabyte — which is exactly the surprise this
+/// screen exists to prevent.
+#[tauri::command]
+fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    if state.settings.get().model == id {
+        return Err(
+            "That is the model in use. Choose a different one first, then delete it.".into(),
+        );
+    }
+    let spec = ov_asr::catalog::resolve(&id).map_err(|e| e.to_string())?;
+    let root = history::data_dir().join("models");
+    ov_asr::store::remove(&root, spec).map_err(|e| e.to_string())?;
+    tracing::info!(model = %id, "deleted model weights");
+    Ok(())
 }
 
 /// Input devices, for the microphone picker.
@@ -514,6 +563,7 @@ fn main() {
             save_settings,
             list_microphones,
             list_models,
+            delete_model,
             preview_format,
             check_for_update,
             install_update,

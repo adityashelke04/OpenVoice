@@ -48,6 +48,9 @@ never done anything now do what they say.
 - **The dictation key can be changed.** Eighteen keys to choose from, including
   F13–F24 for anyone with a macro key or a remapper. The Hub and the tray now name
   the key you actually bound instead of always saying "Right Ctrl".
+- **The Speech model screen says what is on your disk.** Which models are
+  downloaded, how much room each one takes, the total, and a Delete button to get
+  it back. Deleting the model in use is refused rather than left to fail later.
 
 ### Fixed
 

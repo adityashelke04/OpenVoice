@@ -133,7 +133,8 @@ export const checkForUpdate = () => call<UpdateStatus>("check_for_update");
  *  nothing is downloaded as a side effect of checking. */
 export const installUpdate = () => call<void>("install_update");
 
-/** One model, exactly as `ov_asr::catalog::ModelSpec` serialises it. */
+/** One model: the catalogue entry, plus what this machine knows about it.
+ *  Mirrors `ov_app::ModelRow`, which flattens `ov_asr::catalog::ModelSpec`. */
 export interface ModelSpec {
   id: string;
   repo: string;
@@ -142,6 +143,24 @@ export interface ModelSpec {
   sizeMb: number;
   vramMb: number;
   englishOnly: boolean;
+  /** Whether any of its files are on disk. */
+  installed: boolean;
+  /** How much room they take. Zero when not installed — and also when a transfer
+   *  failed before writing anything, which `installed` distinguishes. */
+  installedBytes: number;
+  /** Whether this is the model the app is set to load. */
+  inUse: boolean;
+}
+
+/** Delete a model's weights. Refuses to remove the one in use. */
+export const deleteModel = (id: string) => call<void>("delete_model", { id });
+
+/** Bytes as a person would write them. */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  if (bytes > 0) return "under 1 MB";
+  return "nothing";
 }
 
 /** The models this build can load.

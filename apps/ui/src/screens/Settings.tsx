@@ -9,6 +9,8 @@ import { useEffect, useState } from "react";
 import { Badge, Button, Card, Notice, Select, Toggle } from "../ui";
 import {
   checkForUpdate,
+  deleteModel,
+  formatBytes,
   formatSize,
   HOTKEYS,
   installUpdate,
@@ -384,10 +386,24 @@ export function ModelsScreen({
 }) {
   const [pending, setPending] = useState<string | null>(null);
   const [models, setModels] = useState<ModelSpec[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refresh = () => {
     listModels().then((m) => m && setModels(m));
-  }, []);
+  };
+  useEffect(refresh, []);
+
+  const remove = async (id: string) => {
+    setError(null);
+    try {
+      await deleteModel(id);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const onDisk = (models ?? []).reduce((n, m) => n + m.installedBytes, 0);
 
   return (
     <div className="screen">
@@ -427,18 +443,20 @@ export function ModelsScreen({
               ? `Needs about ${formatSize(m.vramMb)} of graphics memory.`
               : "Works without a graphics card.");
           return (
-            <button
-              key={m.id}
-              className="model"
-              data-active={active}
-              aria-pressed={active}
-              onClick={() => {
-                if (active) return;
-                patch((s) => (s.model = m.id));
-                setPending(name);
-              }}
-            >
-              <div className="model-main">
+            // A container rather than one big button: the row needs its own
+            // Delete control, and an interactive element cannot legally live
+            // inside another one.
+            <div key={m.id} className="model" data-active={active}>
+              <button
+                className="model-select"
+                aria-pressed={active}
+                onClick={() => {
+                  if (active) return;
+                  patch((s) => (s.model = m.id));
+                  setPending(name);
+                }}
+              >
+                <div className="model-main">
                 <div className="hstack">
                   <span className="t-subheading">{name}</span>
                   {active && (
@@ -447,14 +465,17 @@ export function ModelsScreen({
                     </Badge>
                   )}
                   {m.englishOnly && <Badge>English only</Badge>}
+                  {m.installed && !active && <Badge>On this computer</Badge>}
                 </div>
                 <div className="t-caption model-detail">{detail}</div>
                 <div className="t-mono model-id">{m.id}</div>
               </div>
               <div className="model-numbers">
                 <div>
-                  <div className="t-label">Download</div>
-                  <div className="t-mono">{formatSize(m.sizeMb)}</div>
+                  <div className="t-label">{m.installed ? "On disk" : "Download"}</div>
+                  <div className="t-mono">
+                    {m.installed ? formatBytes(m.installedBytes) : formatSize(m.sizeMb)}
+                  </div>
                 </div>
                 {copy?.speed && (
                   <div>
@@ -462,8 +483,14 @@ export function ModelsScreen({
                     <div className="t-mono">{copy.speed}</div>
                   </div>
                 )}
-              </div>
-            </button>
+                </div>
+              </button>
+              {m.installed && !m.inUse && (
+                <Button size="sm" variant="ghost" onClick={() => remove(m.id)}>
+                  Delete
+                </Button>
+              )}
+            </div>
           );
         })}
         {models === null && (
@@ -471,10 +498,14 @@ export function ModelsScreen({
         )}
       </div>
 
+      {error && <Notice tone="danger">{error}</Notice>}
+
       <p className="t-caption screen-foot">
-        Measured on this computer: an RTX 3050 with 4 GB. If a game or video call is
-        using the graphics card, choose <strong>Light</strong> — the accurate model
-        needs the card mostly to itself.
+        Speech models are using {formatBytes(onDisk)} on this computer. Deleting one
+        frees that space; you can download it again later. Measured timings are from
+        an RTX 3050 with 4 GB — if a game or video call is using the graphics card,
+        choose <strong>Light</strong>, because the accurate model needs the card
+        mostly to itself.
       </p>
     </div>
   );

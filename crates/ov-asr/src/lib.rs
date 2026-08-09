@@ -40,6 +40,7 @@ use serde::Deserialize;
 pub mod catalog;
 #[cfg(windows)]
 mod job;
+pub mod store;
 mod wav;
 
 /// How to launch the sidecar.

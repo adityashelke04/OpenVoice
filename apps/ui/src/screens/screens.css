@@ -66,11 +66,13 @@
   gap: var(--s-3);
 }
 
+/* A container, not a control. The row holds its own Delete button, and an
+   interactive element cannot legally sit inside another one — so selection is a
+   button filling the row, and Delete is its sibling. */
 .model {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--s-6);
+  gap: var(--s-4);
   width: 100%;
   padding: var(--s-5);
   background: var(--surface-1);
@@ -78,6 +80,30 @@
   border-radius: var(--r-xl);
   text-align: left;
   transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+
+.model-select {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-6);
+  min-width: 0;
+  /* Reset the button chrome; the card around it carries the appearance. */
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-select:focus-visible {
+  outline: 1px solid var(--live);
+  outline-offset: 3px;
+  border-radius: var(--r-md);
 }
 
 .model:hover {
