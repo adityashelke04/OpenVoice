@@ -17,6 +17,10 @@ pretty_assertions.workspace = true
 # Test-only: pins the JSON wire format the UI depends on. Dev-dependencies do not
 # affect the wasm32 purity check.
 serde_json.workspace = true
+# Test-only: lets the schema migration tests parse a real settings.toml as written
+# by an older build, rather than asserting against a hand-built struct that cannot
+# reproduce a removed field.
+toml.workspace = true
 
 [lints.rust]
 missing_docs = "warn"

@@ -37,6 +37,7 @@ use ov_core::ports::{DecodeHint, Pcm16k, Transcriber};
 use ov_core::types::Transcript;
 use serde::Deserialize;
 
+pub mod catalog;
 #[cfg(windows)]
 mod job;
 mod wav;
@@ -219,6 +220,11 @@ impl SidecarTranscriber {
                 cfg.program.display()
             )));
         }
+        // Resolve the model here rather than at spawn. A typo in a hand-edited
+        // config would otherwise survive construction and surface as a child
+        // process exiting during the first decode, which reports as a broken pipe
+        // and names neither the model nor the file that set it.
+        catalog::resolve(&cfg.model)?;
         std::fs::create_dir_all(&cfg.scratch_dir)
             .map_err(|e| Error::Transcription(format!("creating scratch dir: {e}")))?;
         let model_id = Mutex::new(format!("faster-whisper/{}", cfg.model));
@@ -248,12 +254,24 @@ impl SidecarTranscriber {
     fn spawn(&self) -> Result<Pipe> {
         tracing::info!(model = %self.cfg.model, device = %self.cfg.device, "starting ASR sidecar");
 
+        // The sidecar holds no catalogue of its own: it is told which repository to
+        // load and how to quantize it. Resolving here keeps `catalog.rs` the single
+        // place a model is described, and means adding one never touches Python.
+        let spec = catalog::resolve(&self.cfg.model)?;
+
         let mut cmd = Command::new(&self.cfg.program);
         cmd.args(&self.cfg.leading_args)
             .arg("--model")
             .arg(&self.cfg.model)
+            .arg("--repo")
+            .arg(spec.repo)
+            .arg("--compute-type")
+            .arg(spec.compute_type)
             .arg("--device")
             .arg(&self.cfg.device);
+        if let Some(fallback) = spec.fallback_compute {
+            cmd.arg("--fallback-compute").arg(fallback);
+        }
         if self.cfg.allow_download {
             cmd.arg("--allow-download");
         }

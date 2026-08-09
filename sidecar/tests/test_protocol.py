@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from openvoice_asr.engine import MAX_HINT_CHARS, Engine, build_hint, model_repo_id, online
+from openvoice_asr.engine import MAX_HINT_CHARS, Engine, build_hint, online
 from openvoice_asr.protocol import (
     BadRequest,
     Request,
@@ -140,20 +140,44 @@ class TestProgress:
         assert decoded == {"id": 1, "event": "progress", "downloaded": 5, "total": 7}
 
 
-class TestModelRepoId:
-    def test_expands_a_short_preset(self):
-        assert model_repo_id("base.en") == "Systran/faster-whisper-base.en"
+class TestEngineTakesItsModelFromTheHost:
+    """The sidecar holds no catalogue; it is told what to load.
 
-    def test_leaves_a_fully_qualified_repo_alone(self):
-        # large-v3-turbo is a third-party conversion, not one of Systran's.
-        assert model_repo_id("large-v3-turbo") == "deepdml/faster-whisper-large-v3-turbo-ct2"
+    The catalogue lives in ``crates/ov-asr/src/catalog.rs``. These tests pin the
+    contract between the two, because nothing else would notice if the sidecar
+    quietly started guessing again.
+    """
 
-    def test_rejects_an_unknown_name(self):
-        # An unknown preset must not reach huggingface_hub as a repository id: the
-        # failure would arrive as a 404 from the network rather than as a fact we
-        # already knew locally.
-        with pytest.raises(ValueError, match="unknown model"):
-            model_repo_id("enormous-v9")
+    def test_carries_the_repo_it_was_given(self):
+        engine = Engine(
+            model="large-v3-turbo",
+            device="cpu",
+            repo="deepdml/faster-whisper-large-v3-turbo-ct2",
+            compute_type="float16",
+            fallback_compute="int8_float16",
+        )
+        assert engine.repo == "deepdml/faster-whisper-large-v3-turbo-ct2"
+        assert engine.compute_type == "float16"
+        assert engine.fallback_compute == "int8_float16"
+
+    def test_does_not_validate_the_name_against_a_known_set(self):
+        # A name the *host* knows and this build has never heard of must still
+        # load. Validating here would mean two lists again, and the sidecar's
+        # would be the stale one.
+        engine = Engine(model="whatever-v9", device="cpu", repo="acme/whatever-v9-ct2")
+        assert engine.model_name == "whatever-v9"
+
+    def test_rejects_a_bare_repo_name(self):
+        # A bare name would reach huggingface_hub as an invalid repository id and
+        # fail as a 404 from the network rather than as a fact known locally. The
+        # host expands these; this is the backstop if it ever stops.
+        with pytest.raises(ValueError, match="org/name"):
+            Engine(model="base.en", device="cpu", repo="base.en")
+
+    def test_model_id_reports_the_friendly_name_not_the_repo(self):
+        # History rows and the Hub header show this string.
+        engine = Engine(model="base.en", device="cpu", repo="Systran/faster-whisper-base.en")
+        assert engine.model_id.startswith("faster-whisper/base.en@")
 
 
 class TestOnline:

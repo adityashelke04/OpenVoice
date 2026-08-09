@@ -11,6 +11,12 @@ export interface DictEntry {
   group: string;
 }
 
+export interface UpdateConfig {
+  /** Ask once per launch whether a newer release exists. Off means no request
+   *  is made at all — not that one is made with an opt-out flag. */
+  check_on_launch: boolean;
+}
+
 export interface Config {
   version: number;
   chord: { key: string; exclusive: boolean };
@@ -26,7 +32,7 @@ export interface Config {
     history_days: number;
     redact_patterns: string[];
   };
-  model: string;
+  updates: UpdateConfig;
   /** Forced ISO 639-1 code (`"en"`, `"es"`, ...), or `null` to auto-detect. */
   language: string | null;
   input_device: string | null;
@@ -85,27 +91,67 @@ export const openDataDir = () => call<void>("open_data_dir");
 export const getLogPath = () => call<string>("get_log_path");
 export const restartApp = () => call<void>("restart_app");
 
-/** Models the sidecar knows about, with the numbers measured on this machine. */
-export const MODELS = [
-  {
-    id: "large-v3-turbo",
+/** What an update check found. Mirrors `ov_app::update::UpdateStatus`. */
+export interface UpdateStatus {
+  available: boolean;
+  version: string | null;
+  notes: string | null;
+  currentVersion: string;
+}
+
+/** Ask whether a newer version exists. Makes one request, carries nothing. */
+export const checkForUpdate = () => call<UpdateStatus>("check_for_update");
+
+/** Download, verify and apply an update, then restart. Only ever from a button —
+ *  nothing is downloaded as a side effect of checking. */
+export const installUpdate = () => call<void>("install_update");
+
+/** One model, exactly as `ov_asr::catalog::ModelSpec` serialises it. */
+export interface ModelSpec {
+  id: string;
+  repo: string;
+  computeType: string;
+  fallbackCompute: string | null;
+  sizeMb: number;
+  vramMb: number;
+  englishOnly: boolean;
+}
+
+/** The models this build can load.
+ *
+ *  Comes from `ov_asr::catalog`, which is the single source of truth. This file
+ *  used to carry its own copy — ids, sizes and all — alongside the sidecar's, and
+ *  the two could disagree without either being wrong on its own terms.
+ */
+export const listModels = () => call<ModelSpec[]>("list_models");
+
+/** How a model is described to someone who has never heard of Whisper.
+ *
+ *  Deliberately *not* in the Rust catalogue. "Accurate" is copy, and "~650 ms" is
+ *  a measurement taken on one particular laptop — neither is a property of the
+ *  model. A model with no entry here still renders, labelled with its id and its
+ *  real size, which is the behaviour that makes adding one a one-file change.
+ */
+export const MODEL_COPY: Record<string, { name: string; detail: string; speed: string }> = {
+  "large-v3-turbo": {
     name: "Accurate",
     detail: "Best quality. Needs about 1.6 GB of graphics memory.",
-    size: "1.6 GB",
     speed: "~650 ms",
   },
-  {
-    id: "small.en",
+  "small.en": {
     name: "Light",
     detail: "Good quality, English only. Runs alongside a game.",
-    size: "250 MB",
     speed: "~300 ms",
   },
-  {
-    id: "base.en",
+  "base.en": {
     name: "Fastest",
     detail: "Lowest quality. Works without a graphics card.",
-    size: "75 MB",
     speed: "~190 ms",
   },
-] as const;
+};
+
+/** Human-readable download size. Built from the catalogue's megabytes so the
+ *  number shown and the number downloaded cannot disagree. */
+export function formatSize(mb: number): string {
+  return mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`;
+}

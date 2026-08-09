@@ -163,21 +163,19 @@ MIN_SPEECH_SECONDS = float(os.environ.get("OPENVOICE_MIN_SPEECH_S", "0.35"))
 # than the memory bandwidth it saves. `fallback_compute` is used if the larger
 # weights will not fit -- a 4 GB laptop GPU also has a desktop compositor and a
 # browser on it.
-MODEL_PRESETS: dict[str, dict[str, Any]] = {
-    "base.en": {"repo": "base.en", "compute_type": "int8", "vram_mb": 0},
-    "small.en": {
-        "repo": "small.en",
-        "compute_type": "float16",
-        "fallback_compute": "int8_float16",
-        "vram_mb": 600,
-    },
-    "large-v3-turbo": {
-        "repo": "deepdml/faster-whisper-large-v3-turbo-ct2",
-        "compute_type": "float16",
-        "fallback_compute": "int8_float16",
-        "vram_mb": 1600,
-    },
-}
+# The catalogue of models lives in `crates/ov-asr/src/catalog.rs`, not here.
+#
+# It used to live in both places, and the two could disagree without either being
+# wrong on its own terms: a model added on one side was invisible to the other. The
+# sidecar is now *told* what to load -- repository, compute type, and a fallback --
+# so there is exactly one file to edit when a model is added, and it is the one that
+# also drives the picker in the UI.
+#
+# These defaults exist only so `python -m openvoice_asr` is runnable by hand for
+# debugging. The app always passes all three explicitly.
+DEFAULT_MODEL = "base.en"
+DEFAULT_REPO = "Systran/faster-whisper-base.en"
+DEFAULT_COMPUTE = "int8"
 
 # Whisper's initial prompt is capped at 224 tokens. Overrunning it does not error --
 # the decoder silently truncates, dropping whichever terms happened to land last.
@@ -218,20 +216,8 @@ def online() -> Iterator[None]:
             os.environ["HF_HUB_OFFLINE"] = previous
 
 
-def model_repo_id(name: str) -> str:
-    """Full Hugging Face repository id for a preset name.
-
-    The short presets are Systran's conversions of the official Whisper weights;
-    anything already containing a slash is a repository named in full.
-    """
-    if name not in MODEL_PRESETS:
-        raise ValueError(f"unknown model {name!r}; known: {', '.join(sorted(MODEL_PRESETS))}")
-    repo = MODEL_PRESETS[name]["repo"]
-    return repo if "/" in repo else f"Systran/faster-whisper-{repo}"
-
-
-def model_is_cached(name: str) -> bool:
-    """Whether `name` can be loaded without touching the network.
+def model_is_cached(repo: str) -> bool:
+    """Whether `repo` can be loaded without touching the network.
 
     Asked before every start. A wrong ``True`` here strands the user on a spinner
     while huggingface_hub blocks on a download nobody agreed to, so this resolves
@@ -241,7 +227,7 @@ def model_is_cached(name: str) -> bool:
 
     try:
         snapshot_download(
-            model_repo_id(name),
+            repo,
             allow_patterns=list(MODEL_FILES),
             local_files_only=True,
         )
@@ -250,8 +236,8 @@ def model_is_cached(name: str) -> bool:
     return True
 
 
-def model_download_size(name: str) -> int:
-    """Total bytes to fetch for `name`, or 0 if the total cannot be determined.
+def model_download_size(repo: str) -> int:
+    """Total bytes to fetch for `repo`, or 0 if the total cannot be determined.
 
     Returning 0 is a supported answer, not a failure: the caller shows an
     indeterminate progress bar instead of a percentage. Refusing to download
@@ -263,9 +249,9 @@ def model_download_size(name: str) -> int:
 
     try:
         with online():
-            info = HfApi().model_info(model_repo_id(name), files_metadata=True)
+            info = HfApi().model_info(repo, files_metadata=True)
     except Exception as exc:  # noqa: BLE001
-        log(f"could not determine download size for {name}: {exc}")
+        log(f"could not determine download size for {repo}: {exc}")
         return 0
     return sum(
         f.size or 0
@@ -274,8 +260,8 @@ def model_download_size(name: str) -> int:
     )
 
 
-def download_model(name: str, on_progress: Any = None) -> str:
-    """Fetch `name`'s weights, reporting progress in bytes.
+def download_model(repo: str, on_progress: Any = None) -> str:
+    """Fetch `repo`'s weights, reporting progress in bytes.
 
     ``on_progress(downloaded, total)`` is called as the transfer advances; `total`
     is 0 when unknown. Returns the local snapshot path.
@@ -288,7 +274,7 @@ def download_model(name: str, on_progress: Any = None) -> str:
     from huggingface_hub import snapshot_download
     from tqdm.auto import tqdm as _tqdm
 
-    total = model_download_size(name)
+    total = model_download_size(repo)
     state = {"done": 0}
 
     class ProgressTqdm(_tqdm):  # type: ignore[misc]
@@ -298,12 +284,12 @@ def download_model(name: str, on_progress: Any = None) -> str:
                 on_progress(state["done"], total)
             return super().update(n)
 
-    log(f"downloading {model_repo_id(name)} ({total / 1e6:.0f} MB)" if total else "downloading")
+    log(f"downloading {repo} ({total / 1e6:.0f} MB)" if total else f"downloading {repo}")
     # Downloads write to stdout under some terminal configurations, which would
     # corrupt the protocol stream mid-transfer.
     with online(), guard_stdout():
         path = snapshot_download(
-            model_repo_id(name),
+            repo,
             allow_patterns=list(MODEL_FILES),
             tqdm_class=ProgressTqdm,
         )
@@ -311,7 +297,7 @@ def download_model(name: str, on_progress: Any = None) -> str:
     # to be sent explicitly or the bar stops short of full and looks stuck.
     if on_progress is not None and total:
         on_progress(total, total)
-    log(f"downloaded {name} to {path}")
+    log(f"downloaded {repo} to {path}")
     return path
 
 
@@ -344,11 +330,25 @@ class Transcription:
 class Engine:
     """Holds a loaded model and transcribes audio."""
 
-    def __init__(self, model: str = "base.en", device: str = "auto") -> None:
-        if model not in MODEL_PRESETS:
-            raise ValueError(f"unknown model {model!r}; known: {', '.join(sorted(MODEL_PRESETS))}")
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        device: str = "auto",
+        repo: str = DEFAULT_REPO,
+        compute_type: str = DEFAULT_COMPUTE,
+        fallback_compute: str | None = None,
+    ) -> None:
+        # No catalogue lookup and no validation of `model` against a known set:
+        # the host resolved all of this before spawning us (see
+        # `crates/ov-asr/src/catalog.rs`). `model` is carried only so logs and the
+        # `model_id` reported back to the app say `base.en` rather than
+        # `Systran/faster-whisper-base.en`.
+        if "/" not in repo:
+            raise ValueError(f"repo must be a full 'org/name' id, got {repo!r}")
         self.model_name = model
-        self.preset = MODEL_PRESETS[model]
+        self.repo = repo
+        self.compute_type = compute_type
+        self.fallback_compute = fallback_compute
         self.device = device
         self._model: Any = None
         self._resolved_device: str | None = None
@@ -368,14 +368,12 @@ class Engine:
 
         def build(ct: str) -> Any:
             with guard_stdout():
-                return WhisperModel(
-                    self.preset["repo"], device=device, compute_type=ct, download_root=root
-                )
+                return WhisperModel(self.repo, device=device, compute_type=ct, download_root=root)
 
         try:
             self._model = build(compute_type)
         except Exception as exc:  # noqa: BLE001
-            fallback = self.preset.get("fallback_compute")
+            fallback = self.fallback_compute
             if not fallback or fallback == compute_type:
                 raise
             # Almost always out of VRAM. Smaller weights beat no dictation.
@@ -425,7 +423,7 @@ class Engine:
                         "using CPU. Install nvidia-cublas-cu12 and nvidia-cudnn-cu12."
                     )
                 else:
-                    return "cuda", self.preset["compute_type"]
+                    return "cuda", self.compute_type
             else:
                 log("no CUDA device visible to ctranslate2; using CPU")
         except Exception as exc:  # noqa: BLE001 - any failure means "no CUDA"
@@ -620,7 +618,8 @@ def probe() -> dict[str, Any]:
     dlls = find_cuda_dlls()
     info: dict[str, Any] = {
         "python": sys.version.split()[0],
-        "models": sorted(MODEL_PRESETS),
+        # No model list here any more: the sidecar is told which model to load and
+        # has no view of the catalogue. `crates/ov-asr/src/catalog.rs` is the list.
         "cuda_dll_dirs": _CUDA_DLL_DIRS,
         "cuda_dlls_missing": [n for n, p in dlls.items() if p is None],
     }

@@ -10,7 +10,12 @@ use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// **v2** (2026-08-09) added [`UpdateConfig`] and removed a vestigial `model`
+/// field. The model has always been read from `ov_app::settings::Settings::model`;
+/// the copy on this struct was written, migrated and validated, and then never
+/// read by anything — so editing it in `settings.toml` silently did nothing.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A physical key usable as the dictation trigger.
 ///
@@ -131,6 +136,50 @@ impl Default for PrivacyConfig {
     }
 }
 
+/// How OpenVoice learns that a new version exists.
+///
+/// # Why this is allowed to touch the network at all
+///
+/// Every other outbound request in this application is one the user explicitly
+/// asked for — a model download they chose from a picker. An update check is not
+/// that: nobody asks to be told about a release. It is therefore the one place the
+/// local-first guarantee is deliberately traded, and the trade is written down in
+/// ADR 0005 rather than assumed.
+///
+/// Three properties keep it honest, and all three are enforced in code rather than
+/// promised here:
+///
+/// 1. **Check, never install.** The check reports a version; applying it is a
+///    button the user presses. An update can never arrive unannounced.
+/// 2. **One request, to one host, carrying nothing.** A signed manifest is
+///    fetched. No identifier, no version histogram, no telemetry rides along.
+/// 3. **Switchable off, and it stays off.** Setting `check_on_launch` to false
+///    means no request is ever made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateConfig {
+    /// Ask, once per launch, whether a newer release exists.
+    ///
+    /// Defaults **on**. A project whose entire value is incremental improvements
+    /// to formatting rules cannot deliver one to a user who never learns it
+    /// shipped, and every alternative — a README line, a Twitter post — reaches
+    /// strictly fewer people than a prompt in the app they already opened.
+    ///
+    /// Defaulting off would have been the more cautious choice, and it was
+    /// rejected: a privacy setting nobody finds protects nobody, while a check
+    /// that is announced on first run and disableable in one click is a decision
+    /// the user actually gets to make.
+    pub check_on_launch: bool,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            check_on_launch: true,
+        }
+    }
+}
+
 /// Root configuration document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -145,8 +194,8 @@ pub struct Config {
     pub limits: SessionLimits,
     /// Privacy controls.
     pub privacy: PrivacyConfig,
-    /// Identifier of the ASR model to load.
-    pub model: String,
+    /// How new versions are discovered.
+    pub updates: UpdateConfig,
     /// Forced transcription language as an ISO 639-1 code (`"en"`, `"es"`, ...), or
     /// `None` to let the model auto-detect it from the audio.
     ///
@@ -194,7 +243,7 @@ impl Default for Config {
             activation: ActivationMode::PushToTalk,
             limits: SessionLimits::default(),
             privacy: PrivacyConfig::default(),
-            model: "base.en".into(),
+            updates: UpdateConfig::default(),
             language: Some("en".into()),
             input_device: None,
             paste_threshold_chars: 60,
@@ -208,10 +257,21 @@ impl Config {
     ///
     /// Each version gets its own arm. Migrations are additive and never drop unknown
     /// fields, so downgrading after an upgrade loses settings but not data.
-    pub fn migrate(self) -> Result<Self> {
-        // v1 is the initial schema, so there is nothing to step through yet. The
-        // first real migration makes this `mut self` again and adds an arm that
-        // transforms in place and bumps `self.version`; the compiler will say so.
+    pub fn migrate(mut self) -> Result<Self> {
+        // v1 -> v2. Both changes are absorbed by `#[serde(default)]` on the way
+        // in: `updates` arrives as its default, and the removed `model` key is
+        // ignored rather than rejected. So there is no field to transform here —
+        // only the version to advance, which is what marks the document as
+        // understood rather than merely parsed.
+        //
+        // The `model` key is deliberately *not* stripped from the user's file. It
+        // costs nothing to leave, and a downgrade to a build that still reads it
+        // then finds it intact. Migrations here are additive; they never destroy
+        // a key they no longer understand.
+        if self.version == 1 {
+            self.version = 2;
+        }
+
         if self.version < SCHEMA_VERSION {
             return Err(Error::Config(format!(
                 "no migration path from schema version {}",
@@ -241,9 +301,6 @@ impl Config {
             return Err(Error::Config(
                 "limits.max_duration_ms above 10 minutes risks exhausting memory".into(),
             ));
-        }
-        if self.model.trim().is_empty() {
-            return Err(Error::Config("model must not be empty".into()));
         }
         // TOML happily parses `nan`/`-nan`/`inf` float literals, and a NaN here is
         // not merely wrong, it is silent: `rms < silence_rms` is `false` for every
@@ -359,5 +416,51 @@ mod tests {
     fn migrate_is_identity_at_current_version() {
         let c = Config::default();
         assert_eq!(c.clone().migrate().unwrap(), c);
+    }
+
+    #[test]
+    fn a_v1_document_migrates_to_the_current_schema() {
+        // The shape a v0.1.1 install actually has on disk, including the `model`
+        // key that v2 removed. It must load rather than be rejected: a user who
+        // updates and finds their dictionary gone would be right to be angry.
+        let v1 = r#"
+            version = 1
+            model = "small.en"
+            language = "en"
+            paste_threshold_chars = 60
+            sound_enabled = true
+
+            [chord]
+            key = "right_ctrl"
+            exclusive = false
+        "#;
+        let c: Config = toml::from_str(v1).expect("a v1 document must still parse");
+        let c = c.migrate().expect("v1 must have a migration path");
+
+        assert_eq!(c.version, SCHEMA_VERSION);
+        // Settings the user actually chose survive untouched.
+        assert_eq!(c.chord.key, Key::RightCtrl);
+        assert_eq!(c.language.as_deref(), Some("en"));
+        // The new section arrives at its default rather than missing.
+        assert!(c.updates.check_on_launch);
+    }
+
+    #[test]
+    fn update_checks_default_on() {
+        // Pinned deliberately. This is a values decision documented in ADR 0005,
+        // not an incidental default, and flipping it should require editing a
+        // test that says so.
+        assert!(Config::default().updates.check_on_launch);
+    }
+
+    #[test]
+    fn update_checks_can_be_turned_off_and_still_validate() {
+        let c = Config {
+            updates: UpdateConfig {
+                check_on_launch: false,
+            },
+            ..Config::default()
+        };
+        assert!(c.validate().is_ok());
     }
 }

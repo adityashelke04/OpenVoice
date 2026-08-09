@@ -34,8 +34,11 @@ mod history;
     about = "Local-first voice dictation for developers"
 )]
 struct Cli {
-    /// Model preset: base.en, small.en, or large-v3-turbo.
-    #[arg(long, global = true, default_value = "base.en")]
+    /// Model preset. Unknown names are rejected at startup and list the valid ones.
+    ///
+    /// Not enumerated here: the catalogue is `ov_asr::catalog`, and a hardcoded
+    /// list in this help text is one more copy to drift.
+    #[arg(long, global = true, default_value_t = ov_asr::catalog::DEFAULT_MODEL.to_string())]
     model: String,
 
     /// Forced language as an ISO 639-1 code, or "auto" to let the model detect it.

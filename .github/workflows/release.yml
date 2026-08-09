@@ -71,8 +71,36 @@ jobs:
         working-directory: apps/ui
         run: npm ci
 
+      # The signing key is what makes the updater safe to have at all: the app
+      # verifies every downloaded artifact against the public half compiled into
+      # it (tauri.conf.json, plugins.updater.pubkey), so a tampered or
+      # substituted update is discarded without being executed. That check does
+      # not depend on trusting GitHub or TLS.
+      #
+      # An unset secret is a silent failure, not a loud one -- `tauri build`
+      # would produce an installer with no .sig beside it, the release would
+      # publish, and every existing install would reject the update it was
+      # offered. Fail here instead, where the cause is obvious.
+      - name: Require the updater signing key
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${KEY}" ]]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is not set."
+            echo "Generate a keypair with:"
+            echo "  npx tauri signer generate -w ~/.tauri/openvoice-updater.key"
+            echo "then add the private key as a repository secret and put the"
+            echo "public half in crates/ov-app/tauri.conf.json."
+            exit 1
+          fi
+
       - name: Build the installer
         working-directory: crates/ov-app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx --prefix ../../apps/ui tauri build
 
       - name: Collect the installer and checksum it
@@ -96,6 +124,45 @@ jobs:
           "sha256=$sum" | Out-File $env:GITHUB_OUTPUT -Append
           "sumfile=$sumFile" | Out-File $env:GITHUB_OUTPUT -Append
 
+      # The manifest the running app fetches. `latest.json` is what
+      # `plugins.updater.endpoints` points at, and its `signature` is the minisign
+      # signature `tauri build` produced beside the installer -- the thing the app
+      # verifies before it will execute anything it downloaded.
+      - name: Build the update manifest
+        id: manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $sig = Get-ChildItem -Recurse -Filter '*-setup.exe.sig' -Path target |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $sig) {
+            throw "no .sig beside the installer; the signing key did not reach tauri build"
+          }
+
+          $version = '${{ github.ref_name }}' -replace '^v', ''
+          $installer = Split-Path '${{ steps.collect.outputs.path }}' -Leaf
+          $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$installer"
+
+          $manifest = [ordered]@{
+            version = $version
+            # RFC 3339, which is what the updater expects.
+            pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            notes = "See the release notes at https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+            platforms = [ordered]@{
+              'windows-x86_64' = [ordered]@{
+                signature = (Get-Content $sig.FullName -Raw).Trim()
+                url = $url
+              }
+            }
+          }
+
+          $out = Join-Path (Split-Path '${{ steps.collect.outputs.path }}') 'latest.json'
+          $manifest | ConvertTo-Json -Depth 5 | Out-File $out -Encoding utf8 -NoNewline
+          Write-Host "wrote $out for version $version"
+
+          "path=$out" | Out-File $env:GITHUB_OUTPUT -Append
+          "sig=$($sig.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
+
       - uses: actions/upload-artifact@v4
         with:
           name: openvoice-windows-installer
@@ -113,6 +180,8 @@ jobs:
           files: |
             ${{ steps.collect.outputs.path }}
             ${{ steps.collect.outputs.sumfile }}
+            ${{ steps.manifest.outputs.sig }}
+            ${{ steps.manifest.outputs.path }}
           # Published as a draft so the attached installer can be checked before
           # anyone can download it; flipped to public with
           # `gh release edit <tag> --draft=false` once it has been.
@@ -136,3 +205,37 @@ jobs:
             ```
 
             Expected: `${{ steps.collect.outputs.sha256 }}`
+
+      # Where the running app actually looks.
+      #
+      # Not `releases/latest/download/...`: that URL skips prereleases, and every
+      # release here is one, so it would 404 for as long as OpenVoice is in alpha.
+      # A fixed `updater` tag is stable regardless of the prerelease flag and
+      # regardless of which version is newest.
+      #
+      # ORDERING, and it matters: this manifest points at the versioned release's
+      # installer, and a draft release's assets are not downloadable. Publishing
+      # the manifest before un-drafting the release would offer every user an
+      # update that 404s. So this step runs, and the release notes say it: the
+      # update goes live the moment you run
+      # `gh release edit <tag> --draft=false`, not before.
+      - name: Publish the update manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.manifest.outputs.path }}
+          tag_name: updater
+          name: Update manifest
+          # Deliberately not a draft and not a prerelease: this release exists
+          # only to serve one file at a stable URL, and both flags would hide it
+          # from the very fetch it is here to answer.
+          draft: false
+          prerelease: false
+          body: |
+            Machine-readable update manifest for OpenVoice's built-in updater.
+            Not a download — see the
+            [releases page](https://github.com/${{ github.repository }}/releases)
+            for the installer.
+
+            Points at **${{ github.ref_name }}**. That release must be published
+            (not a draft) for the update to be downloadable.

@@ -77,16 +77,24 @@ app deserves.
 
 ## Principles
 
-1. **Local by default, network by exception.** The only outbound request OpenVoice
-   makes is a model download you asked for. Every crate that touches your
-   microphone, your transcripts, your keyboard or your history is *sealed*: it has
-   no path to an HTTP client, TLS stack or socket library anywhere in its
-   dependency graph. That is [checked in CI](scripts/check-no-network.sh), not just
-   promised here. The one honest caveat: the Tauri shell links `reqwest`
-   transitively, because Tauri does, so an HTTP client is present in the binary
-   even though no OpenVoice code calls it. The CI job asserts that no OpenVoice
-   crate takes a network dependency of its own — telemetry or an update ping
-   cannot be added quietly.
+1. **Local by default, network by exception.** OpenVoice makes exactly two kinds of
+   outbound request, and both are listed here: a **model download you asked for**,
+   and an **update check you can switch off** (Settings → Updates). Nothing else.
+   Every crate that touches your microphone, your transcripts, your keyboard or
+   your history is *sealed*: it has no path to an HTTP client, TLS stack or socket
+   library anywhere in its dependency graph. That is
+   [checked in CI](scripts/check-no-network.sh), not just promised here.
+
+   Two honest caveats. The Tauri shell links `reqwest` transitively, because Tauri
+   does, so an HTTP client is present in the binary even though no OpenVoice code
+   calls it. And the update check is a genuine exception to "you asked for it" —
+   nobody asks to be told about a release. It fetches one signed manifest, carries
+   no identifier and no usage data, never installs anything on its own, and makes
+   no request at all when turned off. The reasoning, including why it defaults on,
+   is in [ADR 0005](docs/adr/0005-in-app-updates.md).
+
+   The CI job names every permitted network dependency in an allow-list, so a new
+   one cannot appear quietly — telemetry or a crash uploader still fails the build.
 2. **Never lose a word.** If injection fails, the text is still on your clipboard and
    in your history. A failure is recoverable, never a silent drop.
 3. **Invisible when idle.** ~60 MB RAM, ~0% CPU. You should never notice it running.
@@ -278,8 +286,14 @@ What we do about that:
   Nothing else writes audio to disk, and there is no retention path today.
 - No telemetry, no analytics, no crash uploads — not "off by default", **absent from
   the codebase**, with a CI job that keeps it that way.
+- The update check is the one request you did not individually ask for. It fetches a
+  single signed manifest, sends no identifier and no usage data, and never installs
+  anything without you pressing a button. Turning it off in Settings → Updates means
+  no request is made — not that one is made with a flag attached.
 - Releases are built by public GitHub Actions from a tagged commit, with a
   SHA-256 published beside the installer so you can verify what you downloaded.
+  Every release is also signed with a minisign key whose public half is compiled
+  into the app, and an update that fails that check is discarded without running.
   The [build log](https://github.com/adityashelke04/OpenVoice/actions/workflows/release.yml)
   for every release is public.
 

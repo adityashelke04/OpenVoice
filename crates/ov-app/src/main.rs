@@ -29,6 +29,7 @@ mod engine;
 mod history;
 mod overlay;
 mod settings;
+mod update;
 
 /// The Tauri channel every domain event is published on.
 const EVENT: &str = "ov://event";
@@ -316,6 +317,40 @@ fn save_settings(
     Ok(saved)
 }
 
+/// Ask whether a newer version exists, right now.
+///
+/// Reached from the "Check now" button, which is why the error is returned rather
+/// than logged: the user is waiting for an answer, and silence would read as "you
+/// are up to date" — the one wrong answer they cannot tell apart from the truth.
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<update::UpdateStatus, String> {
+    update::check(&app).await
+}
+
+/// Download, verify and apply an update, then restart.
+///
+/// A separate command from [`check_for_update`] on purpose. Nothing is downloaded
+/// as a side effect of finding out that something exists.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    update::install(&app).await
+}
+
+/// The models this build can load.
+///
+/// Served from `ov_asr::catalog`, which is the only place a model is described.
+/// The Models screen used to carry its own copy of this list — ids, sizes and all
+/// — so a model added to the sidecar simply never appeared, and a size corrected
+/// in one file silently disagreed with the other.
+///
+/// Deliberately does not require a running engine: the catalogue is static data,
+/// and a settings screen that cannot render until the speech engine is warm would
+/// be unusable during exactly the first-run download it needs to explain.
+#[tauri::command]
+fn list_models() -> Vec<ov_asr::catalog::ModelSpec> {
+    ov_asr::catalog::CATALOG.to_vec()
+}
+
 /// Input devices, for the microphone picker.
 #[tauri::command]
 fn list_microphones() -> Vec<String> {
@@ -457,6 +492,10 @@ fn main() {
             show_hub(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        // Registering the plugin does not make a request. Nothing here reaches
+        // the network until `update::check` is called, which happens either from
+        // a button or from the once-per-launch check the user can turn off.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_ready,
@@ -474,7 +513,10 @@ fn main() {
             get_settings,
             save_settings,
             list_microphones,
+            list_models,
             preview_format,
+            check_for_update,
+            install_update,
             restart_app
         ])
         .setup(|app| {
@@ -490,6 +532,18 @@ fn main() {
 
             configure_overlay(&handle);
             build_tray(&handle)?;
+
+            // Read from the user's own settings, so "off" is honoured on the very
+            // first launch after they turn it off rather than one launch later.
+            // Spawned inside, so a slow network cannot delay the window.
+            let check_updates = handle
+                .state::<AppState>()
+                .settings
+                .get()
+                .config
+                .updates
+                .check_on_launch;
+            update::check_on_launch(&handle, check_updates);
 
             // Apply the saved placement and visibility policy now, so the bar is on
             // screen before the engine finishes loading. It is the only evidence the

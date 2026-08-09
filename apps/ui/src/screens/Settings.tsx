@@ -8,13 +8,19 @@
 import { useEffect, useState } from "react";
 import { Badge, Button, Card, Kbd, Notice, Select, Toggle } from "../ui";
 import {
+  checkForUpdate,
+  formatSize,
+  installUpdate,
   listMicrophones,
+  listModels,
   loadSettings,
-  MODELS,
+  MODEL_COPY,
+  type ModelSpec,
   openDataDir,
   restartApp,
   saveSettings,
   type Settings as S,
+  type UpdateStatus,
 } from "../engine/settings";
 import "./screens.css";
 
@@ -93,6 +99,88 @@ export function useSettings() {
   };
 
   return { settings, patch, saving, error };
+}
+
+/** Updates: the one place OpenVoice contacts a server without being asked.
+ *
+ *  Written to be read by someone deciding whether to trust it, so it says what
+ *  the request is and what it carries rather than just offering a switch. The
+ *  check is separated from the install on screen for the same reason it is
+ *  separated in the Rust: finding out is not the same as agreeing.
+ */
+function UpdatesCard({
+  settings,
+  patch,
+}: {
+  settings: S;
+  patch: (fn: (s: S) => void) => void;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<UpdateStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+
+  const check = async () => {
+    setChecking(true);
+    setError(null);
+    setResult(null);
+    try {
+      setResult(await checkForUpdate());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const install = async () => {
+    setInstalling(true);
+    setError(null);
+    try {
+      await installUpdate();
+    } catch (e) {
+      setError(String(e));
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <Card title="Updates">
+      <div className="srows">
+        <Row
+          label="Check for updates when OpenVoice starts"
+          hint="One request to GitHub for a signed list of releases. It carries no identifier and no usage data — there is nowhere in the code to put one. Turn this off and no request is made at all."
+        >
+          <Toggle
+            on={settings.config.updates.check_on_launch}
+            onChange={(v) => patch((s) => (s.config.updates.check_on_launch = v))}
+            label="Check for updates on launch"
+          />
+        </Row>
+        <Row
+          label="Check now"
+          hint={
+            result
+              ? result.available
+                ? `Version ${result.version} is available. You have ${result.currentVersion}.`
+                : `You are on the latest version (${result.currentVersion}).`
+              : "Updates are verified against a signing key built into this app before anything is installed."
+          }
+        >
+          {result?.available ? (
+            <Button variant="primary" onClick={install} disabled={installing}>
+              {installing ? "Installing…" : `Install ${result.version}`}
+            </Button>
+          ) : (
+            <Button onClick={check} disabled={checking}>
+              {checking ? "Checking…" : "Check now"}
+            </Button>
+          )}
+        </Row>
+      </div>
+      {error && <Notice tone="danger">{error}</Notice>}
+    </Card>
+  );
 }
 
 export function SettingsScreen({
@@ -195,6 +283,8 @@ export function SettingsScreen({
         </div>
       </Card>
 
+      <UpdatesCard settings={settings} patch={patch} />
+
       <Card title="Privacy">
         <div className="srows">
           <Row
@@ -249,6 +339,11 @@ export function ModelsScreen({
   patch: (fn: (s: S) => void) => void;
 }) {
   const [pending, setPending] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelSpec[] | null>(null);
+
+  useEffect(() => {
+    listModels().then((m) => m && setModels(m));
+  }, []);
 
   return (
     <div className="screen">
@@ -276,8 +371,17 @@ export function ModelsScreen({
       )}
 
       <div className="model-list">
-        {MODELS.map((m) => {
+        {(models ?? []).map((m) => {
           const active = settings.model === m.id;
+          // A model with no copy still renders: its id is the label and its real
+          // size is shown. That is what keeps adding one a single-file change.
+          const copy = MODEL_COPY[m.id];
+          const name = copy?.name ?? m.id;
+          const detail =
+            copy?.detail ??
+            (m.vramMb > 0
+              ? `Needs about ${formatSize(m.vramMb)} of graphics memory.`
+              : "Works without a graphics card.");
           return (
             <button
               key={m.id}
@@ -287,34 +391,40 @@ export function ModelsScreen({
               onClick={() => {
                 if (active) return;
                 patch((s) => (s.model = m.id));
-                setPending(m.name);
+                setPending(name);
               }}
             >
               <div className="model-main">
                 <div className="hstack">
-                  <span className="t-subheading">{m.name}</span>
+                  <span className="t-subheading">{name}</span>
                   {active && (
                     <Badge dot tone="live">
                       In use
                     </Badge>
                   )}
+                  {m.englishOnly && <Badge>English only</Badge>}
                 </div>
-                <div className="t-caption model-detail">{m.detail}</div>
+                <div className="t-caption model-detail">{detail}</div>
                 <div className="t-mono model-id">{m.id}</div>
               </div>
               <div className="model-numbers">
                 <div>
                   <div className="t-label">Download</div>
-                  <div className="t-mono">{m.size}</div>
+                  <div className="t-mono">{formatSize(m.sizeMb)}</div>
                 </div>
-                <div>
-                  <div className="t-label">Typical</div>
-                  <div className="t-mono">{m.speed}</div>
-                </div>
+                {copy?.speed && (
+                  <div>
+                    <div className="t-label">Typical</div>
+                    <div className="t-mono">{copy.speed}</div>
+                  </div>
+                )}
               </div>
             </button>
           );
         })}
+        {models === null && (
+          <p className="t-caption">Reading the model list…</p>
+        )}
       </div>
 
       <p className="t-caption screen-foot">

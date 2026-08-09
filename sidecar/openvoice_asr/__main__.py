@@ -19,7 +19,15 @@ import sys
 import time
 import traceback
 
-from .engine import Engine, download_model, model_is_cached, probe
+from .engine import (
+    DEFAULT_COMPUTE,
+    DEFAULT_MODEL,
+    DEFAULT_REPO,
+    Engine,
+    download_model,
+    model_is_cached,
+    probe,
+)
 from .protocol import (
     PROTOCOL_VERSION,
     BadRequest,
@@ -87,11 +95,21 @@ def ensure_model(req: Request, engine: Engine) -> dict[str, object]:
     if not isinstance(name, str):
         return err(req.id, "'model' must be a string", retriable=False)
 
-    try:
-        if model_is_cached(name):
-            return ok(req.id, model=name, fetched=False)
-    except ValueError as exc:  # unknown preset
-        return err(req.id, str(exc), retriable=False)
+    # This sidecar can only fetch the model it was started for: the repository and
+    # compute type were resolved by the host before spawn, and it holds no
+    # catalogue to look up a different name. Switching models restarts the process,
+    # so asking for another one here is a host bug, and saying so beats silently
+    # downloading the wrong weights under the right name.
+    if name != engine.model_name:
+        return err(
+            req.id,
+            f"this sidecar was started for {engine.model_name!r} and cannot fetch "
+            f"{name!r}; restart it with the other model",
+            retriable=False,
+        )
+
+    if model_is_cached(engine.repo):
+        return ok(req.id, model=name, fetched=False)
 
     last_tick = 0.0
 
@@ -106,7 +124,7 @@ def ensure_model(req: Request, engine: Engine) -> dict[str, object]:
         write(progress(req.id, downloaded=done, total=total))
 
     try:
-        download_model(name, report)
+        download_model(engine.repo, report)
     except Exception as exc:  # noqa: BLE001
         # Retriable: this is nearly always a dropped connection, and the transfer
         # resumes from where it stopped.
@@ -172,7 +190,18 @@ def main(argv: list[str] | None = None) -> int:
     _force_utf8_io()
 
     parser = argparse.ArgumentParser(prog="openvoice_asr")
-    parser.add_argument("--model", default="base.en")
+    # The host resolves the model from its own catalogue and passes the result.
+    # The defaults here only make a hand-run `python -m openvoice_asr` work for
+    # debugging; see `crates/ov-asr/src/catalog.rs`.
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="name, for logs and history")
+    parser.add_argument("--repo", default=DEFAULT_REPO, help="Hugging Face repository to load")
+    parser.add_argument("--compute-type", default=DEFAULT_COMPUTE)
+    parser.add_argument(
+        "--fallback-compute",
+        default=None,
+        help="compute type to retry with when the preferred one will not fit, "
+        "which is almost always an out-of-VRAM failure",
+    )
     parser.add_argument(
         "--device",
         default="auto",
@@ -204,7 +233,13 @@ def main(argv: list[str] | None = None) -> int:
         log("network access enabled for this run (model download)")
 
     try:
-        engine = Engine(model=args.model, device=args.device)
+        engine = Engine(
+            model=args.model,
+            device=args.device,
+            repo=args.repo,
+            compute_type=args.compute_type,
+            fallback_compute=args.fallback_compute,
+        )
     except ValueError as exc:
         log(str(exc))
         return 2

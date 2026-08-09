@@ -28,6 +28,12 @@ tauri-plugin-opener = "2"
 # second app: another keyboard hook on the same chord, another Flow Bar, another
 # 1.6 GB model. See the plugin registration in main.rs.
 tauri-plugin-single-instance = "2"
+# The one deliberate outbound request OpenVoice makes that the user did not
+# individually ask for. Check-only by default, disableable, and documented in
+# ADR 0005 -- see `UpdateConfig` in ov-core and the allowance in
+# scripts/check-no-network.sh, which names this dependency explicitly so it can
+# never be mistaken for an accident.
+tauri-plugin-updater = "2"
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
