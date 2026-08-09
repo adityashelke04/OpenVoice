@@ -11,6 +11,12 @@ repository.workspace = true
 thiserror.workspace = true
 serde = { workspace = true }
 tracing.workspace = true
+# Backs `redact::Redactor`. Pure computation with no OS, filesystem or network
+# surface, so it does not weaken the wasm32 boundary this crate is checked
+# against. Default features are kept deliberately: the patterns are hand-written
+# by users in a TOML file, and trimming the Unicode tables would make perfectly
+# ordinary regexes fail to compile on their machine and nowhere else.
+regex.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

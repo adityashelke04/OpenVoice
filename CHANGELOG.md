@@ -22,7 +22,39 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
-Nothing yet.
+OpenVoice can now tell you when a new version exists, and two settings that had
+never done anything now do what they say.
+
+### Added
+
+- **Update checks.** OpenVoice looks once per launch for a newer release and
+  offers it; you press a button to install. It never installs on its own. Every
+  update is verified against a signing key built into the app, so a tampered or
+  substituted download is discarded without running — worth having while the
+  installer itself is still unsigned. Switch it off in Settings → Updates and no
+  request is made at all. This is the one request OpenVoice makes that you did not
+  individually ask for, and the reasoning is in
+  [ADR 0005](docs/adr/0005-in-app-updates.md).
+- **Secrets are kept out of your history.** API keys and tokens matching
+  `privacy.redact_patterns` are replaced with `[redacted]` before a transcript is
+  saved or logged. Defaults cover OpenAI, GitHub and AWS credentials. The text
+  delivered to your application is never altered — only the stored copy.
+
+### Fixed
+
+- **"Keep recordings" now keeps recordings.** The toggle had nothing behind it.
+  Turned on, captured audio is kept under `%APPDATA%\OpenVoice\audio` from the
+  next restart instead of being deleted after each decode. It remains off by
+  default, and it is still the only way audio ever persists.
+- The Speech model screen lists what the app can actually load. The model list was
+  written down twice — once in the speech engine, once in the interface — and the
+  two could disagree about which models existed and how large they were.
+
+### Removed
+
+- `model` under `[config]` in `settings.toml`, which was read by nothing. The
+  model has always been the top-level `model` key, and that is unchanged. Your
+  existing settings file loads as-is; the stale key is ignored, not deleted.
 
 ## [0.1.1] - 2026-08-08
 

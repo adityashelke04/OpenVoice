@@ -86,6 +86,17 @@ impl Rules {
     }
 }
 
+/// Compile the configured redaction patterns, reporting any that were rejected.
+///
+/// A bad pattern is skipped rather than fatal — these are hand-edited in a TOML
+/// file, and refusing to start over one would trade a slightly less redacted
+/// history for no dictation at all.
+fn build_redactor(
+    privacy: &ov_core::config::PrivacyConfig,
+) -> (ov_core::redact::Redactor, Vec<String>) {
+    ov_core::redact::Redactor::compile(&privacy.redact_patterns)
+}
+
 pub struct Engine {
     audio: ov_audio::CpalAudioSource,
     transcriber: ov_asr::SidecarTranscriber,
@@ -100,7 +111,16 @@ pub struct Engine {
     /// that it is SQLite.
     history: Arc<dyn HistoryStore>,
     /// Last delivered text, for the tray's "paste last transcript".
+    ///
+    /// Deliberately the *unredacted* text: this is what gets pasted when the user
+    /// asks for it again, and handing them `[redacted]` instead of their own words
+    /// would be a bug. It is in memory only and dies with the process.
     last_text: Mutex<String>,
+    /// Patterns stripped from transcripts before they are written to history.
+    ///
+    /// Behind a lock and rebuilt on save, like the formatter rules, so editing the
+    /// list takes effect on the next utterance rather than at the next restart.
+    redactor: Mutex<ov_core::redact::Redactor>,
     paste_threshold: usize,
     /// Forced transcription language, or `None` to auto-detect.
     ///
@@ -153,6 +173,16 @@ impl Engine {
             profiles = settings.profiles.len(),
             "writing rules reloaded"
         );
+        self.reload_redactor(settings);
+    }
+
+    /// Recompile the redaction patterns from edited settings.
+    pub fn reload_redactor(&self, settings: &crate::settings::Settings) {
+        let (redactor, errors) = build_redactor(&settings.config.privacy);
+        *self.redactor.lock().expect("redactor mutex") = redactor;
+        for e in errors {
+            tracing::warn!("{e}");
+        }
     }
 
     /// Apply an edited language preference to the next dictation.
@@ -355,6 +385,16 @@ pub fn start(
         let cuda = data.join("cuda");
         cfg.cuda_dir = cuda.is_dir().then_some(cuda);
     }
+    // Backs the "Keep recordings" toggle, which until now was a switch with
+    // nothing behind it. Off means the scratch WAV is deleted after every decode,
+    // exactly as before; on means it is moved here instead.
+    cfg.retain_audio_dir = config
+        .privacy
+        .retain_audio
+        .then(|| crate::history::data_dir().join("audio"));
+    if let Some(dir) = &cfg.retain_audio_dir {
+        tracing::warn!(dir = %dir.display(), "keeping recordings on disk; this is off by default");
+    }
     cfg.allow_download = std::env::var("OPENVOICE_ALLOW_DOWNLOAD").is_ok();
     let transcriber = ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())?;
 
@@ -385,6 +425,10 @@ pub fn start(
     transcriber.warm().map_err(|e| e.to_string())?;
 
     let rules = Rules::build(settings);
+    let (redactor, redact_errors) = build_redactor(&config.privacy);
+    for e in &redact_errors {
+        tracing::warn!("{e}");
+    }
 
     let audio =
         ov_audio::CpalAudioSource::new(config.input_device.clone()).map_err(|e| e.to_string())?;
@@ -410,6 +454,7 @@ pub fn start(
         captured: Mutex::new(None),
         history,
         last_text: Mutex::new(String::new()),
+        redactor: Mutex::new(redactor),
         paste_threshold: config.paste_threshold_chars,
         language: Mutex::new(config.language.clone()),
         start: Instant::now(),
@@ -652,14 +697,33 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
         }
 
         Effect::Persist { record } => {
+            // Redaction happens here, on the way to storage, and nowhere else.
+            //
+            // The transcript reached the user's application several steps ago —
+            // `Effect::Inject` ran before this — so what is being protected is the
+            // *retained* copy: the searchable history and anything a log ends up
+            // in. Redacting before injection would mean silently handing the user
+            // `[redacted]` instead of the words they said, which is a data-loss
+            // bug however good the intention.
+            let redactor = e.redactor.lock().expect("redactor mutex");
+            let (raw_text, final_text) = if redactor.is_empty() {
+                (record.raw_text.clone(), record.final_text.clone())
+            } else {
+                (
+                    redactor.apply(&record.raw_text),
+                    redactor.apply(&record.final_text),
+                )
+            };
+            drop(redactor);
+
             let entry = Utterance {
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
                 duration_ms: record.audio_ms,
-                raw_text: record.raw_text.clone(),
-                final_text: record.final_text.clone(),
+                raw_text,
+                final_text,
                 profile: record.profile.clone(),
                 target_app: (!record.app.exe.is_empty()).then(|| record.app.exe.clone()),
                 model: e.transcriber.model_id(),

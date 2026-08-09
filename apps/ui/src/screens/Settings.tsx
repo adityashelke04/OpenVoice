@@ -289,13 +289,23 @@ export function SettingsScreen({
         <div className="srows">
           <Row
             label="Keep recordings"
-            hint="Off: your voice is held in memory only and discarded the moment it has been written out. Turn this on only to help diagnose a problem."
+            hint="Off: your voice is held in memory only and discarded the moment it has been written out. Turn this on only to help diagnose a problem — it applies from the next restart, and recordings already saved stay until you delete them."
           >
             <Toggle
               on={c.privacy.retain_audio}
               onChange={(v) => patch((s) => (s.config.privacy.retain_audio = v))}
               label="Keep recordings on disk"
             />
+          </Row>
+          <Row
+            label="Hide secrets in history"
+            hint="API keys and tokens are replaced with [redacted] before a transcript is saved or logged. The text delivered to your app is never altered — only the stored copy. Edit the patterns under privacy.redact_patterns in settings.toml."
+          >
+            <Badge dot tone={c.privacy.redact_patterns.length > 0 ? "live" : "neutral"}>
+              {c.privacy.redact_patterns.length > 0
+                ? `${c.privacy.redact_patterns.length} patterns`
+                : "Off"}
+            </Badge>
           </Row>
           <Row label="Keep history for" hint="Older entries are deleted automatically.">
             <Select

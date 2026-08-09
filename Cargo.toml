@@ -57,6 +57,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Misc
 time = { version = "0.3", features = ["formatting", "macros"] }
+regex = "1"
 
 # Test-only
 insta = { version = "1", features = ["yaml"] }

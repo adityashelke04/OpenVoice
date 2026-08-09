@@ -2950,6 +2950,7 @@ name = "ov-core"
 version = "0.1.1"
 dependencies = [
  "pretty_assertions",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.19",

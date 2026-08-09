@@ -307,14 +307,15 @@ Found something wrong? [`SECURITY.md`](SECURITY.md).
 | **v0.2** | The differentiator | formatting pipeline, dictionary, app profiles, settings UI ✅ |
 | **v0.3** | Feel | overlay waveform ✅, sound feedback ✅, history search ✅ — still to do: streaming partials, history export, sub-700 ms p50 |
 | **v0.4** | Intelligence | optional local LLM polish, prompt mode for AI agents |
-| **v0.5** | Distribution | published Windows installer ✅ — still to do: code signing, optional GPU pack, auto-update, macOS |
+| **v0.5** | Distribution | published Windows installer ✅, auto-update ✅ — still to do: code signing, optional GPU pack, macOS |
 | **v1.0** | Stability | plugin API for formatter rules, frozen API |
 
 Every phase ships something usable. None is a refactor-only phase.
 
-Three things have a config field or a UI toggle but no implementation behind them
-yet — listed here rather than left to be discovered: transcript redaction, audio
-retention, and toggle activation (push-to-talk is the only mode that works).
+One thing still has a config field but no implementation behind it — listed here
+rather than left to be discovered: **toggle activation** (push-to-talk is the only
+mode that works). Transcript redaction and audio retention were in this list until
+v0.2.0 and now both do what they say.
 
 ## Design
 

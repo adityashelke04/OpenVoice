@@ -80,6 +80,17 @@ pub struct SidecarConfig {
     /// 1.9 GB and worthless on a machine with no NVIDIA GPU. `None` means run on
     /// CPU, which is the correct default and works everywhere.
     pub cuda_dir: Option<PathBuf>,
+    /// Where to keep captured audio instead of deleting it, when the user has
+    /// asked for that.
+    ///
+    /// `None` — the default, and what almost every install runs with — means the
+    /// scratch WAV is deleted the moment the decode returns, success or failure.
+    /// `Some(dir)` backs the "Keep recordings" toggle, which exists for diagnosing
+    /// a transcription problem that cannot be reproduced any other way.
+    ///
+    /// This is the only path in OpenVoice by which audio persists, and it is off
+    /// unless deliberately switched on.
+    pub retain_audio_dir: Option<PathBuf>,
     /// Permit the sidecar to fetch weights from Hugging Face.
     ///
     /// Off by default. The sidecar is inference-only, and leaving the network
@@ -103,6 +114,7 @@ impl SidecarConfig {
             scratch_dir: std::env::temp_dir().join("openvoice"),
             model_dir: None,
             cuda_dir: None,
+            retain_audio_dir: None,
             allow_download: false,
         }
     }
@@ -125,6 +137,7 @@ impl SidecarConfig {
             scratch_dir: std::env::temp_dir().join("openvoice"),
             model_dir: None,
             cuda_dir: None,
+            retain_audio_dir: None,
             allow_download: false,
         }
     }
@@ -449,6 +462,49 @@ impl SidecarTranscriber {
         let resp = self.request_with_progress(&payload, &mut on_progress)?;
         Ok(resp.fetched.unwrap_or(false))
     }
+
+    /// Delete the scratch WAV, or move it aside when the user is keeping audio.
+    ///
+    /// Failing to *keep* a recording falls back to deleting it. That direction is
+    /// deliberate and is the only safe one: the alternative on a full disk or a
+    /// permissions error is a temp file the user believes was cleaned up.
+    fn dispose_of(&self, path: &Path) {
+        let Some(dir) = &self.cfg.retain_audio_dir else {
+            if let Err(e) = std::fs::remove_file(path) {
+                tracing::warn!(path = %path.display(), error = %e, "could not delete scratch audio");
+            }
+            return;
+        };
+
+        let kept = std::fs::create_dir_all(dir).and_then(|()| {
+            // Seconds since the epoch, so the folder sorts chronologically and two
+            // recordings a second apart cannot collide -- the scratch name carries
+            // a per-process counter that restarts with the process.
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "audio".into());
+            std::fs::rename(path, dir.join(format!("{stamp}-{name}.wav")))
+        });
+
+        match kept {
+            Ok(()) => tracing::debug!(dir = %dir.display(), "kept recording"),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    dir = %dir.display(),
+                    "could not keep the recording; deleting it instead"
+                );
+                if let Err(e) = std::fs::remove_file(path) {
+                    tracing::warn!(path = %path.display(), error = %e, "could not delete scratch audio");
+                }
+            }
+        }
+    }
 }
 
 /// Build the `ensure_model` request.
@@ -516,12 +572,10 @@ impl Transcriber for SidecarTranscriber {
 
         let result = self.request(&payload);
 
-        // Audio is never left on disk. This runs whether the decode succeeded or
-        // not, which is the point: a failed transcription must not quietly leave a
-        // recording of the user behind.
-        if let Err(e) = std::fs::remove_file(&path) {
-            tracing::warn!(path = %path.display(), error = %e, "could not delete scratch audio");
-        }
+        // Audio does not stay on disk unless the user asked for it. This runs
+        // whether the decode succeeded or not, which is the point: a failed
+        // transcription must not quietly leave a recording of the user behind.
+        self.dispose_of(&path);
 
         let resp = result?;
         if let Some(id) = resp.model_id {
