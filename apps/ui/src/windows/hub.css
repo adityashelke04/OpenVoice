@@ -230,9 +230,16 @@
   margin: 0 calc(var(--s-5) * -1) calc(var(--s-5) * -1);
 }
 
+/* Narrow window: a tighter sidebar, not an icon rail.
+ *
+ * This used to collapse to 64px — an icon-bar width, in a sidebar that has no
+ * icons. The labels stayed, so "Writing style" and "Speech model" simply ran out
+ * of the sidebar and across the content beside it. 148px is the width at which
+ * the longest label still fits at 12px, and the ellipsis below is the backstop
+ * for a label longer than any shipped today. */
 @media (max-width: 900px) {
   .hub {
-    grid-template-columns: 64px 1fr;
+    grid-template-columns: 148px 1fr;
   }
   .hub-brand span,
   .nav-item {
@@ -241,6 +248,20 @@
   .nav-soon {
     display: none;
   }
+}
+
+/* Nothing in the sidebar may spill into the page beside it, whatever it is
+   called. Applies at every width, so a future label cannot reintroduce this. */
+.hub-nav {
+  overflow: hidden;
+}
+
+.hub-brand span,
+.nav-item {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* --------------------------------------------------------------- first run --

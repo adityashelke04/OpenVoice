@@ -6,7 +6,7 @@
  * dictionary nobody trusts.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Empty, Input, Notice } from "../ui";
 import { previewFormat, type Settings as S } from "../engine/settings";
 import "./screens.css";
@@ -34,12 +34,20 @@ export function DictionaryScreen({
 
   // Re-run the preview whenever the phrase or the dictionary changes, so adding a
   // term visibly updates the result.
+  //
+  // Each run carries a sequence number and a slower earlier request is discarded
+  // when it lands. Without that, typing quickly enough to have two previews in
+  // flight let the first one to *finish* win rather than the last one sent, and
+  // the box would settle showing the result for a phrase you had already edited.
+  const seq = useRef(0);
   const run = useCallback(async (text: string) => {
+    const mine = ++seq.current;
     if (!text.trim()) {
       setResult("");
       return;
     }
     const trace = await previewFormat(text, "prose");
+    if (mine !== seq.current) return; // superseded while this was in flight
     if (trace?.length) setResult(trace[trace.length - 1][1]);
   }, []);
 

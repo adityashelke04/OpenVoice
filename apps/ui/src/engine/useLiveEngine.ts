@@ -134,7 +134,12 @@ export function useLiveEngine() {
         return false;
       };
 
-      if (!(await poll())) {
+      // `cancelled` is checked *before* arming the timer, matching how the
+      // listeners below are handled. The first poll is awaited, so an unmount
+      // during it would previously run cleanup against an empty `stops` list and
+      // only then create an interval — one that nothing held a reference to and
+      // nothing would ever clear.
+      if (!(await poll()) && !cancelled) {
         const id = window.setInterval(async () => {
           if (await poll()) clearInterval(id);
         }, 700);

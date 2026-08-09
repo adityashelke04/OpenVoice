@@ -52,6 +52,31 @@ const LANGUAGES: readonly [code: string, name: string][] = [
   ["sv", "Swedish"],
 ];
 
+/** Options for a preset picker, guaranteeing the current value is among them.
+ *
+ * `settings.toml` is a plain file people edit. A value we do not offer — 14 days
+ * of audio retention, say — leaves a `<select>` with a value matching no option,
+ * and a browser then displays the *first* option instead. So the screen calmly
+ * reported "1 day" for a config that said 14, and the only way to find out was
+ * to reopen the file. Showing the real value keeps the screen honest, and the
+ * user can still pick a preset over it.
+ */
+function withCurrent(options: string[], current: string): string[] {
+  return options.includes(current) ? options : [current, ...options];
+}
+
+/** How a recordings-retention value reads. Zero means "keep them". */
+function audioDaysLabel(days: number): string {
+  if (days === 0) return "Keep them";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+/** How a history-retention value reads. Zero means "forever". */
+function historyDaysLabel(days: number): string {
+  if (days === 0) return "Forever";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
 /** A labelled row. The only list primitive these screens use. */
 function Row({
   label,
@@ -340,14 +365,11 @@ export function SettingsScreen({
               hint="Recordings are far larger than transcripts — about 2 MB a minute — so they are cleared on this schedule. Your history is separate and is never affected by this."
             >
               <Select
-                options={["1 day", "7 days", "30 days", "Keep them"]}
-                value={
-                  c.privacy.audio_days === 0
-                    ? "Keep them"
-                    : c.privacy.audio_days === 1
-                      ? "1 day"
-                      : `${c.privacy.audio_days} days`
-                }
+                options={withCurrent(
+                  ["1 day", "7 days", "30 days", "Keep them"],
+                  audioDaysLabel(c.privacy.audio_days),
+                )}
+                value={audioDaysLabel(c.privacy.audio_days)}
                 onChange={(e) =>
                   patch((s) => {
                     s.config.privacy.audio_days =
@@ -370,12 +392,11 @@ export function SettingsScreen({
           </Row>
           <Row label="Keep history for" hint="Older entries are deleted automatically.">
             <Select
-              options={["7 days", "30 days", "90 days", "Forever"]}
-              value={
-                c.privacy.history_days === 0
-                  ? "Forever"
-                  : `${c.privacy.history_days} days`
-              }
+              options={withCurrent(
+                ["7 days", "30 days", "90 days", "Forever"],
+                historyDaysLabel(c.privacy.history_days),
+              )}
+              value={historyDaysLabel(c.privacy.history_days)}
               onChange={(e) =>
                 patch((s) => {
                   s.config.privacy.history_days =

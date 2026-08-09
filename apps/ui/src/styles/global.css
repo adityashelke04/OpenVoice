@@ -55,7 +55,11 @@ figure {
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 1px solid var(--live);
   outline-offset: 2px;
-  border-radius: var(--r-sm);
+  /* No `border-radius` here. Browsers already draw an outline that follows the
+     element's own corners; setting a radius on focus *overrode* that with 4px,
+     so the ring cut straight across the 8px corners of every button it landed
+     on. Letting each control keep its own radius is both correct and less
+     code. */
 }
 
 button {
@@ -122,13 +126,16 @@ textarea {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+/* `--surface-4` (#1c1c21) on a pure black canvas is about 1.2:1 — a scrollbar
+   you cannot actually see, which is not the same thing as a discreet one. One
+   step up the ladder keeps it quiet and makes it findable. */
 ::-webkit-scrollbar-thumb {
-  background: var(--surface-4);
+  background: var(--hairline-strong);
   border: 3px solid var(--canvas);
   border-radius: var(--r-full);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--hairline-strong);
+  background: var(--disabled);
 }
 
 @media (prefers-reduced-motion: reduce) {

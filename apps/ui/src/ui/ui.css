@@ -114,10 +114,27 @@
   box-shadow: 0 0 0 3px var(--live-ring);
 }
 
+/* A dropdown has to look like one.
+ *
+ * `appearance: none` removed the native arrow and nothing replaced it, so every
+ * picker in Settings read as an uneditable text field — the padding-right below
+ * was already reserving room for a chevron that was never drawn. The arrow is an
+ * inline data URI rather than a file: the app ships no image assets, and the
+ * Artifact-style CSP the webview runs under would block an external one.
+ *
+ * `--mute` is baked into the SVG because `currentColor` does not resolve inside
+ * a background image. It is the same grey the rest of the secondary chrome uses. */
 .select {
   appearance: none;
-  padding-right: var(--s-6);
+  padding-right: var(--s-7);
   cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238f8f8f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--s-3) center;
+}
+
+.select:hover {
+  border-color: var(--hairline-strong);
 }
 
 /* ---------------------------------------------------------------- Toggle -- */

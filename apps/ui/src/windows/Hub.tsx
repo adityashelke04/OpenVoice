@@ -319,7 +319,12 @@ export function Hub() {
 /** Bytes as a person reads them. Two significant figures is enough at every size
  *  and stops the number changing width several times a second. */
 function mb(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  // The threshold is 995 MB, not 1 GB, because the megabyte branch *rounds*:
+  // 999,999,999 bytes rendered as "1000 MB" while the total beside it rendered
+  // as "1.0 GB", so the progress line read "1000 MB of 1.0 GB". Switching units
+  // at the point where rounding would first produce a four-digit number keeps
+  // the two halves of that sentence in the same units.
+  if (bytes >= 995e6) return `${(bytes / 1e9).toFixed(1)} GB`;
   return `${Math.round(bytes / 1e6)} MB`;
 }
 
