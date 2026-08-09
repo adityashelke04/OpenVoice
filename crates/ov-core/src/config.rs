@@ -203,7 +203,23 @@ impl Default for SessionLimits {
 #[serde(default)]
 pub struct PrivacyConfig {
     /// Write captured audio to disk. Off by default; for debugging only.
+    ///
+    /// Independent of [`history_days`](Self::history_days). Turning this off does
+    /// not remove your transcripts — text is a few hundred bytes an utterance,
+    /// audio is a few hundred kilobytes, and only one of those is worth worrying
+    /// about. History stays either way.
     pub retain_audio: bool,
+    /// Days of recordings to keep, when [`retain_audio`](Self::retain_audio) is
+    /// on. Zero keeps them indefinitely.
+    ///
+    /// A short default because this is the setting that fills a disk. Sixteen-kHz
+    /// mono audio is about 32 kB a second, so a chatty week is comfortably under a
+    /// gigabyte — but left unbounded it grows forever, and nobody goes looking for
+    /// a folder they forgot they enabled.
+    ///
+    /// Recordings only exist to diagnose a transcription problem, and a problem
+    /// still unsolved a week later is not going to be solved by the audio.
+    pub audio_days: u32,
     /// Days of history to keep. Zero disables history entirely.
     pub history_days: u32,
     /// Regular expressions whose matches are redacted before anything is written to
@@ -215,6 +231,7 @@ impl Default for PrivacyConfig {
     fn default() -> Self {
         Self {
             retain_audio: false,
+            audio_days: 7,
             history_days: 90,
             redact_patterns: vec![
                 r"sk-[A-Za-z0-9]{20,}".into(),

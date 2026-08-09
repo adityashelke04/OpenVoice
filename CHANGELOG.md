@@ -48,9 +48,16 @@ never done anything now do what they say.
 - **The dictation key can be changed.** Eighteen keys to choose from, including
   F13–F24 for anyone with a macro key or a remapper. The Hub and the tray now name
   the key you actually bound instead of always saying "Right Ctrl".
-- **The Speech model screen says what is on your disk.** Which models are
-  downloaded, how much room each one takes, the total, and a Delete button to get
-  it back. Deleting the model in use is refused rather than left to fail later.
+- **Models can be downloaded and removed from the app.** The Speech model screen
+  now shows which models are on your disk, how much room each takes, and the
+  total. Download fetches a model without switching to it or restarting, so you
+  can get the weights first and decide later; Delete gives the space back.
+  Deleting the model in use is refused rather than left to fail later.
+- **Recordings clean themselves up.** If you turn "Keep recordings" on, they are
+  now deleted after a week by default, adjustable to a day, a month, or never.
+  Audio is roughly 2 MB a minute and previously nothing ever removed it. Your
+  history is separate and unaffected — turning recordings off, or having them
+  swept, never touches your transcripts.
 
 ### Fixed
 

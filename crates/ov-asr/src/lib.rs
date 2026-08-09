@@ -457,9 +457,25 @@ impl SidecarTranscriber {
     ///
     /// Cheap and idempotent when they already are, so it is safe to call on every
     /// start. `on_progress` is invoked several times a second during a transfer.
-    pub fn ensure_model(&self, mut on_progress: impl FnMut(Progress)) -> Result<bool> {
+    pub fn ensure_model(&self, on_progress: impl FnMut(Progress)) -> Result<bool> {
+        self.ensure_model_named(&self.cfg.model, on_progress)
+    }
+
+    /// Fetch *any* catalogued model's weights, not only the loaded one.
+    ///
+    /// Backs the per-model Download button. Downloading is independent of
+    /// loading: it writes to the shared cache and does not disturb the weights
+    /// already resident, so the running sidecar can serve it. What it cannot do
+    /// is make the app decode with them -- that still needs a restart against the
+    /// new model.
+    pub fn ensure_model_named(
+        &self,
+        model: &str,
+        mut on_progress: impl FnMut(Progress),
+    ) -> Result<bool> {
+        let spec = catalog::resolve(model)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let payload = ensure_model_payload(id, &self.cfg.model);
+        let payload = ensure_model_payload(id, model, spec.repo);
         let resp = self.request_with_progress(&payload, &mut on_progress)?;
         Ok(resp.fetched.unwrap_or(false))
     }
@@ -520,11 +536,12 @@ impl SidecarTranscriber {
 /// the sidecar was already launched with, so the handler's `or engine.model_name`
 /// fallback happened to land on the right answer anyway. See `transcribe`'s own
 /// `"wav": path` for the pattern this follows.
-fn ensure_model_payload(id: u64, model: &str) -> serde_json::Value {
+fn ensure_model_payload(id: u64, model: &str, repo: &str) -> serde_json::Value {
     serde_json::json!({
         "id": id,
         "op": "ensure_model",
         "model": model,
+        "repo": repo,
     })
 }
 
@@ -695,7 +712,7 @@ mod tests {
         // side silently returns None. It went unnoticed because the handler
         // falls back to the engine's own configured model, which today is
         // always the same value -- correct by coincidence, not by contract.
-        let payload = ensure_model_payload(7, "base.en");
+        let payload = ensure_model_payload(7, "base.en", "Systran/faster-whisper-base.en");
         assert_eq!(payload["id"], 7);
         assert_eq!(payload["op"], "ensure_model");
         assert_eq!(
@@ -706,5 +723,28 @@ mod tests {
             payload.get("params").is_none(),
             "a nested params object is the exact shape that broke silently before"
         );
+    }
+
+    #[test]
+    fn ensure_model_carries_the_repo_so_any_model_can_be_fetched() {
+        // The Download button fetches a model this sidecar was not started for.
+        // Without the repo on the wire the sidecar would fall back to its own,
+        // and the button would silently re-download the model already loaded --
+        // reporting success for a transfer of the wrong thing.
+        let payload = ensure_model_payload(
+            1,
+            "large-v3-turbo",
+            "deepdml/faster-whisper-large-v3-turbo-ct2",
+        );
+        assert_eq!(payload["repo"], "deepdml/faster-whisper-large-v3-turbo-ct2");
+    }
+
+    #[test]
+    fn every_catalogued_model_has_a_fetchable_payload() {
+        for m in catalog::CATALOG {
+            let payload = ensure_model_payload(1, m.id, m.repo);
+            assert_eq!(payload["model"], m.id);
+            assert_eq!(payload["repo"], m.repo);
+        }
     }
 }

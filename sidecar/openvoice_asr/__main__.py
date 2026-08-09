@@ -95,20 +95,20 @@ def ensure_model(req: Request, engine: Engine) -> dict[str, object]:
     if not isinstance(name, str):
         return err(req.id, "'model' must be a string", retriable=False)
 
-    # This sidecar can only fetch the model it was started for: the repository and
-    # compute type were resolved by the host before spawn, and it holds no
-    # catalogue to look up a different name. Switching models restarts the process,
-    # so asking for another one here is a host bug, and saying so beats silently
-    # downloading the wrong weights under the right name.
-    if name != engine.model_name:
-        return err(
-            req.id,
-            f"this sidecar was started for {engine.model_name!r} and cannot fetch "
-            f"{name!r}; restart it with the other model",
-            retriable=False,
-        )
+    # The repository to fetch, which the host resolves from its catalogue. It may
+    # be a model this sidecar was not started for and cannot load: the Models
+    # screen offers a Download button per model, so that a user can fetch weights
+    # before committing to them and without restarting the app.
+    #
+    # Downloading is independent of loading -- it writes to the shared cache and
+    # touches nothing already resident -- so serving it from the running process
+    # is safe. It just cannot be followed by a decode on those weights until the
+    # host restarts the sidecar against them.
+    repo = req.params.get("repo") or engine.repo
+    if not isinstance(repo, str) or "/" not in repo:
+        return err(req.id, "'repo' must be a full 'org/name' id", retriable=False)
 
-    if model_is_cached(engine.repo):
+    if model_is_cached(repo):
         return ok(req.id, model=name, fetched=False)
 
     last_tick = 0.0
@@ -124,7 +124,7 @@ def ensure_model(req: Request, engine: Engine) -> dict[str, object]:
         write(progress(req.id, downloaded=done, total=total))
 
     try:
-        download_model(engine.repo, report)
+        download_model(repo, report)
     except Exception as exc:  # noqa: BLE001
         # Retriable: this is nearly always a dropped connection, and the transfer
         # resumes from where it stopped.

@@ -29,6 +29,9 @@ export interface Config {
   };
   privacy: {
     retain_audio: boolean;
+    /** Days of recordings to keep. 0 keeps them indefinitely. Independent of
+     *  `history_days` — turning recordings off never touches your transcripts. */
+    audio_days: number;
     history_days: number;
     redact_patterns: string[];
   };
@@ -151,6 +154,10 @@ export interface ModelSpec {
   /** Whether this is the model the app is set to load. */
   inUse: boolean;
 }
+
+/** Fetch a model's weights now, without switching to it or restarting.
+ *  Resolves true if it actually transferred, false if it was already there. */
+export const downloadModel = (id: string) => call<boolean>("download_model", { id });
 
 /** Delete a model's weights. Refuses to remove the one in use. */
 export const deleteModel = (id: string) => call<void>("delete_model", { id });

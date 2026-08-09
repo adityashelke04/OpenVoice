@@ -193,6 +193,32 @@ impl Engine {
         tracing::info!(language = ?settings.config.language, "transcription language changed");
     }
 
+    /// Fetch a model's weights now, without switching to it or restarting.
+    ///
+    /// Downloading and loading are separate things. This writes to the shared
+    /// cache and leaves the resident weights alone, so the running sidecar can
+    /// serve it while dictation continues to work on the current model. What it
+    /// does *not* do is make the app decode with the new weights — that still
+    /// happens on the next start.
+    ///
+    /// Progress goes to the same place first-run progress goes, so the download
+    /// is visible in the one spot the user already learned to look.
+    pub fn download_model(&self, model: &str) -> Result<bool, String> {
+        let name = model.to_string();
+        let shell = self.shell.clone();
+        let result = self.transcriber.ensure_model_named(model, |p| {
+            shell.set_download_progress(Some(DownloadProgress {
+                model: name.clone(),
+                done: p.done,
+                total: p.total,
+            }));
+        });
+        // Cleared on both paths: a failed download that left the progress bar up
+        // would strand the UI on a transfer that is not happening.
+        self.shell.set_download_progress(None);
+        result.map_err(|e| format!("Could not download {model}: {e}"))
+    }
+
     /// Text of the most recent successful dictation.
     pub fn last_text(&self) -> String {
         self.last_text.lock().map(|t| t.clone()).unwrap_or_default()

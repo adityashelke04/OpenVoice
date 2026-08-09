@@ -272,9 +272,19 @@ fn open_history(settings: &settings::Store) -> Arc<ov_store::SqliteStore> {
 
     // Apply the retention setting once at startup rather than on a timer: history
     // only grows while the app is running, so a daily check on launch is enough.
-    let days = settings.get().config.privacy.history_days;
-    if let Err(e) = store.purge_older_than(days) {
+    let privacy = settings.get().config.privacy;
+    if let Err(e) = store.purge_older_than(privacy.history_days) {
         tracing::warn!(error = %e, "retention purge failed");
+    }
+
+    // Recordings are swept on the same schedule and are the reason a sweep
+    // matters at all: history is a few hundred bytes an utterance, audio is a few
+    // hundred kilobytes. Run unconditionally rather than only when `retain_audio`
+    // is on, so turning the setting *off* also clears out what it left behind
+    // instead of stranding it forever.
+    let audio_dir = history::data_dir().join("audio");
+    if let Err(e) = ov_asr::store::purge_recordings(&audio_dir, privacy.audio_days) {
+        tracing::warn!(error = %e, "recording purge failed");
     }
 
     Arc::new(store)
@@ -378,6 +388,29 @@ struct ModelRow {
     installed_bytes: u64,
     /// Whether this is the model the app is configured to load.
     in_use: bool,
+}
+
+/// Fetch a model's weights now, without switching to it.
+///
+/// Separate from choosing a model on purpose. Downloading a gigabyte and
+/// committing your next dictation to it are different decisions, and before this
+/// the only way to get the weights was to select the model and restart — which
+/// meant discovering the download only after you had already switched.
+///
+/// Requires the engine to be running, because the sidecar does the fetching. On a
+/// first run that is not yet true, and the answer says so rather than failing
+/// with something about a broken pipe.
+#[tauri::command]
+async fn download_model(state: tauri::State<'_, AppState>, id: String) -> Result<bool, String> {
+    let engine = state.engine.lock().expect("engine").as_ref().cloned();
+    let Some(engine) = engine else {
+        return Err("The speech engine is still starting. Try again in a moment.".into());
+    };
+    // On a blocking pool: this transfers up to 1.6 GB and would otherwise hold
+    // the async runtime for the whole download.
+    tauri::async_runtime::spawn_blocking(move || engine.download_model(&id))
+        .await
+        .map_err(|e| format!("download task failed: {e}"))?
 }
 
 /// Delete a model's weights.
@@ -563,6 +596,7 @@ fn main() {
             save_settings,
             list_microphones,
             list_models,
+            download_model,
             delete_model,
             preview_format,
             check_for_update,

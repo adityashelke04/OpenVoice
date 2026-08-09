@@ -14,6 +14,11 @@ serde.workspace = true
 serde_json.workspace = true
 hound = "3.5"
 
+[dev-dependencies]
+# Test-only: backdating a file's modified time is the only way to test a
+# retention window without making the test sleep for a week.
+filetime = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",

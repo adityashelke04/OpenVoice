@@ -10,6 +10,7 @@ import { Badge, Button, Card, Notice, Select, Toggle } from "../ui";
 import {
   checkForUpdate,
   deleteModel,
+  downloadModel,
   formatBytes,
   formatSize,
   HOTKEYS,
@@ -333,6 +334,30 @@ export function SettingsScreen({
               label="Keep recordings on disk"
             />
           </Row>
+          {c.privacy.retain_audio && (
+            <Row
+              label="Delete recordings after"
+              hint="Recordings are far larger than transcripts — about 2 MB a minute — so they are cleared on this schedule. Your history is separate and is never affected by this."
+            >
+              <Select
+                options={["1 day", "7 days", "30 days", "Keep them"]}
+                value={
+                  c.privacy.audio_days === 0
+                    ? "Keep them"
+                    : c.privacy.audio_days === 1
+                      ? "1 day"
+                      : `${c.privacy.audio_days} days`
+                }
+                onChange={(e) =>
+                  patch((s) => {
+                    s.config.privacy.audio_days =
+                      e.target.value === "Keep them" ? 0 : parseInt(e.target.value, 10);
+                  })
+                }
+                style={{ width: 150 }}
+              />
+            </Row>
+          )}
           <Row
             label="Hide secrets in history"
             hint="API keys and tokens are replaced with [redacted] before a transcript is saved or logged. The text delivered to your app is never altered — only the stored copy. Edit the patterns under privacy.redact_patterns in settings.toml."
@@ -393,6 +418,8 @@ export function ModelsScreen({
   };
   useEffect(refresh, []);
 
+  const [busy, setBusy] = useState<string | null>(null);
+
   const remove = async (id: string) => {
     setError(null);
     try {
@@ -400,6 +427,19 @@ export function ModelsScreen({
       refresh();
     } catch (e) {
       setError(String(e));
+    }
+  };
+
+  const download = async (id: string) => {
+    setError(null);
+    setBusy(id);
+    try {
+      await downloadModel(id);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -485,6 +525,15 @@ export function ModelsScreen({
                 )}
                 </div>
               </button>
+              {!m.installed && (
+                <Button
+                  size="sm"
+                  onClick={() => download(m.id)}
+                  disabled={busy !== null}
+                >
+                  {busy === m.id ? "Downloading…" : "Download"}
+                </Button>
+              )}
               {m.installed && !m.inUse && (
                 <Button size="sm" variant="ghost" onClick={() => remove(m.id)}>
                   Delete
