@@ -100,7 +100,12 @@ jobs:
         working-directory: crates/ov-app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Empty by construction: the signing key was generated without a
+          # passphrase, so there is nothing here to keep secret and storing it as
+          # one would only obscure that. It must still be *set* — an unset value
+          # makes the signer prompt, which in CI means hanging until the job is
+          # cancelled rather than failing with a reason.
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: npx --prefix ../../apps/ui tauri build
 
       - name: Collect the installer and checksum it
