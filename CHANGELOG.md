@@ -22,8 +22,14 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
-OpenVoice can now tell you when a new version exists, and two settings that had
-never done anything now do what they say.
+Nothing yet.
+
+## [0.2.0] - 2026-08-09
+
+OpenVoice can now tell you when a new version exists, manage its own speech
+models, and learn a word it got wrong. Several settings that had never done
+anything now do what they say — and one bug meant no fresh install could
+download a model at all.
 
 ### Added
 

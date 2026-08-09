@@ -73,7 +73,7 @@ impl Redactor {
         self.patterns.is_empty()
     }
 
-    /// Replace every match with [`MARKER`].
+    /// Replace every match with `[redacted]`.
     #[must_use]
     pub fn apply(&self, text: &str) -> String {
         let mut out = text.to_string();

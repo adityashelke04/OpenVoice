@@ -11,7 +11,7 @@ No cloud, no account, no telemetry.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
-**[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/v0.1.1/OpenVoice_0.1.1_x64-setup.exe)** — one `.exe`, speech engine included.
+**[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/v0.2.0/OpenVoice_0.2.0_x64-setup.exe)** — one `.exe`, speech engine included.
 [All releases →](https://github.com/adityashelke04/OpenVoice/releases)
 
 <img src="docs/images/flow-bar.png" width="420" alt="The Flow Bar: a small floating pill reading &quot;Hold Right Ctrl&quot;">
@@ -19,7 +19,7 @@ No cloud, no account, no telemetry.
 </div>
 
 > **Status: alpha.** It runs end to end — hotkey, capture, transcription,
-> formatting, injection, and history all work on Windows, and `v0.1.1` is
+> formatting, injection, and history all work on Windows, and `v0.2.0` is
 > published as a pre-release you can install today. What is not done is
 > distribution polish: nothing is code-signed, so Windows will warn you about an
 > unknown publisher, and the bundled speech engine is CPU-only.
@@ -104,8 +104,12 @@ app deserves.
    `%APPDATA%\OpenVoice\history.db` with a [documented
    schema](crates/ov-store/src/schema.rs) — open it with any SQLite browser, no
    export feature required. (A built-in export is v0.3 work.) Recorded audio is
-   never kept: the only copy that touches disk is a temporary WAV handed to the
-   speech engine, deleted the moment the decode returns.
+   not kept unless you ask for it: the only copy that touches disk is a temporary
+   WAV handed to the speech engine, deleted the moment the decode returns.
+   Turning on *Keep recordings* — off by default, and there to diagnose a
+   transcription problem — writes them to `%APPDATA%\OpenVoice\audio` instead,
+   where they are cleared after a week. Secrets matching
+   `privacy.redact_patterns` are stripped from history and logs either way.
 
 ## How it works
 
@@ -179,7 +183,7 @@ relocated to another drive.
 
 ## Installing
 
-Download **[`OpenVoice_0.1.1_x64-setup.exe`](https://github.com/adityashelke04/OpenVoice/releases/download/v0.1.1/OpenVoice_0.1.1_x64-setup.exe)**
+Download **[`OpenVoice_0.2.0_x64-setup.exe`](https://github.com/adityashelke04/OpenVoice/releases/download/v0.2.0/OpenVoice_0.2.0_x64-setup.exe)**
 from the [releases page](https://github.com/adityashelke04/OpenVoice/releases) and run it.
 Nothing to configure, no Python to install — the speech engine is inside the
 installer. On first launch it downloads the `base.en` weights (~75 MB), with
@@ -197,7 +201,7 @@ Two things worth knowing before you install:
   tagged commit — so you can check that what you downloaded is what CI built:
 
   ```powershell
-  Get-FileHash .\OpenVoice_0.1.1_x64-setup.exe -Algorithm SHA256
+  Get-FileHash .\OpenVoice_0.2.0_x64-setup.exe -Algorithm SHA256
   ```
 
   Compare that against the hash in the release notes and the `.sha256` file
