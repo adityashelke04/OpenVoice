@@ -10,9 +10,12 @@ No cloud, no account, no telemetry.
 [![CI](https://github.com/adityashelke04/OpenVoice/actions/workflows/ci.yml/badge.svg)](https://github.com/adityashelke04/OpenVoice/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
+[![Website](https://img.shields.io/badge/website-openvoice--dictation.vercel.app-44D62C)](https://openvoice-dictation.vercel.app)
+
+**[openvoice-dictation.vercel.app](https://openvoice-dictation.vercel.app)**
 
 **[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/v0.2.0/OpenVoice_0.2.0_x64-setup.exe)** — one `.exe`, speech engine included.
-[All releases →](https://github.com/adityashelke04/OpenVoice/releases)
+[All releases →](https://github.com/adityashelke04/OpenVoice/releases) · [Docs](https://openvoice-dictation.vercel.app/docs) · [Changelog](https://openvoice-dictation.vercel.app/changelog)
 
 <img src="docs/images/flow-bar.png" width="420" alt="The Flow Bar: a small floating pill reading &quot;Hold Right Ctrl&quot;">
 
