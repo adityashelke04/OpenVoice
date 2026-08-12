@@ -340,9 +340,7 @@ impl Rule for VoiceCommands {
             // Only when a command genuinely follows. Otherwise "literally" is
             // just a word, and gets emitted like any other below.
             if doc.toks[i].as_word_lower().as_deref() == Some(ESCAPE) {
-                if let Some(span) =
-                    command_span(&doc, i + 1).map(|s| s.min(doc.len() - (i + 1)))
-                {
+                if let Some(span) = command_span(&doc, i + 1).map(|s| s.min(doc.len() - (i + 1))) {
                     for tok in &doc.toks[i + 1..i + 1 + span] {
                         out.push(tok.clone());
                     }
@@ -761,7 +759,10 @@ mod tests {
             fillers: FillerLevel::Aggressive,
             ..Profile::default()
         };
-        assert_eq!(run(&StripFillers, &p, "you know we should go"), "we should go");
+        assert_eq!(
+            run(&StripFillers, &p, "you know we should go"),
+            "we should go"
+        );
         assert_eq!(run(&StripFillers, &p, "um basically it works"), "it works");
     }
 

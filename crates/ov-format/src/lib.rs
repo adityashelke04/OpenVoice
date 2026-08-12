@@ -232,7 +232,8 @@ mod tests {
     fn common_words_are_not_claimed_by_product_names() {
         let f = Formatter::with_builtins(Profile::prose());
         assert!(
-            f.format("move it to cloud storage").contains("cloud storage"),
+            f.format("move it to cloud storage")
+                .contains("cloud storage"),
             "bare 'cloud' must stay a weather word: {}",
             f.format("move it to cloud storage")
         );
