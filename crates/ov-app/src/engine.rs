@@ -6,6 +6,7 @@
 //! the port boundary — and it is why the CLI still works as a headless test harness
 //! for the same pipeline.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -17,7 +18,7 @@ use ov_core::ports::{
     Pcm16k, TextSink, Transcriber, Utterance,
 };
 use ov_core::session::{Effect, Input, SessionMachine};
-use ov_core::types::{Millis, Outcome};
+use ov_core::types::{Millis, Outcome, SessionId};
 use ov_format::profile::{self, Profile};
 use ov_format::Formatter;
 
@@ -64,6 +65,10 @@ pub trait Shell: Send + Sync + 'static {
 struct Rules {
     profiles: Vec<Profile>,
     formatters: Vec<(String, Formatter)>,
+    /// Proper nouns offered to the decoder. Rebuilt with the rest, so a term the
+    /// user adds starts helping the *model* on the next utterance, not just the
+    /// post-processing.
+    hints: Vec<String>,
 }
 
 impl Rules {
@@ -78,9 +83,11 @@ impl Rules {
             .iter()
             .map(|p| (p.name.clone(), Formatter::new(p.clone(), &entries)))
             .collect();
+        let hints = ov_format::dictionary::hint_terms(&entries);
         Self {
             profiles,
             formatters,
+            hints,
         }
     }
 }
@@ -105,7 +112,16 @@ pub struct Engine {
     /// Rebuilding them live is what makes "changes apply to the next thing you
     /// dictate" true rather than a claim that quietly requires a restart.
     rules: Mutex<Rules>,
-    captured: Mutex<Option<Pcm16k>>,
+    /// Captured audio waiting to be transcribed, by session.
+    ///
+    /// A single slot, which is what this was, holds exactly one utterance — but
+    /// the session machine keeps an ordered queue of post-capture sessions and
+    /// only issues `Transcribe` for the front of it. Dictate three times in
+    /// quick succession and the third capture overwrote the second's buffer:
+    /// session 2 was then transcribed from session 3's audio, injecting the
+    /// wrong words, and session 3 found the slot empty and failed. Keyed by
+    /// session, each utterance keeps its own audio until its turn comes.
+    captured: Mutex<HashMap<SessionId, Pcm16k>>,
     /// Durable history. Injected as a port, so the engine neither knows nor cares
     /// that it is SQLite.
     history: Arc<dyn HistoryStore>,
@@ -129,6 +145,13 @@ pub struct Engine {
     language: Mutex<Option<String>>,
     start: Instant,
     shell: Arc<dyn Shell>,
+    /// Sender into the session machine, for inputs that do not come from the
+    /// keyboard hook.
+    ///
+    /// A `OnceLock` because the channel is created after the engine it feeds —
+    /// `start` builds the engine, then the channel, then the threads. Set once,
+    /// immediately, and never replaced.
+    inputs: std::sync::OnceLock<std::sync::mpsc::Sender<Input>>,
 }
 
 impl Engine {
@@ -223,6 +246,18 @@ impl Engine {
         // would strand the UI on a transfer that is not happening.
         self.shell.set_download_progress(None);
         result.map_err(|e| format!("Could not download {model}: {e}"))
+    }
+
+    /// Discard whatever session is in flight.
+    ///
+    /// The same input the Escape key produces, so there is exactly one cancel
+    /// path through the state machine rather than a second one that has to be
+    /// kept in step. Harmless when nothing is running: `Input::Cancelled` from
+    /// idle is a no-op in `session.rs`.
+    pub fn cancel(&self) {
+        if let Some(tx) = self.inputs.get() {
+            let _ = tx.send(Input::Cancelled { at: self.now() });
+        }
     }
 
     /// Text of the most recent successful dictation.
@@ -486,7 +521,7 @@ pub fn start(
         sink: ov_input::WinTextSink::new(config.paste_threshold_chars),
         apps: ov_input::WinForeground,
         rules: Mutex::new(rules),
-        captured: Mutex::new(None),
+        captured: Mutex::new(HashMap::new()),
         history,
         last_text: Mutex::new(String::new()),
         redactor: Mutex::new(redactor),
@@ -494,9 +529,13 @@ pub fn start(
         language: Mutex::new(config.language.clone()),
         start: Instant::now(),
         shell,
+        inputs: std::sync::OnceLock::new(),
     });
 
     let (tx, rx) = channel::<Input>();
+    // Hand the engine its own way in, so commands that are not keystrokes — the
+    // Flow Bar's cancel button — reach the same state machine the hook does.
+    let _ = engine.inputs.set(tx.clone());
 
     // Hotkey -> machine input. The foreground application is sampled on *press*:
     // by injection time the user may have switched windows, and the profile must
@@ -608,7 +647,10 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                     Ok(pcm) => {
                         let duration_ms = pcm.duration_ms();
                         let rms = pcm.rms();
-                        *e.captured.lock().expect("capture mutex") = Some(pcm);
+                        e.captured
+                            .lock()
+                            .expect("capture mutex")
+                            .insert(session, pcm);
                         let _ = tx.send(Input::AudioCaptured {
                             session,
                             duration_ms,
@@ -627,16 +669,18 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             });
         }
 
+        // Cancelling drains the whole machine — the live capture and every queued
+        // session — so every buffer goes with it.
         Effect::AbortCapture { .. } => {
             let _ = e.audio.abort();
-            *e.captured.lock().expect("capture mutex") = None;
+            e.captured.lock().expect("capture mutex").clear();
         }
 
         Effect::Transcribe { session } => {
             let e = e.clone();
             let tx = tx.clone();
             std::thread::spawn(move || {
-                let audio = e.captured.lock().expect("capture mutex").take();
+                let audio = e.captured.lock().expect("capture mutex").remove(&session);
                 let Some(audio) = audio else {
                     let _ = tx.send(Input::TranscriptionFailed {
                         session,
@@ -645,12 +689,18 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                     });
                     return;
                 };
-                // Vocabulary hints are deliberately left empty: measured to make
-                // output worse. See ov-format's dictionary module docs. Language is
-                // not a hint in that sense -- it is the user's own setting, read
-                // once at startup (see `language` field docs above).
+                // Proper nouns only -- never the whole dictionary.
+                //
+                // Filling this with identifiers was measured to make output
+                // worse (see ov-format's dictionary module docs), and that
+                // finding stands. It does not extend to names that are ordinary
+                // words phonetically: "Claude" is indistinguishable from "cloud"
+                // once the audio is gone, so the decoder has to be told it is a
+                // candidate while it still has it. `hint_terms` is the short,
+                // explicitly-marked subset. Language is not a hint in this sense
+                // -- it is the user's own setting, read once at startup.
                 let hint = DecodeHint {
-                    vocabulary: vec![],
+                    vocabulary: e.rules.lock().expect("rules").hints.clone(),
                     language: e.language.lock().expect("language mutex").clone(),
                 };
                 match e.transcriber.transcribe(&audio, &hint) {
