@@ -24,6 +24,82 @@ least context, at the moment they have the least time.
 
 Nothing yet.
 
+## [0.3.0] - 2026-08-11
+
+This release is about the Flow Bar — the small pill that floats while you
+dictate, and the only part of OpenVoice most people ever look at. It can now
+tell you when something went wrong, let you throw away a dictation you did not
+mean to start, and it moves like something that was designed rather than
+resized.
+
+### Added
+
+- **Discard a dictation in progress.** Press Escape, or use the new × on the
+  bar. Previously, releasing the key always transcribed and injected: an
+  accidental trigger had to land in your document before you could undo it.
+  Escape has quietly worked for a while; nothing ever said so.
+- **The bar tells you when a dictation did not land.** A failure and a
+  clipboard fallback each get their own state on the bar, with the reason.
+  Before this, both looked exactly like nothing having happened — you found out
+  when you went looking for text that was not there.
+- **A confirmation when your words arrive.** A single ring leaves the status
+  dot as the text lands, so you can tell success from silence without turning
+  your head.
+- **The bar glows while the microphone is open**, and the glow tracks your
+  voice. It is meant to answer "is it hearing me?" from the corner of your eye.
+- **More vocabulary out of the box**: Vercel, Tauri, GitHub, pnpm, Claude,
+  Anthropic, MCP, SDK, UX, CSS, HTML and a few more now come out spelled the way
+  you meant. Only spoken forms that are not also ordinary English are claimed —
+  a dictionary that confidently rewrites real words is worse than none.
+
+### Changed
+
+- **The bar moves properly.** Releasing a drag near a screen edge now slides
+  into place instead of jumping, and the bar shows you when it is about to
+  snap. Its width changes ease between sizes rather than snapping between them.
+- **The waveform behaves like a meter**, rising fast and falling slowly with a
+  held peak, instead of rising and falling at one flat rate. It also uses fewer,
+  clearer bars — at the size the bar is actually seen, thirty-two of them read
+  as a green smear rather than as your voice.
+
+### Fixed
+
+- **Dictating twice in quick succession no longer loses the second utterance.**
+  Releasing the key left the recording slot occupied for a few hundredths of a
+  second while the audio was handed back. A press inside that gap was discarded
+  outright — no recording, no error, nothing on screen — so you could speak a
+  whole sentence into nothing and only discover it afterwards. The press is now
+  held and honoured the moment the slot frees.
+- **Three dictations in quick succession no longer produce the wrong text.**
+  Only one utterance's audio was kept at a time, while the queue behind it could
+  be several deep. The third recording overwrote the second's audio, so the
+  second dictation was transcribed from the third one's sound — inserting words
+  you said at a different moment — and the third then failed outright. Each
+  recording now keeps its own audio until its turn.
+- **A dictation that fails now says so.** Transcription and microphone failures
+  reached the Flow Bar in the same instant it was told to go back to idle, so
+  the failure was never drawn. Failing silently is the one thing a tool that
+  types for you must not do.
+- **"I mean", "kind of", "sort of", "actually" and "literally" are no longer
+  deleted from what you said.** Filler removal treated these as noise, and the
+  profile used for browsers, chat and mail removes them by default — so in most
+  applications they silently vanished. They are not noise: "I mean it" became
+  "it" and "kind of blue" became "blue", which is the opposite of what was
+  said. Only tone words are removed now; anything that can change meaning
+  stays. "you know", "like" and "basically" are still removed at the aggressive
+  setting.
+- **"Literally" is no longer swallowed before the next word.** It is the escape
+  word that stops a voice command being interpreted — "literally new line"
+  types the words instead of breaking the line — but it was consumed before
+  *anything*, so "it is literally true" arrived as "it is true". It is now only
+  treated as an escape when a real command follows it.
+- **A custom shortcut no longer breaks the idle bar.** The bar was sized for
+  exactly one shortcut — the default. Anything longer collided with the word
+  "Hold" and was cut off. It is now measured from whatever your shortcut is.
+- **Error messages are no longer truncated mid-sentence.** The bar was fixed at
+  a width that cut most messages off after about thirty characters, which is
+  reliably before the part telling you what to do about it.
+
 ## [0.2.0] - 2026-08-09
 
 OpenVoice can now tell you when a new version exists, manage its own speech
@@ -352,6 +428,8 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/adityashelke04/OpenVoice/releases/tag/v0.1.0
