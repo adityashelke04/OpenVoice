@@ -274,6 +274,23 @@ pub struct SessionMachine {
     /// Post-capture sessions, processed strictly in order. The front element is the
     /// one currently in flight.
     pipeline: VecDeque<Active>,
+    /// A press that landed while the previous capture was still handing its audio
+    /// back. See [`SessionMachine::on_pressed`].
+    pending: Option<PendingPress>,
+}
+
+/// A genuine press that could not be honoured the instant it arrived.
+///
+/// Releasing the key clears `released_at` but leaves the capture occupying the
+/// slot until the audio adapter returns the buffer, which takes a few tens of
+/// milliseconds. A press inside that gap used to be dropped on the floor: no
+/// session, no effects, no events — the user spoke a whole utterance into
+/// nothing and the bar never moved. Held here instead, and replayed the moment
+/// the slot frees.
+#[derive(Debug)]
+struct PendingPress {
+    app: ForegroundApp,
+    profile: String,
 }
 
 impl SessionMachine {
@@ -293,6 +310,7 @@ impl SessionMachine {
             next_id: 1,
             capturing: None,
             pipeline: VecDeque::new(),
+            pending: None,
         }
     }
 
@@ -409,16 +427,38 @@ impl SessionMachine {
         self.key_down = true;
 
         // In toggle mode a press while capturing means "stop", which is the whole
-        // difference between the two modes. In push-to-talk it can only be a
-        // stray event, because the release that would have ended the capture has
-        // not arrived yet.
-        if self.capturing.is_some() {
+        // difference between the two modes.
+        if let Some(active) = self.capturing.as_ref() {
             if self.activation == ActivationMode::Toggle {
                 self.stop_capture(at, fx);
+                return;
+            }
+            // Push-to-talk. Whether this press is genuine depends on which half
+            // of the capture's life it landed in.
+            //
+            // Still recording — the release has not arrived — and it can only be
+            // a stray event, so it is dropped as before. But once `released_at`
+            // is set the capture is merely waiting for the audio adapter to hand
+            // its buffer back, and a press then is a real second utterance. That
+            // case used to take the same early return, which silently discarded
+            // it; dictating twice in quick succession lost the second one.
+            if active.released_at.is_some() {
+                self.pending = Some(PendingPress { app, profile });
             }
             return;
         }
 
+        self.begin_capture(at, app, profile, fx);
+    }
+
+    /// Open a new capture. The one place a session is born.
+    fn begin_capture(
+        &mut self,
+        at: Millis,
+        app: ForegroundApp,
+        profile: String,
+        fx: &mut Vec<Effect>,
+    ) {
         let id = SessionId(self.next_id);
         self.next_id += 1;
         self.capturing = Some(Active {
@@ -437,6 +477,25 @@ impl SessionMachine {
             session: id,
             profile,
         }));
+    }
+
+    /// Start a press that was held back while the previous capture finished.
+    ///
+    /// Started at `at`, not at the moment the key went down: the microphone is
+    /// only open from here, and dating the session earlier would credit it with
+    /// audio that was never recorded.
+    ///
+    /// Only if the key is still held. A press *and* release that both happened
+    /// inside the gap is a tap shorter than the minimum, and this machine
+    /// deliberately treats those as nothing at all rather than as a session.
+    fn replay_pending(&mut self, at: Millis, fx: &mut Vec<Effect>) {
+        let Some(press) = self.pending.take() else {
+            return;
+        };
+        if !self.key_down {
+            return;
+        }
+        self.begin_capture(at, press.app, press.profile, fx);
     }
 
     fn on_released(&mut self, at: Millis, fx: &mut Vec<Effect>) {
@@ -469,6 +528,8 @@ impl SessionMachine {
     }
 
     fn on_cancelled(&mut self, at: Millis, fx: &mut Vec<Effect>) {
+        // "Stop, all of it" includes the press that has not started yet.
+        self.pending = None;
         if let Some(active) = self.capturing.take() {
             fx.push(Effect::AbortCapture { session: active.id });
             self.persist(&active, Outcome::Cancelled, String::new(), at, fx);
@@ -500,6 +561,7 @@ impl SessionMachine {
             // A fat-finger tap. Deliberately silent: a toast for every accidental
             // brush of the key would be far more annoying than the tap itself.
             self.persist(&active, Outcome::TooShort, String::new(), at, fx);
+            self.replay_pending(at, fx);
             self.emit_idle_if_settled(fx);
             return;
         }
@@ -510,6 +572,7 @@ impl SessionMachine {
                 level: NoticeLevel::Warn,
                 message: "No speech detected — is your microphone muted?".into(),
             }));
+            self.replay_pending(at, fx);
             self.emit_idle_if_settled(fx);
             return;
         }
@@ -525,6 +588,9 @@ impl SessionMachine {
                 audio_ms: duration_ms,
             }));
         }
+        // After the old session's effects, so a listener applying them in order
+        // ends on the new session rather than on the old one's progress.
+        self.replay_pending(at, fx);
     }
 
     fn fail_capture(
@@ -536,6 +602,7 @@ impl SessionMachine {
     ) {
         if let Some(active) = self.capturing.take_if_id(session) {
             self.persist(&active, outcome, String::new(), at, fx);
+            self.replay_pending(at, fx);
             self.emit_idle_if_settled(fx);
         }
     }
@@ -549,8 +616,15 @@ impl SessionMachine {
     /// still being transcribed is completely unaffected by the first session's
     /// disposition. Emitting Idle unconditionally there told the UI the engine had
     /// gone idle while a session was still actively in flight.
+    /// Idle means nothing is happening — including nothing recording.
+    ///
+    /// The `capturing` half of that used to be missing, which was harmless only
+    /// because no path could reach here with a live capture. Replaying a pending
+    /// press is exactly such a path: it starts a new capture while the previous
+    /// session is finishing, and without this the machine would announce it was
+    /// idle with the microphone open.
     fn emit_idle_if_settled(&self, fx: &mut Vec<Effect>) {
-        if self.pipeline.is_empty() {
+        if self.pipeline.is_empty() && self.capturing.is_none() {
             fx.push(Effect::Emit(Event::Idle));
         }
     }
@@ -978,6 +1052,76 @@ mod tests {
             );
         }
         assert_eq!(m.queue_depth(), 0);
+    }
+
+    /// Dictating twice in quick succession used to lose the second utterance.
+    ///
+    /// Releasing the key marks the capture as stopping, but the slot stays
+    /// occupied until the audio adapter hands its buffer back tens of
+    /// milliseconds later. A press inside that gap took the same early return as
+    /// a stray auto-repeat event and was discarded with no effects at all — the
+    /// user spoke into nothing and the Flow Bar never moved.
+    #[test]
+    fn press_while_previous_capture_is_finishing_is_not_lost() {
+        let mut m = machine();
+        press(&mut m, 0);
+        m.handle(Input::HotkeyReleased { at: Millis(2_000) });
+
+        // Pressed again before AudioCaptured for session 1 has come back.
+        let held = press(&mut m, 2_010);
+        assert!(
+            held.is_empty(),
+            "nothing can start while the slot is still occupied"
+        );
+
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 2_000,
+            rms: 0.2,
+            at: Millis(2_030),
+        });
+
+        // Session 1 proceeds, and session 2 opens in the same batch.
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::Transcribe { session } if *session == SessionId(1))),
+            "the first utterance must still be transcribed"
+        );
+        assert!(
+            fx.iter().any(
+                |e| matches!(e, Effect::Emit(Event::Listening { session, .. }) if *session == SessionId(2))
+            ),
+            "the held press must open a second capture"
+        );
+        // Never idle: the microphone is open.
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::Emit(Event::Idle))),
+            "must not announce idle while capturing"
+        );
+    }
+
+    /// The other half of the same gap: pressed *and* released inside it. That is
+    /// a tap far shorter than the minimum, which this machine treats as nothing.
+    #[test]
+    fn press_and_release_inside_the_gap_starts_nothing() {
+        let mut m = machine();
+        press(&mut m, 0);
+        m.handle(Input::HotkeyReleased { at: Millis(2_000) });
+        press(&mut m, 2_005);
+        m.handle(Input::HotkeyReleased { at: Millis(2_010) });
+
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 2_000,
+            rms: 0.2,
+            at: Millis(2_030),
+        });
+
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::Emit(Event::Listening { .. }))),
+            "a tap inside the gap must not open a capture"
+        );
     }
 
     #[test]
