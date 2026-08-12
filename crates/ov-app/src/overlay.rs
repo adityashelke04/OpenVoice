@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{LogicalPosition, Manager, WebviewWindow};
+use tauri::{Emitter, LogicalPosition, Manager, WebviewWindow};
 
 /// Distance from a screen edge within which the bar snaps flush to it.
 const SNAP_PX: f64 = 28.0;
@@ -110,9 +110,17 @@ impl Overlay {
     }
 
     /// Record a new position after a drag, snapping to nearby screen edges.
-    pub fn move_to(&self, win: &WebviewWindow, x: f64, y: f64) {
+    ///
+    /// Returns where the bar should end up, and deliberately does *not* put it
+    /// there. Teleporting to the snapped point was the least pleasant moment in
+    /// handling this window: the drag itself is smooth, because Windows owns it,
+    /// and then release jumped the bar up to 28px sideways in a single frame.
+    /// The frontend eases it over that distance instead — see `settleTo` in
+    /// `Overlay.tsx`. The rules stay here; only the last few hundred milliseconds
+    /// of travel happen where there is already an animation loop to do it in.
+    pub fn move_to(&self, win: &WebviewWindow, x: f64, y: f64) -> (f64, f64) {
         if self.is_echo(x, y) {
-            return;
+            return (x, y);
         }
         let (x, y) = snap(win, x, y);
         {
@@ -121,7 +129,46 @@ impl Overlay {
             p.y = y;
             p.save();
         }
-        self.command(win, x, y);
+        // Recorded as commanded even though nothing was commanded: the frontend
+        // is about to move the window here, and those moves coming back must not
+        // be mistaken for a fresh drag.
+        *self.commanded.lock().expect("commanded") = Some((x, y));
+        (x, y)
+    }
+
+    /// Move and resize in one step.
+    ///
+    /// Two calls from the frontend are two round trips, and between them the
+    /// window is briefly the new size at the old position. With the glow margin
+    /// that gap was plainly visible: the pill appeared to slide down and to the
+    /// right every time the hotkey went down, then snap back. Doing both here
+    /// closes the gap to the width of one function body.
+    ///
+    /// Position first when growing, size first when shrinking, so the window is
+    /// never momentarily covering ground it has no business covering.
+    pub fn set_box(&self, win: &WebviewWindow, x: f64, y: f64, w: f64, h: f64) {
+        *self.commanded.lock().expect("commanded") = Some((x, y));
+
+        #[cfg(windows)]
+        if set_box_atomic(win, x, y, w, h) {
+            return;
+        }
+
+        // Fallback, and visibly worse — see `set_box_atomic`. Size first, so the
+        // window is never briefly the old size at the new position, which is the
+        // ordering that throws the pill toward the top-left.
+        let _ = win.set_size(tauri::LogicalSize::new(w, h));
+        let _ = win.set_position(LogicalPosition::new(x, y));
+    }
+
+    /// Where the bar *would* land if it were released at this position.
+    ///
+    /// Pure: reads nothing, writes nothing, moves nothing. It exists so the bar
+    /// can show the user where it is about to snap while they are still
+    /// dragging, without the frontend having to reimplement `snap` — which would
+    /// split one rule across two languages and guarantee they drift.
+    pub fn snap_preview(&self, win: &WebviewWindow, x: f64, y: f64) -> (f64, f64) {
+        snap(win, x, y)
     }
 
     pub fn set_always_visible(&self, win: &WebviewWindow, on: bool) {
@@ -162,7 +209,22 @@ impl Overlay {
         let visible = active || (p.always_visible && !p.snoozed());
 
         if visible {
-            self.park(win);
+            // Park only on the way back from hidden.
+            //
+            // This runs on every session start and every session end. Parking
+            // each time made Rust a second authority on where the window is,
+            // fighting the frontend, which moves the window itself to keep the
+            // pill still while the window changes size — and the two disagree
+            // by design: `park` pins the window's *bottom* edge, so when the
+            // window grows by the glow margin the pill gets shoved upward, and
+            // pressing the hotkey repeatedly walked the bar around the screen.
+            //
+            // Placement is still owned here, and still applied whenever the bar
+            // actually has to be put somewhere: at startup, and when coming back
+            // from a snooze or from "only show while dictating".
+            if !win.is_visible().unwrap_or(false) {
+                self.park(win);
+            }
             let _ = win.show();
         } else {
             let _ = win.hide();
@@ -190,9 +252,16 @@ impl Overlay {
     }
 
     /// Move the window, remembering that this side asked for it.
+    ///
+    /// Also tells the frontend, which keeps its own idea of where the bar
+    /// belongs so it can resize the window around a stationary pill. This side
+    /// places the bar at startup and whenever it comes back from hidden, and
+    /// without being told, the frontend would go on sizing around wherever the
+    /// bar used to be.
     fn command(&self, win: &WebviewWindow, x: f64, y: f64) {
         *self.commanded.lock().expect("commanded") = Some((x, y));
         let _ = win.set_position(LogicalPosition::new(x, y));
+        let _ = win.emit("overlay-parked", (x, y));
     }
 
     /// Whether a reported position is one of our own moves coming back.
@@ -285,6 +354,40 @@ fn snap(win: &WebviewWindow, x: f64, y: f64) -> (f64, f64) {
     }
 
     (nx, ny)
+}
+
+/// Move and resize in a single, atomic Win32 call.
+///
+/// `set_position` and `set_size` are two separate window messages, and the
+/// compositor is free to paint between them. Whichever order they go in, one
+/// intermediate frame shows the wrong geometry: position first puts the old,
+/// smaller window at the new origin — throwing the pill up and to the left by
+/// the glow margin — and size first grows it at the old origin, throwing it the
+/// other way. Spamming the hotkey makes that single frame land often enough to
+/// look like the bar is crawling into the corner, and a half-painted window in
+/// that frame is the stray triangle.
+///
+/// `SetWindowPos` does both at once, so no such frame exists. Win32 works in
+/// physical pixels, hence the scaling; `SWP_NOZORDER` preserves always-on-top
+/// and `SWP_NOACTIVATE` preserves the thing this whole window depends on — that
+/// it never takes focus, and so never steals the caret from the user's editor.
+#[cfg(windows)]
+fn set_box_atomic(win: &WebviewWindow, x: f64, y: f64, w: f64, h: f64) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+
+    let (Ok(scale), Ok(handle)) = (win.scale_factor(), win.hwnd()) else {
+        return false;
+    };
+    let px = (x * scale).round() as i32;
+    let py = (y * scale).round() as i32;
+    let pw = (w * scale).round() as i32;
+    let ph = (h * scale).round() as i32;
+
+    // Rebuilt from the raw pointer rather than passed through, so this does not
+    // depend on Tauri and this crate resolving the same `windows` version.
+    let hwnd = HWND(handle.0 as _);
+    unsafe { SetWindowPos(hwnd, None, px, py, pw, ph, SWP_NOZORDER | SWP_NOACTIVATE).is_ok() }
 }
 
 /// Convenience for command handlers.

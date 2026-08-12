@@ -37,7 +37,9 @@ body {
 html[data-window="hub"],
 html[data-window="hub"] body,
 html[data-window="sheet"],
-html[data-window="sheet"] body {
+html[data-window="sheet"] body,
+html[data-window="flowbar"],
+html[data-window="flowbar"] body {
   background: var(--canvas);
 }
 

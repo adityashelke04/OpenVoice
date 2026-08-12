@@ -1,0 +1,198 @@
+/* Review surface for the Flow Bar. See FlowBarStates.tsx.
+ *
+ * The plates deliberately are not tokens: they stand in for other people's
+ * applications, which this design system does not control and must not pretend
+ * to. Hard-coded on purpose. */
+
+.fbs-root {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: var(--s-8) var(--s-6) var(--s-9);
+}
+
+.fbs-head {
+  margin-bottom: var(--s-7);
+}
+
+.fbs-title {
+  font: 500 24px/1.2 var(--font-sans);
+  color: var(--ink);
+  margin: 0 0 var(--s-3);
+}
+
+.fbs-deck {
+  max-width: 72ch;
+  color: var(--mute);
+  margin: 0;
+}
+
+.fbs-plate-section {
+  margin-top: var(--s-7);
+}
+
+.fbs-plate-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  margin-bottom: var(--s-3);
+}
+
+.fbs-plate-label {
+  font: 500 13px/1 var(--font-sans);
+  color: var(--ink);
+}
+
+.fbs-plate-hint {
+  font: 400 12px/1 var(--font-sans);
+  color: var(--faint);
+}
+
+/* The gap has to clear the listening glow, which reaches ~25px past the pill.
+   Tighter and the rows bleed into each other, which would misrepresent a
+   component that is never shown next to a copy of itself. */
+.fbs-plate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-7);
+  padding: var(--s-7) var(--s-6);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--hairline);
+}
+
+/* Hold a one-shot animation at the frame worth looking at. Review surface only:
+   nothing in the app pauses an animation. */
+.fbs-row[data-freeze="true"] .flowbar-mic[data-confirm="true"] {
+  animation-play-state: paused;
+  animation-delay: -120ms;
+}
+
+/* ---------------------------------------------------- the landing, framed -- */
+
+.fbs-film {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6);
+}
+
+.fbs-frame {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* Each frame holds the same animation at a different offset, so a 420ms event
+   can be read as a sequence instead of guessed at. */
+.fbs-frame-bar {
+  width: 150px;
+}
+
+.fbs-frame-bar .flowbar-mic[data-confirm="true"] {
+  animation-play-state: paused;
+  animation-delay: var(--freeze, 0ms);
+}
+
+.fbs-frame-t {
+  font: 400 11px/1 var(--font-mono);
+  color: var(--faint);
+  text-align: center;
+}
+
+.fbs-note {
+  max-width: 70ch;
+  margin: var(--s-2) 0 0;
+  font: 400 12px/1.6 var(--font-sans);
+  color: var(--faint);
+}
+
+/* --------------------------------------------------------------- at 1:1 -- */
+
+/* No magnification and no plate. Every other section on this page is rendered at
+   2x for inspection, which flatters a component whose real job happens at 150
+   logical pixels in the corner of an eye. This one is the honest view. */
+.fbs-truth {
+  position: relative;
+  padding: var(--s-7) var(--s-6) 96px;
+  border-radius: var(--r-lg);
+  background: #ffffff;
+}
+
+.fbs-truth-copy {
+  max-width: 62ch;
+  margin: 0;
+  font: 400 15px/1.7 var(--font-sans);
+  color: #23232a;
+}
+
+.fbs-truth-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+}
+
+/* The four worlds the bar has to survive. */
+.fbs-plate[data-plate="document"] {
+  background: #ffffff;
+}
+
+.fbs-plate[data-plate="editor"] {
+  background: #1e1e24;
+}
+
+/* Stands in for a photo or a video call: mid-tone, coloured, and uneven, which
+   is the case a single flat swatch never catches. */
+.fbs-plate[data-plate="photo"] {
+  background:
+    radial-gradient(60% 80% at 20% 30%, #4a5a7a 0%, transparent 60%),
+    radial-gradient(50% 70% at 80% 70%, #7a5a4a 0%, transparent 60%),
+    #55565e;
+}
+
+.fbs-plate[data-plate="canvas"] {
+  background: var(--canvas);
+}
+
+.fbs-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+}
+
+.fbs-row-label {
+  width: 84px;
+  flex: none;
+  font: 500 12px/1 var(--font-mono);
+  color: var(--faint);
+}
+
+/* Mixed-luminance plates need the label legible too; it is scaffolding, not
+   product, so it may take a plate-specific colour. */
+.fbs-plate[data-plate="document"] .fbs-row-label {
+  color: #6b6b6b;
+}
+
+.fbs-plate[data-plate="photo"] .fbs-row-label {
+  color: #e8e8ea;
+}
+
+/* Width comes from the Row, mirroring `Overlay.tsx`'s tiers — see the note
+   there. Left flexible here so the tier is stated in one place only. */
+.fbs-row-bar {
+  flex: none;
+}
+
+.fbs-row-width {
+  width: 44px;
+  flex: none;
+  font: 400 11px/1 var(--font-mono);
+  color: var(--faint);
+  text-align: right;
+}
+
+.fbs-plate[data-plate="document"] .fbs-row-width {
+  color: #8a8a8a;
+}
+
+.fbs-plate[data-plate="photo"] .fbs-row-width {
+  color: #d2d2d6;
+}

@@ -34,6 +34,24 @@ export interface LiveView {
   lastText: string;
   lastLatencyMs: number | null;
   notice: { level: "info" | "warn" | "error"; message: string } | null;
+  /**
+   * How the last session ended — `Outcome`'s `kind` tag, straight from the core.
+   *
+   * The Flow Bar needs it to tell a clean landing from a discarded one. Both
+   * arrive as "was working, now idle, no notice", so without this a cancelled
+   * dictation congratulated the user on delivering text they had just thrown
+   * away.
+   */
+  lastOutcome: string | null;
+  /**
+   * The most recently started session.
+   *
+   * Sessions overlap — the machine starts a new capture while the previous one
+   * is still decoding — so events carry an id and the newest one wins. Without
+   * it, a finished session's events reached in and changed what the bar was
+   * saying about the session still running.
+   */
+  session: number | null;
   ready: Ready | null;
   error: string | null;
   /** Non-null only during the first-run download. */
@@ -48,6 +66,8 @@ const INITIAL: LiveView = {
   lastText: "",
   lastLatencyMs: null,
   notice: null,
+  lastOutcome: null,
+  session: null,
   ready: null,
   error: null,
   download: null,
@@ -205,25 +225,40 @@ function reduce(
       return {
         ...v,
         state: "listening",
+        session: e.session,
         profile: e.profile,
         elapsedMs: 0,
         notice: null,
+        lastOutcome: null,
       };
 
+    // Progress belongs to a session, and sessions overlap.
+    //
+    // The machine keeps a queue: dictate again while the last one is still
+    // decoding and the new capture starts immediately, so events for the older
+    // session keep arriving after `Listening` for the newer one. Applying those
+    // to `state` dropped the bar out of its listening pill mid-utterance —
+    // "Writing…" or, worse, a failure banner, while the microphone was open.
+    // Only the newest session may drive what the bar is showing.
     case "Transcribing":
-      return { ...v, state: "transcribing" };
+      return e.session === v.session ? { ...v, state: "transcribing" } : v;
 
     case "Injecting":
-      return { ...v, state: "injecting" };
+      return e.session === v.session ? { ...v, state: "injecting" } : v;
 
     case "Finished": {
+      const current = e.session === v.session;
       const failed =
         e.outcome.kind === "asr_failed" || e.outcome.kind === "capture_failed";
       return {
         ...v,
-        state: failed ? "fault" : v.state,
+        state: current && failed ? "fault" : v.state,
         lastText: e.text || v.lastText,
         lastLatencyMs: e.latencyMs,
+        // Only the current session's outcome decides whether the bar
+        // congratulates you; a late one from a previous session would otherwise
+        // claim credit for text this session has not delivered yet.
+        lastOutcome: current ? e.outcome.kind : v.lastOutcome,
         sessions: v.sessions + 1,
       };
     }

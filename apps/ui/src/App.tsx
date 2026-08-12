@@ -10,6 +10,7 @@
  * twice would be two places to keep in step for no gain.
  */
 
+import { FlowBarStates } from "./windows/FlowBarStates";
 import { Hub } from "./windows/Hub";
 import { Overlay } from "./windows/Overlay";
 import { Sheet } from "./windows/Sheet";
@@ -18,5 +19,6 @@ import "./styles/global.css";
 export default function App({ window: which }: { window: string }) {
   if (which === "overlay") return <Overlay />;
   if (which === "sheet") return <Sheet />;
+  if (which === "flowbar") return <FlowBarStates />;
   return <Hub />;
 }

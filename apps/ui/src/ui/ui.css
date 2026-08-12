@@ -564,19 +564,92 @@
    * around the bar. Removing the gap removes the artefact, and a shadow clipped at
    * the window edge would read as a hard line anyway. */
   transition:
-    border-color var(--t-base) var(--ease);
+    border-color var(--t-base) var(--ease),
+    background-color var(--t-base) var(--ease);
   width: 100%;
   overflow: hidden;
 }
 
+/* Full chroma, not `--live-dim`.
+ *
+ * This border was `#1d5a13` — the darkest green in the palette — at 1px on a
+ * near-black pill, and it was reviewed as "will not register in peripheral
+ * vision", which is the entire job this surface has. The extra half-pixel is
+ * taken out of the content box rather than added outside, so the pill's own
+ * footprint is unchanged and nothing reflows around it. */
 .flowbar[data-live="true"] {
-  border-color: var(--live-dim);
+  border-color: var(--live);
+  border-width: 1.5px;
+  /* The one shadow DESIGN.md actually grants this window, and it took until now
+   * to render because the window had no spare pixels to paint it into — the
+   * overlay reserves a margin while listening precisely so this can exist. See
+   * GLOW_MARGIN in Overlay.tsx; the radii below are sized to settle inside it
+   * rather than being clipped flat at the window edge, which would read as a
+   * hard rectangle and be worse than no glow at all.
+   *
+   * It breathes with the voice. `--level` is the peak-held meter, written every
+   * frame by the waveform's own loop onto an ancestor, so this tracks speech
+   * without a single React render. A glow that answers "is it hearing me?" from
+   * the corner of an eye is doing the job this window exists for.
+   *
+   * No spread on either layer. Spread pushes solid colour out before the blur
+   * starts, which turned this into a lime blob sitting behind the pill — very
+   * visible against a white document, and much closer to the "large flat green
+   * fill" the prohibitions rule out than to a glow. Blur alone falls off from
+   * the edge and stays a halo at every level. */
+  box-shadow:
+    0 0 calc(10px + 8px * var(--level, 0)) 0 var(--live-soft),
+    0 0 calc(22px + 10px * var(--level, 0)) 0 rgb(68 214 44 / 5%);
+}
+
+/* The two ways a dictation ends that are not a silent success. They are
+   deliberately different colours: one is a failure, the other is the fallback
+   working as designed, and painting both red would teach the user to ignore
+   red. */
+/* Border and dot only — no tinted fill.
+ *
+ * A `--danger-soft` wash over the pill's near-black looked plausible on the app
+ * canvas and fell apart over a white document, where it renders as a muddy grey
+ * rectangle that reads as a broken component rather than a failure. It is also
+ * exactly the "tinted pill" the status rule prohibits: the colour belongs in the
+ * dot. The pill widening to fit a sentence is the thing that catches the eye
+ * here; the red only has to name what kind of event it was. */
+.flowbar[data-mode="failed"] {
+  border-color: var(--danger);
+}
+
+.flowbar[data-mode="notice"] {
+  border-color: var(--warn);
 }
 
 .flowbar-wave {
   flex: 1;
   height: 18px;
   min-width: 0;
+}
+
+/* Everything right of the dot. Keyed by mode in the component, so this is also
+   what carries the entrance animation. */
+.flowbar-body {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: 1;
+  min-width: 0;
+  animation: flowbar-enter var(--t-base) var(--ease) both;
+}
+
+/* A state change should read as the bar becoming something else, not as a label
+   quietly swapping text. Small and quick — this window is glanced at. */
+@keyframes flowbar-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .flowbar-idle {
@@ -595,13 +668,84 @@
   flex: none;
 }
 
+/* Discard, while listening.
+ *
+ * Quiet by default — it sits next to a running timer and a live waveform, and
+ * it must not compete with either for the two seconds this state is on screen.
+ * It brightens on hover, which is the only moment anyone is looking for it.
+ * Not `--danger`: throwing away a sentence you did not mean to say is a normal
+ * outcome, not an error, and colouring it red would put a warning next to the
+ * microphone every single time it opens. */
+.flowbar-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: var(--r-full);
+  color: var(--faint);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+.flowbar-cancel:hover {
+  color: var(--ink);
+  background: var(--surface-4);
+}
+
+.flowbar-cancel:focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: 1px;
+}
+
+/* One line, truncated. The bar cannot grow to fit an arbitrary message from the
+   engine, and a wrapped second line would break the pill's height — which the
+   window is sized to exactly. The full text is in the `title`, and in the Hub. */
+.flowbar-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 400 12px/1.3 var(--font-sans);
+  color: var(--body);
+}
+
+.flowbar[data-mode="failed"] .flowbar-msg {
+  color: var(--ink);
+}
+
+/* Still no spinner — but not motionless either. Between key-release and text
+   landing the bar previously showed a static grey word for one to three
+   seconds, which is the one stretch where the user is actually waiting on it.
+   A slow breathe says "working" without asking to be watched. */
+.flowbar-working-text {
+  color: var(--body);
+  animation: flowbar-breathe 1.5s ease-in-out infinite;
+}
+
+@keyframes flowbar-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .flowbar-mic {
   width: 7px;
   height: 7px;
   border-radius: var(--r-full);
   background: var(--mute);
   flex: none;
-  transition: background var(--t-fast) var(--ease);
+  transition:
+    background var(--t-fast) var(--ease),
+    box-shadow var(--t-base) var(--ease);
 }
 
 /* No pulse.
@@ -609,15 +753,70 @@
  * A pulsing dot next to a live waveform is two things competing to say the same
  * thing, and any re-render restarts the animation mid-cycle — which was the
  * visible flicker. The waveform already proves the microphone is open, far more
- * convincingly than a blinking light. */
+ * convincingly than a blinking light.
+ *
+ * The halo is not a pulse: it is static, sized off the live level by the same
+ * `--level` the glow uses, so it grows with the voice rather than on a timer. */
 .flowbar[data-live="true"] .flowbar-mic {
   background: var(--live);
+  box-shadow: 0 0 0 calc(1px + 2px * var(--level, 0)) var(--live-ring);
 }
 
 /* Between key-release and text landing. Neutral, not green: the microphone is
    closed, and green must only ever mean it is open. */
 .flowbar[data-working="true"] .flowbar-mic {
   background: var(--body);
+}
+
+.flowbar[data-mode="failed"] .flowbar-mic {
+  background: var(--danger);
+}
+
+.flowbar[data-mode="notice"] .flowbar-mic {
+  background: var(--warn);
+}
+
+/* The landing.
+ *
+ * The one moment the whole product exists to deliver, and until now the
+ * quietest point in the interaction — the pill simply shrank. A single ring
+ * leaving the dot, once, is enough to answer "did that work?" from the corner
+ * of an eye without asking for attention. It runs only on a clean landing; a
+ * clipboard fallback gets the amber notice above instead. */
+/* Deliberately not `--ease`.
+ *
+ * The system curve is an exponential out — it covers ~85% of its distance in
+ * the first quarter of the duration, which is right for a panel arriving and
+ * wrong for a ripple: the ring reached full radius in about 60ms and then sat
+ * at 3% alpha for the rest, so the one moment this window exists to confirm was
+ * effectively invisible. A gentler ease-out spends the time on the part the eye
+ * can actually follow. */
+.flowbar-mic[data-confirm="true"] {
+  animation: flowbar-confirm 420ms cubic-bezier(0.2, 0.6, 0.35, 1) 1;
+}
+
+@keyframes flowbar-confirm {
+  0% {
+    background: var(--live-hi);
+    box-shadow: 0 0 0 0 rgb(68 214 44 / 50%);
+  }
+  55% {
+    background: var(--live-hi);
+  }
+  100% {
+    background: var(--mute);
+    box-shadow: 0 0 0 10px rgb(68 214 44 / 0%);
+  }
+}
+
+/* Stillness was asked for. The states still differ by colour, width and text —
+   only the motion goes. */
+@media (prefers-reduced-motion: reduce) {
+  .flowbar-body,
+  .flowbar-working-text,
+  .flowbar-mic[data-confirm="true"] {
+    animation: none;
+  }
 }
 
 /* ------------------------------------------------------------ Empty state -- */

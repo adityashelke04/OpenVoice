@@ -8,17 +8,57 @@
   width: 100vw;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  /* Centred both ways, so the pill sits in the middle of whatever box the
+     window currently is. That is what lets `useWindowGeometry` hold the pill
+     still by holding the window's centre still — including in the frame where
+     the resize has landed and the move has not.
+
+     `justify-content` is overridden to `flex-start` while the menu is open,
+     because the menu hangs below the pill rather than surrounding it.
+
+     `overflow: visible` because the glow is painted by the pill and has to
+     reach into the margin the window reserves for it. */
+  align-items: center;
+  justify-content: center;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
-  overflow: hidden;
+  overflow: visible;
+  box-sizing: border-box;
 }
 
+.overlay-root[data-menu="true"] {
+  justify-content: flex-start;
+}
+
+/* No width transition, deliberately.
+ *
+ * An eased pill width means the pill and its window disagree about how big the
+ * bar is for the length of the transition, and the difference is bare window —
+ * which on a transparent Windows webview can paint as a translucent rectangle.
+ * That is exactly what appeared on key release. The pill is therefore always
+ * precisely the size the window is, and the width change is instant.
+ *
+ * The bar has plenty of motion without it: the content cross-fades, the
+ * waveform has real ballistics, the glow tracks the voice, the landing has its
+ * ring, and a snapped drag now slides. None of those can desynchronise the pill
+ * from its window, because none of them change its size. */
 .overlay-hit {
   pointer-events: auto;
   cursor: grab;
   flex: none;
+}
+
+/* Dragging, and within reach of a snap line.
+ *
+ * The bar has always snapped to screen edges and to the horizontal centre, and
+ * has never said so — you found out by releasing and watching it jump. Wispr
+ * Flow paints drop zones for this; a 1px brightening of the pill's own border
+ * says the same thing without a second window and without inventing a shape
+ * this system does not otherwise use. Neutral, not green: the microphone is not
+ * open, and nothing about placing a window should suggest that it is. */
+.overlay-hit[data-snapping="true"] .flowbar {
+  border-color: var(--mute);
 }
 
 .overlay-hit:active {

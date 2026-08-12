@@ -510,9 +510,41 @@ fn overlay_placement(state: tauri::State<'_, AppState>) -> overlay::Placement {
 /// Commit a drag. The frontend reports where the bar ended up; snapping and
 /// persistence happen here so the rules live in one place.
 #[tauri::command]
-fn overlay_move(app: AppHandle, x: f64, y: f64) {
+fn overlay_move(app: AppHandle, x: f64, y: f64) -> (f64, f64) {
+    match overlay::window(&app) {
+        Some(win) => app.state::<AppState>().overlay.move_to(&win, x, y),
+        None => (x, y),
+    }
+}
+
+/// Move and resize the bar in one call. See `Overlay::set_box`.
+#[tauri::command]
+fn overlay_set_box(app: AppHandle, x: f64, y: f64, w: f64, h: f64) {
     if let Some(win) = overlay::window(&app) {
-        app.state::<AppState>().overlay.move_to(&win, x, y);
+        app.state::<AppState>().overlay.set_box(&win, x, y, w, h);
+    }
+}
+
+/// Where the bar would snap to if released here. Drives the drag cue.
+#[tauri::command]
+fn overlay_snap_preview(app: AppHandle, x: f64, y: f64) -> (f64, f64) {
+    match overlay::window(&app) {
+        Some(win) => app.state::<AppState>().overlay.snap_preview(&win, x, y),
+        None => (x, y),
+    }
+}
+
+/// Discard the dictation in flight.
+///
+/// The Escape key has always done this — `ov-input`'s hook turns `VK_ESCAPE`
+/// into `HotkeyEvent::Cancelled` and the session machine drains to idle — but
+/// nothing on screen ever said so, and push-to-talk without a discard path means
+/// an accidental trigger *must* be transcribed and injected into someone else's
+/// document before it can be undone. This backs the button that finally says it.
+#[tauri::command]
+fn cancel_session(state: tauri::State<'_, AppState>) {
+    if let Some(e) = state.engine.lock().expect("engine").as_ref() {
+        e.cancel();
     }
 }
 
@@ -613,8 +645,11 @@ fn main() {
             open_data_dir,
             overlay_placement,
             overlay_move,
+            overlay_set_box,
+            overlay_snap_preview,
             overlay_snooze,
             overlay_always_visible,
+            cancel_session,
             show_hub_cmd,
             get_settings,
             save_settings,
