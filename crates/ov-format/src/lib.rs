@@ -201,6 +201,43 @@ mod tests {
         );
     }
 
+    /// Product names survive the whole pipeline, not just the dictionary stage.
+    ///
+    /// Every one of these spoken forms came out of real dictation history:
+    /// "cloud code" seventeen times over, plus "plot code" and "Tori". The
+    /// dictionary runs fourth of seven, so capitalisation and the profile pass
+    /// both get a chance to undo its work afterwards — which is why this asserts
+    /// on the finished text rather than on the lookup.
+    #[test]
+    fn product_names_survive_the_whole_pipeline() {
+        for profile in [Profile::prose(), Profile::editor()] {
+            let f = Formatter::with_builtins(profile.clone());
+            let name = &profile.name;
+            assert_eq!(
+                f.format("cloud code is running"),
+                "Claude Code is running.".trim_end_matches('.').to_string()
+                    + if profile.end_period { "." } else { "" },
+                "in profile {name}"
+            );
+            assert!(
+                f.format("open the tori window").contains("Tauri"),
+                "Tauri, in profile {name}: {}",
+                f.format("open the tori window")
+            );
+        }
+    }
+
+    /// The other half of the same rule: ordinary English is left alone.
+    #[test]
+    fn common_words_are_not_claimed_by_product_names() {
+        let f = Formatter::with_builtins(Profile::prose());
+        assert!(
+            f.format("move it to cloud storage").contains("cloud storage"),
+            "bare 'cloud' must stay a weather word: {}",
+            f.format("move it to cloud storage")
+        );
+    }
+
     #[test]
     fn trace_records_every_stage() {
         let f = Formatter::with_builtins(Profile::editor());

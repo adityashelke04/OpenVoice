@@ -43,6 +43,17 @@ pub struct Entry {
     /// Group this entry belongs to, e.g. `code` or `shell`.
     #[serde(default = "default_group")]
     pub group: String,
+    /// Offer this term to the decoder as an initial-prompt hint.
+    ///
+    /// Off unless asked for, and deliberately so — see the module doc. A prompt
+    /// full of identifiers like `useEffect` teaches the model to weld ordinary
+    /// spoken words together, which costs more than it buys. Proper nouns are
+    /// the exception the doc leaves open: "Claude" and "Tauri" are ordinary
+    /// words phonetically, so no amount of post-processing can distinguish them
+    /// from "cloud" and "Tori" with confidence — the decoder has to be told they
+    /// are candidates while it still has the audio.
+    #[serde(default)]
+    pub hint: bool,
 }
 
 fn default_group() -> String {
@@ -56,6 +67,15 @@ impl Entry {
             written: written.to_string(),
             spoken: spoken.iter().map(|s| s.to_lowercase()).collect(),
             group: group.to_string(),
+            hint: false,
+        }
+    }
+
+    /// A proper noun: also offered to the decoder as a hint. See [`Entry::hint`].
+    pub fn proper(written: &str, spoken: &[&str], group: &str) -> Self {
+        Self {
+            hint: true,
+            ..Self::new(written, spoken, group)
         }
     }
 }
@@ -157,6 +177,35 @@ fn normalize(s: &str) -> String {
         .join(" ")
 }
 
+/// Proper nouns worth telling the decoder about, from entries marked
+/// [`Entry::hint`].
+///
+/// Deliberately *not* [`Dictionary::terms`], which is every written form there
+/// is. That set is mostly identifiers — `useEffect`, `kubectl` — and putting
+/// those in the initial prompt is the thing the module doc records as measurably
+/// harmful: the model starts welding ordinary spoken words together, including
+/// the command words the formatter needs to see.
+///
+/// What is left is a short list of names that are ordinary words phonetically.
+/// No amount of post-processing can tell "Claude" from "cloud" after the fact
+/// with any confidence, because both are real; the decoder can, while it still
+/// has the audio. Capped, because the prompt is a budget and a long one starts
+/// behaving like the identifier list did.
+#[must_use]
+pub fn hint_terms(entries: &[Entry]) -> Vec<String> {
+    const MAX: usize = 24;
+    let mut seen = Vec::new();
+    for e in entries.iter().filter(|e| e.hint) {
+        if !seen.iter().any(|t: &String| t == &e.written) {
+            seen.push(e.written.clone());
+        }
+        if seen.len() == MAX {
+            break;
+        }
+    }
+    seen
+}
+
 /// The vocabulary shipped by default.
 ///
 /// Kept deliberately small. A large shipped dictionary produces confident wrong
@@ -213,6 +262,47 @@ pub fn builtin_entries() -> Vec<Entry> {
         Entry::new("SQL", &["sequel", "s q l"], "code"),
         Entry::new("OAuth", &["o auth", "oh auth"], "code"),
         Entry::new("regex", &["reg ex", "rejex"], "code"),
+        // Tooling and products people dictate constantly and Whisper has never
+        // heard of. Every spoken form here is one that is not also an ordinary
+        // English phrase — see the note on `git` above for why that line matters
+        // more than coverage does.
+        // Spoken forms below are the ones actually observed in dictation, not
+        // plausible-looking guesses. An earlier version of this block guessed —
+        // "tow ree" for Tauri — and caught nothing, while the form the model
+        // really produces, "Tori", went straight through.
+        Entry::proper("Vercel", &["versel", "ver cell", "verse elle"], "code"),
+        Entry::proper("Tauri", &["tori", "taury", "torrey"], "code"),
+        Entry::proper("OpenVoice", &["open voice"], "code"),
+        Entry::new("GitHub", &["git hub"], "code"),
+        Entry::new("pnpm", &["p n p m"], "code"),
+        Entry::new("MCP", &["m c p"], "code"),
+        Entry::new("SDK", &["s d k"], "code"),
+        Entry::new("UX", &["u x"], "code"),
+        Entry::new("CSS", &["c s s"], "code"),
+        Entry::new("HTML", &["h t m l"], "code"),
+        Entry::new("subagent", &["sub agent"], "code"),
+        Entry::proper("Anthropic", &["anthropic"], "code"),
+        // "Claude" is phonetically "cloud", and the transcripts show exactly
+        // that: seventeen occurrences of "cloud", plus "plot code", "clawed" and
+        // "claud".
+        //
+        // The two-word forms are the ones worth claiming. Nobody dictates "cloud
+        // code" meaning weather, so the phrase can be rewritten with confidence
+        // — whereas bare "cloud" is ordinary English ("cloud storage", "cloud
+        // run") and a shipped dictionary has no business touching it. That is
+        // the same line the `git`/`get` note above draws, and it is why the
+        // phrase entries are here and a bare `cloud -> Claude` mapping is not:
+        // anyone who says the name far more often than the word can add it in
+        // Dictionary, which is what the user dictionary is for.
+        //
+        // The decoder hint is what gives bare "Claude" a chance on its own,
+        // acoustically, before any of this runs.
+        Entry::proper(
+            "Claude Code",
+            &["cloud code", "plot code", "clod code", "cloud coat"],
+            "code",
+        ),
+        Entry::proper("Claude", &["clawed", "claud", "clode"], "code"),
     ]
 }
 
