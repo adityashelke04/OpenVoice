@@ -132,17 +132,26 @@ fn same_text(a: &Tok, b: &Tok) -> bool {
 /// Unambiguous disfluencies. Removing these is always safe.
 const FILLERS_LIGHT: &[&str] = &["um", "uh", "erm", "uhm", "mhm", "hmm", "ah", "er"];
 
-/// Discourse markers. Sometimes load-bearing, so only removed at
-/// [`FillerLevel::Aggressive`].
-const FILLERS_PHRASES: &[&[&str]] = &[
-    &["you", "know"],
-    &["i", "mean"],
-    &["sort", "of"],
-    &["kind", "of"],
-];
+/// Discourse markers removed at [`FillerLevel::Aggressive`].
+///
+/// Deliberately short, and it used to be longer. "I mean", "sort of" and "kind
+/// of" were here, and each one is grammatically load-bearing often enough that
+/// deleting it changes what the user said rather than tidying it: "I mean it"
+/// became "it", and "kind of blue" became "blue" — the opposite of the claim.
+/// The `prose` profile is aggressive by default and matches browsers, chat and
+/// mail, so this fired nearly everywhere, silently, with the evidence gone by
+/// the time anyone could notice.
+///
+/// The bar for this list is that removing the phrase must not be able to change
+/// meaning, only tone. Anything that fails that test belongs in the transcript.
+const FILLERS_PHRASES: &[&[&str]] = &[&["you", "know"]];
 
 /// Single-word discourse markers removed at the aggressive level.
-const FILLERS_AGGRESSIVE: &[&str] = &["like", "basically", "actually", "literally"];
+///
+/// "actually" and "literally" were removed from this list for the reason above:
+/// both are used to contrast or intensify, and dropping them inverts sentences
+/// like "it actually works".
+const FILLERS_AGGRESSIVE: &[&str] = &["like", "basically"];
 
 /// Removes disfluencies according to the profile's [`FillerLevel`].
 pub struct StripFillers;
@@ -280,26 +289,31 @@ fn dash_run(doc: &Doc, i: usize) -> Option<usize> {
 /// two-word phrase exposed to the very next loop iteration: `literally fat
 /// arrow` escaped `fat` and then re-interpreted the bare `arrow` as `->`,
 /// rendering `fat ->` instead of the literal words `fat arrow`.
-fn command_span(doc: &Doc, i: usize) -> usize {
+/// `None` when nothing at `i` would have been interpreted as a command.
+///
+/// The distinction matters because the escape word is also an ordinary English
+/// word. This used to fall back to 1 — "some command, and if not, one token
+/// anyway" — so "literally" was swallowed before *any* word: "it is literally
+/// true" came out as "it is true", losing the word the user actually said and
+/// the emphasis it carried. There is nothing to escape unless a command is
+/// really there.
+fn command_span(doc: &Doc, i: usize) -> Option<usize> {
     if doc.window(i, 2).is_some_and(|w| w == ["scratch", "that"]) {
-        return 2;
+        return Some(2);
     }
     if doc.window(i, 2).is_some_and(|w| w == ["new", "paragraph"]) {
-        return 2;
+        return Some(2);
     }
     if doc.window(i, 2).is_some_and(|w| w == ["new", "line"]) {
-        return 2;
+        return Some(2);
     }
     if let Some(run) = dash_run(doc, i) {
-        return run;
+        return Some(run);
     }
-    if let Some((phrase, _, _)) = COMMANDS
+    COMMANDS
         .iter()
         .find(|(p, _, _)| doc.window(i, p.len()).is_some_and(|w| w == **p))
-    {
-        return phrase.len();
-    }
-    1
+        .map(|(phrase, _, _)| phrase.len())
 }
 
 /// Interprets spoken punctuation and layout commands.
@@ -322,13 +336,19 @@ impl Rule for VoiceCommands {
             // Must cover the *whole* phrase a command there would have consumed
             // (see `command_span`), not just one word -- otherwise the tail of a
             // multi-word command is left for the next iteration to reinterpret.
-            if doc.toks[i].as_word_lower().as_deref() == Some(ESCAPE) && i + 1 < doc.len() {
-                let span = command_span(&doc, i + 1).min(doc.len() - (i + 1));
-                for tok in &doc.toks[i + 1..i + 1 + span] {
-                    out.push(tok.clone());
+            //
+            // Only when a command genuinely follows. Otherwise "literally" is
+            // just a word, and gets emitted like any other below.
+            if doc.toks[i].as_word_lower().as_deref() == Some(ESCAPE) {
+                if let Some(span) =
+                    command_span(&doc, i + 1).map(|s| s.min(doc.len() - (i + 1)))
+                {
+                    for tok in &doc.toks[i + 1..i + 1 + span] {
+                        out.push(tok.clone());
+                    }
+                    i += 1 + span;
+                    continue;
                 }
-                i += 1 + span;
-                continue;
             }
 
             // "scratch that" discards everything dictated so far in this utterance.
@@ -710,6 +730,41 @@ mod tests {
         rule.apply(Doc::parse(input), &ctx).render()
     }
 
+    /// The formatter may tidy tone. It may not change what was said.
+    ///
+    /// Every phrase here was being deleted by the `prose` profile, which is the
+    /// one that matches browsers, chat and mail — so this fired almost
+    /// everywhere and left no trace of what it had removed.
+    #[test]
+    fn aggressive_fillers_do_not_delete_meaning() {
+        let p = Profile {
+            fillers: FillerLevel::Aggressive,
+            ..Profile::default()
+        };
+
+        for text in [
+            "I mean it",
+            "I mean what I say",
+            "that is kind of blue",
+            "it is sort of working",
+            "it actually works",
+            "that is literally true",
+        ] {
+            assert_eq!(run(&StripFillers, &p, text), text, "must survive: {text}");
+        }
+    }
+
+    /// The other side of the same rule: what it is still for.
+    #[test]
+    fn aggressive_fillers_still_remove_tone_words() {
+        let p = Profile {
+            fillers: FillerLevel::Aggressive,
+            ..Profile::default()
+        };
+        assert_eq!(run(&StripFillers, &p, "you know we should go"), "we should go");
+        assert_eq!(run(&StripFillers, &p, "um basically it works"), "it works");
+    }
+
     #[test]
     fn collapses_degenerate_character_runs() {
         // Real output observed from the user's first working session.
@@ -871,6 +926,26 @@ mod tests {
         assert_eq!(
             run(&VoiceCommands, &p, "one new paragraph two"),
             "one\n\ntwo"
+        );
+    }
+
+    /// "literally" is the escape word and also an ordinary English word.
+    ///
+    /// It used to be consumed before whatever followed it, command or not, so
+    /// "it is literally true" was delivered as "it is true". The prose profile
+    /// hid this by deleting the word as a filler first; the editor and terminal
+    /// profiles did not, and lost it outright.
+    #[test]
+    fn literally_is_kept_when_no_command_follows() {
+        let p = Profile::default();
+        assert_eq!(
+            run(&VoiceCommands, &p, "it is literally true"),
+            "it is literally true"
+        );
+        assert_eq!(run(&VoiceCommands, &p, "literally"), "literally");
+        assert_eq!(
+            run(&VoiceCommands, &p, "I literally cannot"),
+            "I literally cannot"
         );
     }
 

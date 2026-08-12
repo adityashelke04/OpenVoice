@@ -15,7 +15,7 @@ pub enum FillerLevel {
     /// Remove unambiguous disfluencies only: "um", "uh", "erm", "mhm".
     #[default]
     Light,
-    /// Also remove discourse markers: "like", "you know", "I mean", "basically",
+    /// Also remove discourse markers: "like", "you know", "basically",
     /// "sort of", "kind of".
     ///
     /// Deliberately not the default. These words are sometimes load-bearing —
