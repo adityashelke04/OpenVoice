@@ -22,7 +22,20 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Dictated sentences now capitalize "I" and the days and months.** Whisper
+  transcribes the pronoun and every weekday and month name in lowercase, and
+  nothing downstream lifted them, so "so i think we should ship on friday" landed
+  exactly like that in your document. Sentence-initial words were already handled;
+  these are the words English capitalizes wherever they fall. Names of people,
+  places and products are deliberately still left alone — guessing those needs
+  knowledge the formatter does not have, and a wrong guess is worse than the
+  lowercase it replaced.
+- **"fifty percent" is no longer written as "fifty%".** The spoken word `percent`
+  was substituted for `%` wherever it appeared, which is right after a number and
+  nonsense after a word. It now converts only when a digit precedes it, so
+  "up 50 percent" gives you `up 50%` and "up fifty percent" is left as spoken.
 
 ## [0.3.0] - 2026-08-11
 
