@@ -36,6 +36,49 @@ least context, at the moment they have the least time.
   was substituted for `%` wherever it appeared, which is right after a number and
   nonsense after a word. It now converts only when a digit precedes it, so
   "up 50 percent" gives you `up 50%` and "up fifty percent" is left as spoken.
+- **The Flow Bar no longer flashes a cropped black rectangle when you press the
+  hotkey.** For a moment as the bar switched into listening, it could appear as a
+  square black box with the pill clipped inside it — one rounded corner showing,
+  the green edge running into a hard cut, the timer sliced through. Two separate
+  races caused it, and both are closed: the pill was being painted at its new
+  width before the window had been resized to hold it, and the window was being
+  resized before the surface it is drawn on had caught up. The pill's size is now
+  read off the window rather than told to it, so the two cannot disagree.
+- **The Flow Bar no longer drifts after you drag it near a screen edge.** The
+  animation that slides the bar the last few pixels into a snap was being denied
+  permission to move the window, silently, on every frame — while the bar went on
+  recording the position it believed it had reached. The next time it resized, it
+  measured from somewhere it had never been.
+- **The bar is now sized correctly at startup with a non-default shortcut.** The
+  first resize after launch was dropped, leaving the window at the size declared
+  in configuration rather than the size the pill actually needed.
+- **The bar no longer jumps up and to the left when you press the hotkey
+  repeatedly.** Once you had clicked the bar even once, every automatic resize
+  after that was mistaken for you dragging it, and the bar's remembered position
+  was rebuilt from a size it had not reached yet. It moved about 57px left and
+  22px up on release and back again on the next press.
+- **The bar no longer stays stretched after you cancel a dictation.** Cancelling
+  while the bar was still growing into its listening size left the window at that
+  larger size with the idle content inside it.
+- **A click on the bar that does not move it no longer counts as a drag.** The
+  next time the bar was placed automatically, that placement was saved as a
+  position you had chosen.
+- **The bar no longer slides up and to the left when you use the hotkey.** The
+  bar can tell its own movements apart from yours now, instead of guessing. When
+  it guessed wrong, the ordinary resize that follows every press was treated as
+  you having dragged the bar: it was snapped to a screen edge measured for the
+  wrong size, saved to disk as your chosen position, and then slid there over a
+  fifth of a second. It also left the bar's idea of where it belongs permanently
+  wrong, so the next press started from the wrong place.
+- **The slide that follows a drag can now be interrupted.** It ran to completion
+  no matter what else happened, writing a position sixty times a second against
+  everything else that moves the bar — so a dictation started mid-slide fought it,
+  and the slide won.
+- **The Flow Bar can no longer steal focus from what you are typing into.** The
+  flag that prevents it was applied once at startup and then quietly cleared by
+  the window toolkit, so on a running copy the bar was able to take focus — and
+  losing the caret is how a dictation lands in the wrong place. It is now
+  re-applied whenever the bar is shown.
 
 ## [0.3.0] - 2026-08-11
 

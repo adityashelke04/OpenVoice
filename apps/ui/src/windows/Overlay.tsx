@@ -14,6 +14,7 @@ import { FlowBar } from "../ui";
 import { playCompletionChime, playStartTone } from "../ui/sound";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
 import { useSettings } from "../screens/Settings";
+import { checkInvariants, mark, reportStuckBox, watchViewport } from "./overlay-trace";
 import "./overlay.css";
 
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -38,8 +39,53 @@ async function call(cmd: string, args?: Record<string, unknown>) {
  */
 const GLOW_MARGIN = 22;
 
+/**
+ * The pill's height, in every state but the menu.
+ *
+ * Duplicated as `--pill-h` in `overlay.css`, deliberately and with a comment at
+ * each end. The window's height is computed from it here; the pill's width is
+ * recovered from the window using it there. The two are one identity written
+ * twice because it has to hold in both languages, and the CSS half is what makes
+ * the pill unable to outgrow its window. Change one and the other is wrong.
+ */
+const PILL_H = 40;
+
 /** How long the bar takes to slide into a snapped position after a drag. */
 const SETTLE_MS = 220;
+
+/**
+ * How long after the last real movement a drag is still considered to be in
+ * progress.
+ *
+ * Generous, because it is refreshed by every move a drag produces and only has to
+ * outlast the pause when someone holds the bar still mid-drag. It exists to
+ * expire a drag that ended without saying so — see `dragging`.
+ */
+const DRAG_TTL = 1500;
+
+/**
+ * How many commanded positions to keep so the bar can recognise its own moves
+ * coming back.
+ *
+ * Windows reports every move, including the ones this app asks for, and there is
+ * no flag on the report saying which. Telling them apart used to rest entirely on
+ * a "the user is dragging" boolean, which is a heuristic about a Windows move
+ * loop that eats its own mouse-up — so when it was wrong, an automatic resize was
+ * committed as a deliberate drag: snapped, written to disk as the user's chosen
+ * position, and then animated there.
+ *
+ * Comparing against what was actually commanded is not a heuristic. More than one
+ * is kept because the hotkey produces resizes 26ms apart and each move is
+ * reported over an IPC round trip, so several of ours can be in flight at once.
+ */
+const COMMANDED_HISTORY = 8;
+
+/** Whether a reported position is one of ours coming back. Two logical pixels:
+ *  far below what a deliberate drag covers, far above the rounding error of a
+ *  logical -> physical -> logical round trip on a fractional display scale. */
+function isEcho(history: Array<[number, number]>, x: number, y: number): boolean {
+  return history.some(([cx, cy]) => Math.abs(cx - x) < 2 && Math.abs(cy - y) < 2);
+}
 
 /**
  * Everything in the idle pill that is not the shortcut itself: padding, border,
@@ -120,6 +166,59 @@ const FAILED_OUTCOMES = new Set(["asr_failed", "capture_failed"]);
  */
 type Anchor = { cx: number; top: number };
 type Box = { w: number; h: number; m: number };
+
+/**
+ * Where the pill is, given where its window is — read off the window, not off
+ * React state.
+ *
+ * This is the same correction ADR 0006 applied to the pill's width, applied to
+ * the pill's position, and for the same reason. Every one of these conversions
+ * used to multiply the window's position by `box.current`, which is the box this
+ * side *intends* the window to become — written synchronously in the layout
+ * effect, before the resize has even been sent. The three places that convert a
+ * window position into an anchor were all reading it as though it were the box
+ * the window *is*.
+ *
+ * That is what made the bar jump when the hotkey was spammed. `onMoved` fires for
+ * every move including the ones we command ourselves, and when one arrived after
+ * the next state had already updated `box.current`, the anchor was rebuilt with
+ * the wrong half-width and the wrong margin: listening to transcribing put it
+ * 57px left and 22px up, and the next press put it back. The displacement is
+ * exactly `(w_new - w_prev) / 2` horizontally and `m_new - m_prev` vertically, it
+ * survives until the following transition, and around a full cycle it sums to
+ * zero — which is why the bar appeared to jump away and come back rather than
+ * drifting.
+ *
+ * The viewport is the honest source and it is synchronous: no IPC, no await, and
+ * nothing that can be a state ahead. The window carries its own margin, by the
+ * identity ADR 0006 already depends on — the window is the pill plus the margin
+ * on all four sides, so with the pill's height fixed the margin is
+ * `(clientHeight - PILL_H) / 2`.
+ *
+ * The menu is the exception, as it is there: it claims the window below the pill,
+ * so the height identity does not hold. Its margin is always zero, which makes
+ * the conversion simpler rather than absent.
+ */
+function anchorFrom(x: number, y: number): Anchor {
+  const w = document.documentElement.clientWidth;
+  const h = document.documentElement.clientHeight;
+  // Menu-ness is read off the window, not off React.
+  //
+  // This used to take a `menuOpen` argument sourced from a ref assigned during
+  // render, which is the same "one value, two instants" mistake this function
+  // exists to remove — just moved up a level. Between closing the menu and the
+  // window shrinking out of the menu box, React says "not a menu" while the
+  // window is still 226 tall, and the margin computes as (226-40)/2 = 93 instead
+  // of 0. Right-clicking the bar and then dragging it hit exactly that gap and
+  // dropped the anchor 93px.
+  //
+  // The window's own shape answers the question without a second source. A pill
+  // window is never taller than the pill plus a glow margin on each side, so
+  // anything taller is the menu, whose margin is always zero.
+  const isPill = h <= PILL_H + GLOW_MARGIN * 2 + 1;
+  const m = isPill ? Math.max(0, (h - PILL_H) / 2) : 0;
+  return { cx: x + w / 2, top: y + m };
+}
 function useWindowGeometry(
   pillW: number,
   pillH: number,
@@ -127,6 +226,7 @@ function useWindowGeometry(
   anchor: React.MutableRefObject<Anchor | null>,
   want: React.MutableRefObject<Box>,
   ready: boolean,
+  commanded: React.MutableRefObject<Array<[number, number]>>,
 ) {
   const boxW = pillW + margin * 2;
   const boxH = pillH + margin * 2;
@@ -138,36 +238,108 @@ function useWindowGeometry(
   // spammed.
   const sending = useRef(false);
 
+  /** The box Rust has actually been told about, as opposed to the one this side
+   *  currently wants. Null until the first command completes. */
+  const sent = useRef<Box | null>(null);
+
+  /**
+   * Drive the window to `want`, and keep going until it is there.
+   *
+   * A convergence loop, and it has to be one. Two earlier versions of this were
+   * *edge*-triggered — they decided at the top whether a send was needed and then
+   * relied on the loop noticing later changes — and each dropped a different
+   * resize:
+   *
+   *   - Comparing the desired box against `want` dropped the very first one. The
+   *     mount pass sets `want` and calls this, which bails at `if (!a)` because
+   *     the anchor is still being read off the window; when the anchor lands and
+   *     the effect re-runs, `want` already holds the target, so it returned early
+   *     and the box was never sent at all.
+   *   - Comparing it against `sent` dropped the *last* one. Cancelling a dictation
+   *     returns the bar to a box it was already at, so if that happened while the
+   *     listening box was still in flight, the effect saw `sent` already matching
+   *     and returned without touching `want` — and the loop below, terminating on
+   *     `want.current === target` by identity, then agreed it was finished. The
+   *     window stayed at the listening width with an idle pill in it: the bar
+   *     stuck visibly elongated after Escape.
+   *
+   * Both holes come from the same mistake, which is asking "has something
+   * changed?" instead of "are we there yet?". The loop now terminates only when
+   * the window has actually been told the box this side wants, compared by value,
+   * and the effect below unconditionally records what it wants and calls this. No
+   * interleaving can leave the two disagreeing, because disagreeing is the loop's
+   * continuation condition.
+   */
   const flush = useCallback(async () => {
     if (sending.current) return;
     sending.current = true;
     try {
-      // Loop rather than recurse: while awaiting, the state may have changed
-      // again, and only the newest target is worth sending.
       for (;;) {
+        const target = want.current;
+        const s = sent.current;
+        if (s && s.w === target.w && s.h === target.h && s.m === target.m) return;
+
+        // No anchor yet: the window's own position is still being read. Returning
+        // is safe rather than lossy — `sent` is left untouched, so the next run
+        // of the effect (which `geomReady` guarantees) finds the two still
+        // disagreeing and converges then.
         const a = anchor.current;
         if (!a) return;
-        const target = want.current;
+
         // Integer logical pixels. A fractional coordinate is rounded on the way
         // to physical pixels and rounded differently on the way back, and with
         // the odd pill widths that come out of measuring text, that residue is
         // what walked the bar sideways a fraction at a time.
         const x = Math.round(a.cx - target.w / 2);
         const y = Math.round(a.top - target.m);
+        mark("flush", { x, y, w: target.w, h: target.h, m: target.m });
+        // Remembered before the call, not after: the window starts moving inside
+        // `overlay_set_box`, and the `onMoved` it produces can reach the handler
+        // before this await resolves. A record written afterwards would arrive
+        // too late to recognise its own echo.
+        commanded.current.push([x, y]);
+        if (commanded.current.length > COMMANDED_HISTORY) commanded.current.shift();
         await call("overlay_set_box", { x, y, w: target.w, h: target.h });
-        if (want.current === target) return;
+        sent.current = target;
+        mark("flushed", { w: target.w, h: target.h, m: target.m });
       }
     } finally {
       sending.current = false;
     }
-  }, [anchor, want]);
+  }, [anchor, want, commanded]);
 
+  // Records what is wanted and asks for it. No conditions, deliberately.
+  //
+  // Every early return that has ever been added here has dropped a resize, in
+  // both directions — see the two named in `flush`. This effect's only job is to
+  // state the target; deciding whether anything needs sending is the loop's job,
+  // and the loop decides it by comparing where the window is with where it should
+  // be rather than by trying to detect a change. `flush` is single-flight, so
+  // calling it on a pass that has nothing to do costs one comparison.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    if (want.current.w === boxW && want.current.h === boxH && want.current.m === margin) return;
     want.current = { w: boxW, h: boxH, m: margin };
     void flush();
   }, [boxW, boxH, margin, ready, flush, want]);
+
+  // A resize that never lands is silent, and that is what made this expensive.
+  //
+  // Both dropped-resize bugs looked to the user like the bar rendering wrong —
+  // stuck wide, or the wrong shape — and neither left any trace, because from
+  // this side everything had been asked for correctly. What was missing was
+  // anybody checking that it *arrived*. Convergence is normally a frame or two;
+  // half a second means a request was dropped, and the loop above is now built so
+  // that cannot happen, which is precisely why it is worth an alarm if it does.
+  useEffect(() => {
+    if (!inTauri()) return;
+    const id = window.setInterval(() => {
+      const s = sent.current;
+      const w = want.current;
+      if (!s || (s.w === w.w && s.h === w.h && s.m === w.m)) return;
+      reportStuckBox(s, w, sending.current);
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [want]);
 }
 
 export function Overlay() {
@@ -175,13 +347,49 @@ export function Overlay() {
   const { settings } = useSettings();
   const [menu, setMenu] = useState(false);
   const [snapping, setSnapping] = useState(false);
-  const dragging = useRef(false);
+  /**
+   * When the current drag was last known to be real, as a `performance.now()`
+   * stamp, or 0 for "not dragging".
+   *
+   * A timestamp rather than a boolean because the boolean had no reliable way
+   * back down. It was raised on mouse-down and lowered only by a debounce that is
+   * armed inside the `onMoved` handler — so a click on the bar that moved it zero
+   * pixels produced no `onMoved`, never armed the debounce, and left the flag
+   * raised for the rest of the session. `startDragging` cannot lower it either:
+   * it dispatches `WM_NCLBUTTONDOWN` and returns immediately rather than when the
+   * Windows move loop ends, and the move loop swallows the mouse-up.
+   *
+   * A real drag refreshes this on every move it produces. Anything arriving more
+   * than `DRAG_TTL` after the last genuine movement is not part of a drag,
+   * whatever the flag says.
+   */
+  const dragging = useRef(0);
   const hit = useRef<HTMLDivElement>(null);
   /** Where the pill belongs on screen. See `useWindowGeometry`. */
   const anchor = useRef<Anchor | null>(null);
-  /** The box the window has been told to be. Also how a window position is
-   *  converted back into an anchor after the user drags. */
+  /** The box the window has been told to be. Read only by `useWindowGeometry`:
+   *  converting a window position back into an anchor uses `anchorFrom`, which
+   *  reads the window rather than this. See the note there. */
   const box = useRef<Box>({ w: 150, h: 40, m: 0 });
+  /**
+   * Positions this side has commanded, so moves reported back can be recognised
+   * as our own rather than guessed at. See `COMMANDED_HISTORY`.
+   */
+  const commanded = useRef<Array<[number, number]>>([]);
+  /**
+   * Which settle is allowed to run. Bumped to start one and bumped again by
+   * anything that re-places the window, which abandons it at its next frame.
+   */
+  const settleGen = useRef(0);
+  /**
+   * The display scale, read once.
+   *
+   * It is a constant for a monitor, and every place that awaited it was paying a
+   * round trip for a fixed number — while opening a gap in which the window could
+   * change size, so a position from one instant was combined with a viewport from
+   * another. Held here so the conversion is synchronous everywhere.
+   */
+  const scaleRef = useRef(1);
   const [geomReady, setGeomReady] = useState(false);
 
   // Rust places the bar at startup and whenever it returns from hidden, and
@@ -194,10 +402,8 @@ export function Overlay() {
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
       un = await listen<[number, number]>("overlay-parked", ({ payload }) => {
-        anchor.current = {
-          cx: payload[0] + box.current.w / 2,
-          top: payload[1] + box.current.m,
-        };
+        anchor.current = anchorFrom(payload[0], payload[1]);
+        mark("parked", { x: payload[0], y: payload[1], anchor: anchor.current });
       });
     })();
     return () => un?.();
@@ -215,11 +421,9 @@ export function Overlay() {
       const scale = await win.scaleFactor();
       const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
       if (!live) return;
+      scaleRef.current = scale;
       box.current = { w: size.width / scale, h: size.height / scale, m: 0 };
-      anchor.current = {
-        cx: pos.x / scale + box.current.w / 2,
-        top: pos.y / scale,
-      };
+      anchor.current = anchorFrom(pos.x / scale, pos.y / scale);
       setGeomReady(true);
     })();
     return () => {
@@ -332,30 +536,59 @@ export function Overlay() {
    * covers the distance over `SETTLE_MS`, which turns the snap from a glitch
    * into the thing that makes the bar feel magnetic.
    */
-  const settleTo = useCallback(async (tx: number, ty: number) => {
-    const { getCurrentWindow, LogicalPosition } = await import("@tauri-apps/api/window");
-    const win = getCurrentWindow();
-    const scale = await win.scaleFactor();
-    const at = await win.outerPosition();
-    const fx = at.x / scale;
-    const fy = at.y / scale;
+  const settleTo = useCallback(async (fx: number, fy: number, tx: number, ty: number) => {
     const dx = tx - fx;
     const dy = ty - fy;
     // Nothing to travel: released away from every snap line.
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
 
+    // Claim this settle. Any settle already running is abandoned at its next
+    // frame, and any state change abandons this one — see the layout effect that
+    // bumps the token.
+    //
+    // Without that, this loop wrote a window position sixty times a second for
+    // 220ms with nothing able to stop it, against an `overlay_set_box` that
+    // writes once. A settle beat every resize it overlapped, and two settles
+    // could run at once, each convinced it knew where the bar was.
+    const mine = ++settleGen.current;
+
+    const { getCurrentWindow, LogicalPosition } = await import("@tauri-apps/api/window");
+    const win = getCurrentWindow();
+    if (settleGen.current !== mine) return;
+
+    mark("settle-start", { from: [fx, fy], to: [tx, ty] });
     const t0 = performance.now();
     const step = (now: number) => {
+      // Superseded: a newer settle, or a state change that has re-placed the
+      // window. Continuing would drag it back off the position the resize just
+      // gave it.
+      if (settleGen.current !== mine) {
+        mark("settle-cancelled", { at: Math.round(now - t0) });
+        return;
+      }
       const t = Math.min(1, (now - t0) / SETTLE_MS);
       // Exponential out, matching `--ease`: most of the distance early, so it
       // reads as the bar being pulled rather than pushed.
       const e = 1 - Math.pow(1 - t, 3);
       const nx = fx + dx * e;
       const ny = fy + dy * e;
+      // Recorded as ours before it is sent, exactly as `flush` does, so the moves
+      // this produces are recognised as echoes rather than read back as the user
+      // dragging — which is how a settle used to feed itself.
+      commanded.current.push([nx, ny]);
+      if (commanded.current.length > COMMANDED_HISTORY) commanded.current.shift();
       void win.setPosition(new LogicalPosition(nx, ny));
-      // Re-derived throughout, not just at the end: a hotkey press landing
-      // mid-settle must size around wherever the bar has actually got to.
-      anchor.current = { cx: nx + box.current.w / 2, top: ny + box.current.m };
+      // Only at the end, and from the destination rather than from the frame.
+      //
+      // Writing it every frame from a track computed before the round trip is
+      // what left the anchor permanently wrong: any resize landing mid-slide
+      // changed the window under a loop that was still interpolating from the
+      // old one, and the last frame to run won. The destination is known up
+      // front and cannot go stale.
+      if (t >= 1) {
+        anchor.current = anchorFrom(tx, ty);
+        mark("settle-end", { anchor: anchor.current });
+      }
       if (t < 1) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
@@ -373,20 +606,46 @@ export function Overlay() {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       const win = getCurrentWindow();
       un = await win.onMoved(({ payload }) => {
-        // A first filter, not the only one. The OS move loop eats the mouse-up, so
-        // this flag can be left standing by a press that moved nothing; Rust drops
-        // positions it just commanded itself. See `Overlay::commanded`.
-        if (!dragging.current) return;
+        // Read before anything is awaited.
+        //
+        // `scaleFactor` is a constant for a monitor, and awaiting it here bought
+        // nothing while costing correctness: by the time it resolved, the window
+        // could already be a different size, so the position from *this* move was
+        // combined with the viewport from the *next* one. That is the same
+        // one-value-two-instants mistake ADR 0006 was written about, relocated
+        // into an await. The viewport is now sampled in the same turn as the
+        // payload it belongs to.
+        const scale = scaleRef.current;
+        const lx = payload.x / scale;
+        const ly = payload.y / scale;
+
+        // Our own move coming back, not the user's hand.
+        //
+        // This is the gate that matters, and it replaces a heuristic with a fact.
+        // Every position this side commands is recorded before it is sent, so a
+        // report that matches one is provably ours. The old filter was the
+        // "dragging" flag alone — a guess about a Windows move loop that eats its
+        // own mouse-up — and when it guessed wrong, the resize that follows every
+        // hotkey press was committed as a drag: snapped against whatever size the
+        // bar happened to be, written to disk as the user's chosen position, and
+        // then animated there by `settleTo`. Up and to the left, for as long as
+        // the slide took, and permanently wrong afterwards.
+        if (isEcho(commanded.current, lx, ly)) {
+          mark("moved-echo", { x: lx, y: ly });
+          return;
+        }
+
+        // Expired as well as checked. A drag produces a continuous stream of
+        // moves, so a genuine one keeps refreshing the stamp; a move arriving
+        // long after the last real movement is not part of a drag, however the
+        // flag was left.
+        if (!dragging.current || performance.now() - dragging.current > DRAG_TTL) return;
+        dragging.current = performance.now();
 
         // The user is moving the bar, so the anchor follows it. Without this the
         // next resize would size around where the bar used to be.
-        void (async () => {
-          const scale = await win.scaleFactor();
-          anchor.current = {
-            cx: payload.x / scale + box.current.w / 2,
-            top: payload.y / scale + box.current.m,
-          };
-        })();
+        anchor.current = anchorFrom(lx, ly);
+        mark("dragged", { x: lx, y: ly, anchor: anchor.current });
 
         // While the drag is running, ask Rust — the one place that owns the snap
         // rules — whether releasing here would move the bar, and say so on the
@@ -395,14 +654,11 @@ export function Overlay() {
         if (now - cueAt > 90) {
           cueAt = now;
           void (async () => {
-            const scale = await win.scaleFactor();
-            const x = payload.x / scale;
-            const y = payload.y / scale;
-            const to = (await call("overlay_snap_preview", { x, y })) as
+            const to = (await call("overlay_snap_preview", { x: lx, y: ly })) as
               | [number, number]
               | undefined;
             if (!to) return;
-            setSnapping(Math.abs(to[0] - x) > 0.5 || Math.abs(to[1] - y) > 0.5);
+            setSnapping(Math.abs(to[0] - lx) > 0.5 || Math.abs(to[1] - ly) > 0.5);
           })();
         }
 
@@ -411,16 +667,19 @@ export function Overlay() {
         // below is now visible, so any wait in front of it reads as lag.
         window.clearTimeout(timer);
         timer = window.setTimeout(async () => {
-          const scale = await win.scaleFactor();
           // Cleared before the commit, not after: the settle moves the window
           // too, and those events must not be read as more dragging.
-          dragging.current = false;
+          dragging.current = 0;
           setSnapping(false);
-          const to = (await call("overlay_move", {
-            x: payload.x / scale,
-            y: payload.y / scale,
-          })) as [number, number] | undefined;
-          if (to) void settleTo(to[0], to[1]);
+          const to = (await call("overlay_move", { x: lx, y: ly })) as
+            | [number, number]
+            | undefined;
+          // `lx, ly` is where the drag actually ended, captured in the same turn
+          // as the move that reported it. Passing it to `settleTo` as the origin
+          // removes the three awaits that used to stand between the commit and
+          // reading the window's position back — during which a resize could land
+          // and leave the slide travelling from somewhere the bar no longer was.
+          if (to) void settleTo(lx, ly, to[0], to[1]);
         }, 120);
       });
     })();
@@ -434,7 +693,7 @@ export function Overlay() {
   const startDrag = useCallback(async (e: React.MouseEvent) => {
     if (e.button !== 0 || !inTauri()) return;
     setMenu(false);
-    dragging.current = true;
+    dragging.current = performance.now();
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().startDragging();
   }, []);
@@ -470,6 +729,16 @@ export function Overlay() {
     ? Math.min(360, Math.max(200, Math.ceil(MSG_CHROME + textWidth(alertText, "400 12px $sans"))))
     : 248;
 
+  // These are the *window's* target, not the pill's painted size.
+  //
+  // The pill used to be given this number directly, as an inline width, while
+  // the window was told the same number over IPC and got it a round trip later.
+  // For that round trip the pill was wider than the window it lives in, and a
+  // pill wider than its window is cropped: rounded ends gone, side borders gone,
+  // the timer cut mid-glyph — a black rectangle with the bar trapped inside it.
+  // The pill now reads its width off the window instead (`.overlay-hit` in
+  // overlay.css), so it can be briefly the previous size but never the wrong
+  // shape, and this stays what it always meant: where the window is going.
   const pillWidth = menu
     ? 280
     : alerting
@@ -479,7 +748,7 @@ export function Overlay() {
         : working
           ? 170
           : idleWidth;
-  const pillHeight = menu ? 226 : 40;
+  const pillHeight = menu ? 226 : PILL_H;
 
   // Never both: the menu already claims a much larger box for its own purposes,
   // and stacking the glow margin on top would overshoot it. The menu also closes
@@ -487,7 +756,50 @@ export function Overlay() {
   const glowing = live && !menu;
   const margin = glowing ? GLOW_MARGIN : 0;
 
-  useWindowGeometry(pillWidth, pillHeight, margin, anchor, box, geomReady);
+  useWindowGeometry(pillWidth, pillHeight, margin, anchor, box, geomReady, commanded);
+
+  // Measure what was actually painted against the window it was painted in.
+  //
+  // Silent unless the two disagree, and the two disagreeing is the entire bug:
+  // it is the difference between "the bar looks wrong" and a line in the console
+  // saying the pill is 240px wide in a 150px window. Runs after layout on every
+  // pass rather than being gated behind a debug flag, because the frames this
+  // catches are the ones nobody is watching for. See overlay-trace.ts.
+  useLayoutEffect(() => {
+    if (!inTauri()) return;
+    checkInvariants(hit.current, margin);
+  });
+
+  useEffect(() => watchViewport(), []);
+
+  // Keep the cached scale honest.
+  //
+  // Reading it synchronously is what removed the await that used to let a
+  // position from one instant meet a viewport from another — but a display scale
+  // is only constant for one monitor. Dragging the bar to a screen at a different
+  // DPI, or changing scaling while the app runs, would otherwise leave every
+  // conversion wrong for the rest of the session. Tauri reports the change; the
+  // read stays synchronous and the cache is refreshed out of band.
+  useEffect(() => {
+    if (!inTauri()) return;
+    let un: (() => void) | undefined;
+    void (async () => {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      un = await getCurrentWindow().onScaleChanged(({ payload }) => {
+        scaleRef.current = payload.scaleFactor;
+        mark("scale-changed", { scale: payload.scaleFactor });
+      });
+    })();
+    return () => un?.();
+  }, []);
+
+  // A state change re-places the window, so any settle still interpolating
+  // towards an older destination is abandoned. Without this the slide and the
+  // resize fight, sixty writes a second against one, and the slide wins.
+  useLayoutEffect(() => {
+    settleGen.current += 1;
+  }, [pillWidth, pillHeight, margin]);
+
 
   // Close the menu when a session starts.
   //
@@ -522,7 +834,11 @@ export function Overlay() {
         : "Ready. Hold the shortcut to dictate.";
 
   return (
-    <div className="overlay-root" data-menu={menu}>
+    // `data-fit` is what turns on reading the pill's size off the window. It is
+    // true only in the real overlay window: the component sheet renders this same
+    // component in an ordinary browser window, where the viewport is the whole
+    // page and a pill sized to it would be absurd.
+    <div className="overlay-root" data-menu={menu} data-fit={inTauri()}>
       {/* `assertive` when something went wrong: a failure announced politely
           waits for the screen reader to finish whatever it was saying, which
           for a message about text that did not land is too late to be useful. */}
@@ -533,7 +849,13 @@ export function Overlay() {
         className="overlay-hit"
         ref={hit}
         data-snapping={snapping}
-        style={{ width: pillWidth }}
+        // Not a width. A fallback for the browser preview, where there is no
+        // window to read a size off; in the real overlay window the rule keyed on
+        // `data-fit` outranks it and this is never consulted. Setting it as a
+        // custom property rather than a width is what keeps that true: an inline
+        // `width` would beat every stylesheet rule and reintroduce exactly the
+        // JavaScript-owned pill size this change exists to remove.
+        style={{ "--pill-w": `${pillWidth}px` } as React.CSSProperties}
         onMouseDown={startDrag}
         onContextMenu={(e) => {
           e.preventDefault();
