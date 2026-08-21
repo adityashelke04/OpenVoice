@@ -822,6 +822,7 @@ than rediscovered.
 | Day-one ASR backend — faster-whisper sidecar or whisper.cpp in-process? | faster-whisper in a supervised Python sidecar, behind the `Transcriber` trait so the swap stays cheap | [ADR 0003](adr/0003-asr-backend.md) |
 | Activation — push-to-talk, toggle, or both? | Push-to-talk on Right Ctrl. Toggle deferred, and will be a *second* binding rather than a mode switch. | [ADR 0004](adr/0004-activation-and-license.md) |
 | License — Apache-2.0 or MIT? | Apache-2.0, for the explicit patent grant | [ADR 0004](adr/0004-activation-and-license.md) |
+| Flow Bar geometry — who owns the pill's size, React or the window? | The window. The pill's painted size is derived from the viewport in CSS and never told to it by JavaScript, so the two cannot be stale relative to each other. | [ADR 0006](adr/0006-flow-bar-geometry.md) |
 
 Two of those have since been amended by contact with reality, and the amendments
 are the interesting part: ADR 0003 carries the measured cost of bundling Python

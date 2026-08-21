@@ -525,6 +525,27 @@ fn overlay_set_box(app: AppHandle, x: f64, y: f64, w: f64, h: f64) {
     }
 }
 
+/// Put a line from the Flow Bar's webview into the app's log.
+///
+/// The overlay's own instrumentation was written to `console`, which is exactly
+/// the wrong place for it: the Flow Bar has no devtools in a release build, and
+/// the one surface whose bugs are reported as "it looked wrong for a second" is
+/// the one whose evidence nobody can retrieve. Meanwhile the Rust half of the
+/// same handshake logs to a file that has been quietly recording every window
+/// resize for weeks — and being able to read that is what finally proved the
+/// geometry was correct all along and moved the search to the rendering.
+///
+/// Both halves now land in `openvoice.log`, interleaved and on one clock, so a
+/// user reporting this only has to send the file.
+#[tauri::command]
+fn overlay_log(level: String, msg: String, data: String) {
+    match level.as_str() {
+        "error" => tracing::error!(%data, "flowbar: {msg}"),
+        "warn" => tracing::warn!(%data, "flowbar: {msg}"),
+        _ => tracing::debug!(%data, "flowbar: {msg}"),
+    }
+}
+
 /// Where the bar would snap to if released here. Drives the drag cue.
 #[tauri::command]
 fn overlay_snap_preview(app: AppHandle, x: f64, y: f64) -> (f64, f64) {
@@ -646,6 +667,7 @@ fn main() {
             overlay_placement,
             overlay_move,
             overlay_set_box,
+            overlay_log,
             overlay_snap_preview,
             overlay_snooze,
             overlay_always_visible,
