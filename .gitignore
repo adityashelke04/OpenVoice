@@ -75,6 +75,10 @@ DESIGN.md
 docs/UI-RESEARCH.md
 CLAUDE.md
 .claude/
+# Design-critique snapshots. Same reasoning: they quote PRODUCT.md, the private
+# marketing-site brief and audience analysis, so they belong with the planning
+# documents above rather than in a public repository.
+.impeccable/
 
 # ------------------------------------------------------------------------ OS
 Thumbs.db
