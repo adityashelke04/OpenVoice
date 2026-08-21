@@ -1,14 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "overlay",
-  "description": "Permissions for the Flow Bar overlay only — deliberately narrower than the Hub's (default.json). The overlay's entire reason to exist is that it never takes focus or activates (WS_EX_NOACTIVATE, applied on the Rust side in main.rs::configure_overlay); it previously shared the Hub's full window-manipulation grant, which included core:window:allow-set-focus, allow-show, allow-hide and allow-unminimize — none of which apps/ui/src/windows/Overlay.tsx calls (it only calls onMoved, scaleFactor, startDragging and setSize). Capabilities gate what a window's own JavaScript can invoke over IPC; nothing here stopped legitimate code from ever calling setFocus() on the overlay, because nothing needed to, but a compromised or newly-added dependency running inside that webview could have called getCurrentWindow().setFocus() on itself and it would have been permitted — directly undermining the one property this window exists to guarantee. Grant exactly what Overlay.tsx uses today; widen this file, deliberately, the day it needs more.",
+  "description": "Permissions for the Flow Bar overlay only — deliberately narrower than the Hub's (default.json). The overlay's entire reason to exist is that it never takes focus or activates (WS_EX_NOACTIVATE, applied on the Rust side in main.rs::configure_overlay); it previously shared the Hub's full window-manipulation grant, which included core:window:allow-set-focus, allow-show, allow-hide and allow-unminimize — none of which apps/ui/src/windows/Overlay.tsx calls. Capabilities gate what a window's own JavaScript can invoke over IPC; nothing here stopped legitimate code from ever calling setFocus() on the overlay, because nothing needed to, but a compromised or newly-added dependency running inside that webview could have called getCurrentWindow().setFocus() on itself and it would have been permitted — directly undermining the one property this window exists to guarantee. Grant exactly what Overlay.tsx uses today; widen this file, deliberately, the day it needs more. What it uses today: onMoved and the scaleFactor/outerPosition/outerSize readers (the readers are in core:window's default set), startDragging, and setPosition. setPosition is what settleTo animates the bar along after a snapped drag, and it was missing — core:window's default set is reads plus allow-internal-toggle-maximize, so every frame of that animation was denied and rejected while the frontend went on recording the position it believed it had reached. The anchor it derives from that position is what the next resize is measured from, so a denied settle left the bar sizing itself around somewhere it had never been. allow-set-size is gone: nothing calls setSize any more, because moving and resizing in two calls is what put the pill briefly at the wrong place, and both now go through the overlay_set_box command instead.",
   "windows": ["overlay"],
   "permissions": [
     "core:default",
     "core:event:default",
 
     "core:window:allow-start-dragging",
-    "core:window:allow-set-size",
+    "core:window:allow-set-position",
     "core:window:allow-scale-factor"
   ]
 }

@@ -253,6 +253,28 @@ const COMMANDS: &[(&[&str], &str, bool)] = &[
     (&["dot"], ".", true),
 ];
 
+/// Whether a matched command phrase should actually substitute here.
+///
+/// Almost every entry in [`COMMANDS`] is unambiguous: nobody says "semicolon"
+/// meaning the word. `percent` is the exception, because "fifty percent" is
+/// ordinary English and this pipeline has no number-word conversion — so
+/// substituting unconditionally produced the nonsense `fifty%`.
+///
+/// The trigger is therefore a preceding digit. `50 percent` becomes `50%`,
+/// which is what a person writing it down would do; `fifty percent` stays as
+/// spoken, which is also what a person would do. Widening this to spelled-out
+/// numerals would mean owning a number parser, and the honest small rule beats
+/// a clever one that is wrong in a new way.
+fn substitution_applies(phrase: &[&str], emitted: &[Tok]) -> bool {
+    if phrase != ["percent"] {
+        return true;
+    }
+    emitted
+        .last()
+        .and_then(Tok::as_word_lower)
+        .is_some_and(|w| w.chars().next_back().is_some_and(|c| c.is_ascii_digit()))
+}
+
 /// The escape hatch. "literally new line" emits the words, not a line break.
 ///
 /// Without this, certain sentences become untypeable — you could never dictate
@@ -408,6 +430,7 @@ impl Rule for VoiceCommands {
             if let Some((phrase, lit, tight)) = COMMANDS
                 .iter()
                 .find(|(p, _, _)| doc.window(i, p.len()).is_some_and(|w| w == **p))
+                .filter(|(p, _, _)| substitution_applies(p, &out))
             {
                 out.push(if *tight {
                     Tok::tight(*lit)
@@ -605,8 +628,15 @@ impl Rule for Capitalize {
         }
         let mut toks = doc.toks;
         let mut at_sentence_start = true;
+        // A clone of the token before this one. The loop mutates in place, so a
+        // borrow of the previous element cannot be held across the iteration.
+        let mut prev: Option<Tok> = None;
 
-        for tok in &mut toks {
+        for idx in 0..toks.len() {
+            if idx > 0 {
+                prev = Some(toks[idx - 1].clone());
+            }
+            let tok = &mut toks[idx];
             match tok {
                 Tok::Break => at_sentence_start = true,
                 Tok::Lit(s) => {
@@ -622,12 +652,81 @@ impl Rule for Capitalize {
                 Tok::Word(w) => {
                     if at_sentence_start && !looks_like_an_identifier(w) {
                         *w = capitalize(w);
+                    } else if !looks_like_an_identifier(w) {
+                        // Mid-sentence lifts. Whisper transcribes the pronoun
+                        // and the weekday and month names in lowercase, and
+                        // both are wrong in every prose context -- which made
+                        // "so i think we should ship on friday" the single most
+                        // visible formatting miss in ordinary dictation.
+                        let lower = w.to_lowercase();
+                        if lower == "i" && is_pronoun_i(prev.as_ref()) {
+                            *w = "I".to_string();
+                        } else if ALWAYS_CAPITAL.contains(&lower.as_str()) {
+                            *w = capitalize(&lower);
+                        }
                     }
                     at_sentence_start = false;
                 }
             }
         }
         Doc { toks }
+    }
+}
+
+/// Words English always capitalizes, wherever they fall in a sentence.
+///
+/// Deliberately a closed, tiny list rather than a proper-noun detector. Every
+/// entry here is a word whose capitalized form is *always* correct in prose and
+/// whose lowercase form is *always* wrong, so there is no context to get wrong.
+/// Names of people, places and products are not on it and must not be: guessing
+/// those needs knowledge this pipeline does not have, and a wrong guess is worse
+/// than the lowercase it replaced.
+const ALWAYS_CAPITAL: &[&str] = &[
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+/// Whether this `i` is the English pronoun rather than a name for something.
+///
+/// The pronoun stands alone: "i think", "if i can". A single `i` that is part
+/// of a flag or names a variable — `dash i`, "the i variable" — is not the
+/// pronoun, and lifting it would corrupt the thing it refers to. So the word
+/// before it decides, and anything that smells like code vetoes the lift.
+fn is_pronoun_i(prev: Option<&Tok>) -> bool {
+    match prev {
+        // Sentence-initial `i` is handled by the sentence rule, but a leading
+        // pronoun with nothing before it is still the pronoun.
+        None => true,
+        Some(Tok::Break) => true,
+        // A resolved identifier or any tight token means we are inside code.
+        Some(Tok::Lit(s)) => matches!(s.as_str(), "." | "!" | "?" | "," | ";" | ":"),
+        Some(Tok::Tight(_)) => false,
+        Some(Tok::Word(w)) => {
+            let w = w.to_lowercase();
+            // "the i variable", "dash i flag" -- a determiner or a dash before
+            // a bare letter marks it as a name, not a pronoun.
+            !matches!(
+                w.as_str(),
+                "the" | "an" | "a" | "dash" | "hyphen" | "underscore"
+            )
+        }
     }
 }
 
@@ -1106,6 +1205,65 @@ mod tests {
         assert_eq!(
             run(&Capitalize, &p, "hello there. how are you"),
             "Hello there. How are you"
+        );
+    }
+
+    #[test]
+    fn capitalize_lifts_the_standalone_pronoun_i() {
+        // Regression: `Capitalize` only ever touched the first word of a
+        // sentence, so a pronoun anywhere after it stayed lowercase and every
+        // dictated sentence containing "I" came out visibly wrong.
+        let p = Profile::default();
+        assert_eq!(
+            run(&Capitalize, &p, "so i think we should ship"),
+            "So I think we should ship"
+        );
+        assert_eq!(run(&Capitalize, &p, "i am here"), "I am here");
+    }
+
+    #[test]
+    fn capitalize_leaves_i_alone_when_it_is_not_the_pronoun() {
+        let p = Profile::default();
+        // A single letter that is part of an identifier or a flag is not the
+        // English pronoun, and lifting it would break the thing it names.
+        assert_eq!(run(&Capitalize, &p, "the i variable"), "The i variable");
+        assert_eq!(run(&Capitalize, &p, "dash i flag"), "Dash i flag");
+    }
+
+    #[test]
+    fn capitalize_lifts_days_and_months() {
+        // Weekday and month names are proper nouns in English and Whisper
+        // transcribes them lowercase mid-sentence.
+        let p = Profile::default();
+        assert_eq!(
+            run(&Capitalize, &p, "the deadline is friday"),
+            "The deadline is Friday"
+        );
+        assert_eq!(
+            run(&Capitalize, &p, "we ship in january"),
+            "We ship in January"
+        );
+    }
+
+    #[test]
+    fn capitalize_proper_nouns_is_off_for_the_terminal_profile() {
+        // The terminal profile forces lowercase precisely because a shell is
+        // case-sensitive. `march` may well be a directory.
+        let p = Profile::terminal();
+        assert_eq!(run(&Capitalize, &p, "cd march"), "cd march");
+    }
+
+    #[test]
+    fn percent_becomes_a_sign_only_after_a_number() {
+        // Regression: `percent` substituted unconditionally, so the perfectly
+        // ordinary "fifty percent" came out as the nonsense "fifty%". There is
+        // no number-word conversion in this pipeline, so the only safe trigger
+        // is a preceding digit.
+        let p = Profile::default();
+        assert_eq!(run(&VoiceCommands, &p, "up 50 percent"), "up 50%");
+        assert_eq!(
+            run(&VoiceCommands, &p, "up fifty percent"),
+            "up fifty percent"
         );
     }
 
