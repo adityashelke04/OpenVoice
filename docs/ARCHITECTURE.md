@@ -83,19 +83,35 @@ This is not architecture astronautics. It buys three concrete things:
   is a new impl of one trait, not a refactor.
 - macOS/Linux support later becomes "write three adapters", not "rewrite the app".
 
-```
-                    ┌───────────────────────────────────────────┐
-                    │              ov-core (pure)                │
-   inbound ports    │  ┌─────────────────┐  ┌────────────────┐  │   outbound ports
-   ───────────────► │  │ Session FSM     │─►│ Format Pipeline│  │ ────────────────►
-                    │  └─────────────────┘  └────────────────┘  │
-                    │         ▲  event bus (broadcast)  │        │
-                    └─────────┼───────────────────────┼─────────┘
-                              │                       │
-        ┌─────────────────────┴───────┐   ┌───────────┴──────────────────────┐
-        │ HotkeyListener  AudioSource  │   │ Transcriber  TextSink  History   │
-        │ (adapters in)                │   │ AppContext   (adapters out)      │
-        └──────────────────────────────┘   └──────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph driving["Driving adapters"]
+        direction TB
+        HK["Keyboard hook<br/><b>ov-input</b>"]
+        MIC["WASAPI capture<br/><b>ov-audio</b>"]
+    end
+
+    subgraph core["<b>ov-core</b> &mdash; pure. Compiles to wasm32."]
+        direction TB
+        SM["Session state machine"]
+        FMT["Formatting pipeline<br/><b>ov-format</b>"]
+        SM -- "event bus (broadcast)" --> FMT
+    end
+
+    subgraph driven["Driven adapters"]
+        direction TB
+        ASR["faster-whisper sidecar<br/><b>ov-asr</b>"]
+        APP["Foreground app<br/><b>ov-input</b>"]
+        SINK["SendInput / clipboard<br/><b>ov-input</b>"]
+        DB["SQLite + FTS5<br/><b>ov-store</b>"]
+    end
+
+    HK   -- "HotkeyListener" --> SM
+    MIC  -- "AudioSource"    --> SM
+    SM   -- "Transcriber"    --> ASR
+    SM   -- "AppContext"     --> APP
+    SM   -- "HistoryStore"   --> DB
+    FMT  -- "TextSink"       --> SINK
 ```
 
 ### 2.2 The six ports (the entire contract surface)
@@ -196,26 +212,31 @@ typestate-ish enum, not as a pile of booleans.
 A session moves through four phases (`session::Phase`); "idle" is the absence of
 any session rather than a fifth variant.
 
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Capturing : hotkey down
+    Capturing --> Transcribing : hotkey up
+    Capturing --> Transcribing : max duration reached
+    Transcribing --> Formatting
+    Formatting --> Injecting
+    Injecting --> [*] : persisted
+
+    Capturing --> [*] : cancelled
+    Transcribing --> [*] : cancelled
+    Formatting --> [*] : cancelled
+    Injecting --> [*] : cancelled
+
+    note right of Injecting
+        On injection failure the text still reaches
+        the clipboard and the history, with a notice.
+        A failure is recoverable, never a silent drop.
+    end note
 ```
-        ┌──────────────────────── Cancel (Esc), from any phase ─────────────────┐
-        │                                                                       │
-        ▼                                                                       │
-    ┌────────┐  hotkey down   ┌───────────┐  hotkey up   ┌─────────────┐       │
-    │ (idle) │───────────────►│ Capturing │─────────────►│ Transcribing│       │
-    └────────┘                └───────────┘              └─────────────┘       │
-        ▲                          │                            │              │
-        │                          └── > max_duration ──────────┤              │
-        │                                                       ▼              │
-        │                                                ┌────────────┐        │
-        │                                                │ Formatting │────────┤
-        │                                                └────────────┘        │
-        │                                                       │              │
-        │                                   ┌──────────┐        ▼              │
-        └───────────────────────────────────│ Injecting│◄───────┘              │
-                                            └──────────┘                       │
-                                          on failure: clipboard                │
-                                          + notice + history ──────────────────┘
-```
+
+`[*]` is idle on both sides. Every arrow back to it emits exactly one
+`Effect::Persist`; every `cancelled` arrow is an `Input::Cancelled` arriving from
+any phase.
 
 **Concurrency.** Capture is concurrent; everything after it is serialized. The
 machine holds at most one live capture plus an *ordered queue* of post-capture
