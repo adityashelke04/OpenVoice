@@ -1,0 +1,60 @@
+# https://editorconfig.org
+#
+# Five languages share this tree and only two of them have a formatter wired
+# into CI (`cargo fmt` for Rust, `ruff format` for the sidecar). This file is
+# what stops the other three drifting per contributor, and it is what makes an
+# editor agree with the formatter *before* CI has to.
+#
+# The values are not preferences. Each one matches the tool that already governs
+# that language here, so this file cannot disagree with a check that runs.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# rustfmt's defaults, which this project uses unmodified -- there is no
+# rustfmt.toml, deliberately.
+[*.rs]
+indent_size = 4
+max_line_length = 100
+
+# ruff, configured in sidecar/pyproject.toml.
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+[*.{ts,tsx,js,jsx,mjs,cjs}]
+indent_size = 2
+
+[*.{css,html,json,jsonc}]
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.toml]
+indent_size = 2
+
+# PowerShell scripts are checked out CRLF -- see .gitattributes. Keeping this in
+# agreement means the editor does not undo the checkout on the first save.
+[*.{ps1,cmd,bat}]
+end_of_line = crlf
+indent_size = 4
+
+[*.md]
+indent_size = 2
+# Two trailing spaces are a hard line break in Markdown. Stripping them silently
+# reflows a paragraph someone wrote deliberately.
+trim_trailing_whitespace = false
+
+# Generated. Nothing should reformat these.
+[{Cargo.lock,package-lock.json,uv.lock}]
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+indent_size = unset

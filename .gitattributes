@@ -1,0 +1,55 @@
+# Line endings and diff behaviour.
+#
+# Every tracked text file is already stored LF in the index (verified with
+# `git ls-files --eol`: 128 LF, 0 CRLF), so adding this file renormalizes
+# nothing and produces no diff. It exists to keep that true, and to stop a
+# contributor whose `core.autocrlf` differs from yours turning a one-line change
+# into a whole-file rewrite.
+
+# Default: store LF in the repository, check out whatever the platform wants.
+* text=auto
+
+# ----------------------------------------------------------------- Executables
+# These run on Linux in CI. A CRLF shebang line is a `bad interpreter` error,
+# and it is one of the harder failures to read from a CI log.
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# These run on Windows only. Older Windows shells mis-parse an LF-only batch
+# file, and PowerShell here-strings are sensitive to the terminator's line
+# ending, so pin them the other way.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# ---------------------------------------------------------------------- Binary
+# Marked explicitly rather than left to Git's heuristic. A misdetected binary is
+# normalized on commit, which corrupts it silently -- the file is only found to
+# be broken by whoever ships it.
+*.png  binary
+*.ico  binary
+*.icns binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.mp4  binary
+*.wav  binary
+*.bin  binary
+*.ct2  binary
+*.onnx binary
+*.safetensors binary
+
+# --------------------------------------------------------------- GitHub linguist
+# Lockfiles are generated, enormous, and not the language this project is
+# written in. Collapsed in diffs and excluded from the repository language bar.
+Cargo.lock                  linguist-generated=true
+sidecar/uv.lock             linguist-generated=true
+apps/ui/package-lock.json   linguist-generated=true
+
+# Generated icon sets, from assets/icon-source.png via `tauri icon`.
+crates/ov-app/icons/**      linguist-generated=true
+
+# Documentation should not count as the project's language, and there is a lot
+# of it here.
+docs/**                     linguist-documentation=true
