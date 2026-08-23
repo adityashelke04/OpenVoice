@@ -134,6 +134,43 @@ second instead of by launching a GUI and talking to it.
 The boundary is enforced mechanically: CI compiles the core crates for
 `wasm32-unknown-unknown`, a target where none of those dependencies can link.
 
+```mermaid
+flowchart LR
+    subgraph driving["Driving adapters &mdash; they call in"]
+        direction TB
+        HK["Keyboard hook<br/><b>ov-input</b>"]
+        MIC["WASAPI capture<br/><b>ov-audio</b>"]
+    end
+
+    subgraph core["Pure domain &mdash; no OS, no I/O, no async, no GUI"]
+        direction TB
+        SM["Session state machine<br/><b>ov-core</b>"]
+        FMT["Formatting pipeline<br/><b>ov-format</b>"]
+        SM --> FMT
+    end
+
+    subgraph driven["Driven adapters &mdash; the core calls out"]
+        direction TB
+        ASR["faster-whisper sidecar<br/><b>ov-asr</b>"]
+        APP["Foreground app<br/><b>ov-input</b>"]
+        SINK["SendInput / clipboard<br/><b>ov-input</b>"]
+        DB["SQLite + FTS5<br/><b>ov-store</b>"]
+    end
+
+    HK   -- "HotkeyListener" --> SM
+    MIC  -- "AudioSource"    --> SM
+    SM   -- "Transcriber"    --> ASR
+    SM   -- "AppContext"     --> APP
+    SM   -- "HistoryStore"   --> DB
+    FMT  -- "TextSink"       --> SINK
+```
+
+The six labelled edges are the entire contract surface &mdash; every trait is
+declared in [`ov-core/src/ports.rs`](crates/ov-core/src/ports.rs), and nothing
+reaches the operating system except through one of them. Adding a seventh
+requires an ADR.
+
+
 | Crate | Role |
 |---|---|
 | `ov-core` | Session state machine, the six ports, events, config. **Pure.** |
