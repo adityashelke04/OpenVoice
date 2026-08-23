@@ -75,6 +75,14 @@ DESIGN.md
 docs/UI-RESEARCH.md
 CLAUDE.md
 .claude/
+# Design-critique snapshots. Same reasoning: they quote PRODUCT.md, the private
+# marketing-site brief and audience analysis, so they belong with the planning
+# documents above rather than in a public repository.
+.impeccable/
+# Working plans and audits. Same category again: written to be executed and then
+# thrown away, and they quote the private documents freely. What survives one of
+# these belongs in docs/adr/ or CHANGELOG.md, which are versioned on purpose.
+docs/plans/
 
 # ------------------------------------------------------------------------ OS
 Thumbs.db
