@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tauriStub } from "./screenshot-fixtures.mjs";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const OUT = join(REPO, "docs", "images");
@@ -35,24 +36,103 @@ const CHROME = [
 /**
  * Screens to capture.
  *
- * Only screens that render truthfully without a backend are listed. Dictionary,
- * Writing style, Speech model and Settings all read their state through Tauri
- * commands, so outside the app they sit on loading skeletons forever — a
- * screenshot of one shows an empty grey rectangle and nothing else. Those belong
- * in a capture taken from the built app, not here.
+ * `stub: true` installs the fake Tauri bridge from `screenshot-fixtures.mjs`
+ * before the page's own JavaScript runs. Without it every screen but Home sits
+ * on a loading skeleton forever, because `inTauri()` is false in a plain browser
+ * and the commands those screens read from never resolve.
+ *
+ * The components are the real ones either way. Only the far side of `invoke` is
+ * canned, which is also what makes a capture repeatable: the previous version of
+ * this file photographed whatever happened to be in the operator's own history
+ * database.
+ *
+ * `?window=flowbar` needs no stub. It is a review surface that renders every
+ * Flow Bar state against four backdrops from a synthetic speech envelope, so it
+ * is already independent of the engine.
  */
 const SHOTS = [
   {
     name: "hub-home",
     url: `${BASE}/?window=hub`,
     width: 1100,
+    // Cuts between two history rows rather than through one. The list is meant
+    // to run off the bottom — it scrolls — but a slice through a line of text
+    // reads as a rendering fault rather than as more content.
+    height: 742,
+    stub: true,
+  },
+  {
+    name: "hub-dictionary",
+    url: `${BASE}/?window=hub`,
+    width: 1100,
     height: 760,
+    stub: true,
+    // Click through, then put a phrase in the live preview. An empty box is the
+    // one part of this screen that explains itself only once it has something in
+    // it. React owns the input's value, so the write goes through the native
+    // setter and a bubbling input event — assigning `.value` directly is
+    // discarded on the component's next render.
+    prepare: `(() => {
+      [...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Dictionary"))?.click();
+      requestAnimationFrame(() => {
+        const el = [...document.querySelectorAll("input")].find((i) => (i.placeholder || "").includes("call use effect"));
+        if (!el) return;
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        set.call(el, "um so we need to call use effect here comma then return null");
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    })()`,
+  },
+  {
+    name: "hub-writing-style",
+    url: `${BASE}/?window=hub`,
+    width: 1100,
+    height: 820,
+    stub: true,
+    prepare: `[...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Writing style"))?.click()`,
+  },
+  {
+    name: "hub-speech-model",
+    url: `${BASE}/?window=hub`,
+    width: 1100,
+    height: 760,
+    stub: true,
+    prepare: `[...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Speech model"))?.click()`,
+  },
+  {
+    name: "hub-settings",
+    url: `${BASE}/?window=hub`,
+    width: 1100,
+    height: 900,
+    stub: true,
+    prepare: `[...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Settings"))?.click()`,
+  },
+  {
+    name: "hub-advanced",
+    url: `${BASE}/?window=hub`,
+    width: 1100,
+    height: 900,
+    stub: true,
+    prepare: `[...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Advanced"))?.click()`,
   },
   {
     name: "design-system",
     url: `${BASE}/?window=sheet`,
     width: 1100,
     height: 900,
+  },
+  {
+    // Every Flow Bar state over every backdrop, including the two -- listening
+    // and working -- that cannot be photographed from the idle overlay because
+    // reaching them needs a real microphone.
+    name: "flow-bar-states",
+    url: `${BASE}/?window=flowbar`,
+    width: 1100,
+    // A starting height only; `fit` replaces it once the page has laid out. The
+    // review surface repeats all six states over four backdrops, which is right
+    // for reviewing and far too tall for a README — one backdrop is the asset.
+    height: 900,
+    fit: ".fbs-plate-section",
   },
   {
     name: "flow-bar",
@@ -178,6 +258,16 @@ async function main() {
         });
       }
 
+      // Before the page's own scripts, not after: `inTauri()` is read during the
+      // first render, and a bridge that arrives later is a bridge that arrives
+      // too late.
+      let stubId = null;
+      if (shot.stub) {
+        ({ identifier: stubId } = await page.send("Page.addScriptToEvaluateOnNewDocument", {
+          source: tauriStub(),
+        }));
+      }
+
       await page.send("Page.navigate", { url: shot.url });
       // Fonts, then the entrance animations, then the shot. Capturing mid-motion
       // produces a half-faded screenshot that looks like a rendering bug.
@@ -187,13 +277,40 @@ async function main() {
         await sleep(700);
       }
 
+      // Trim the viewport to one element instead of to a number guessed here.
+      // A hard-coded height silently starts cutting through content the first
+      // time that section grows.
+      if (shot.fit) {
+        const { result } = await page.send("Runtime.evaluate", {
+          expression: `(() => {
+            const el = document.querySelector(${JSON.stringify(shot.fit)});
+            return el ? Math.ceil(el.getBoundingClientRect().bottom + 24) : 0;
+          })()`,
+          returnByValue: true,
+        });
+        if (result.value > 0) {
+          await page.send("Emulation.setDeviceMetricsOverride", {
+            width: shot.width,
+            height: result.value,
+            deviceScaleFactor: 2,
+            mobile: false,
+          });
+          shot.height = result.value;
+          await sleep(250);
+        }
+      }
+
       const { data } = await page.send("Page.captureScreenshot", {
         format: "png",
         captureBeyondViewport: false,
       });
+      // The target is reused across shots, so a stub left installed would follow
+      // the design sheet and the overlay into their captures.
+      if (stubId) await page.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: stubId });
+
       const file = join(OUT, `${shot.name}.png`);
       writeFileSync(file, Buffer.from(data, "base64"));
-      console.log(`${shot.name.padEnd(16)} ${shot.width}x${shot.height}  ${file}`);
+      console.log(`${shot.name.padEnd(20)} ${shot.width}x${shot.height}  ${file}`);
       page.close();
     }
 
