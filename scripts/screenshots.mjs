@@ -10,9 +10,17 @@
  *   npm --prefix apps/ui run dev -- --port 5199 --strictPort   # in one terminal
  *   node scripts/screenshots.mjs                               # in another
  *
- * Images land in docs/images/. Anything the running app cannot reach without a
- * live engine (the first-run download, an active recording) is not faked here;
- * capture those from the built app instead.
+ * Images land in docs/images/.
+ *
+ * Screens that read their state through Tauri get a stubbed bridge — see
+ * `screenshot-fixtures.mjs` for what is canned and why the data in it is not
+ * invented. The components are never mocked, only the far side of `invoke`.
+ *
+ * What is still out of reach: anything that needs the engine to be *doing*
+ * something at capture time. The first-run download bar and a live recording
+ * both belong to the event stream rather than to a command, and faking those
+ * would mean driving the callbacks by hand for a result the Flow Bar's own
+ * review surface (`?window=flowbar`) already renders honestly.
  */
 
 import { spawn } from "node:child_process";
@@ -95,7 +103,9 @@ const SHOTS = [
     name: "hub-speech-model",
     url: `${BASE}/?window=hub`,
     width: 1100,
-    height: 760,
+    // Trimmed to the three cards and the note under them. The screen is short;
+    // a taller frame is a third of the image spent on empty canvas.
+    height: 570,
     stub: true,
     prepare: `[...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Speech model"))?.click()`,
   },
@@ -111,7 +121,9 @@ const SHOTS = [
     name: "hub-advanced",
     url: `${BASE}/?window=hub`,
     width: 1100,
-    height: 900,
+    // Cuts below the Files card. The screen continues past it, but the trace
+    // table at the top is what this image is for.
+    height: 730,
     stub: true,
     prepare: `[...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Advanced"))?.click()`,
   },

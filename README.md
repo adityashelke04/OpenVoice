@@ -30,10 +30,12 @@ No cloud, no account, no telemetry.
 ---
 
 <div align="center">
-<img src="docs/images/hub-home.png" width="880" alt="OpenVoice home screen showing speaking speed against typing and average speech, time saved, day streak, and recent dictations">
+<img src="docs/images/hub-home.png" width="880" alt="OpenVoice home screen: 9,540 words dictated, a speaking speed of 152 words per minute charted against a 40 wpm typing baseline and 150 wpm average speech, 2 hours 56 minutes saved, a 6 day streak, most-used app VS Code, and a list of recent dictations">
 <br>
-<sub>Home, on a fresh install. Your speaking speed fills in against the 40 wpm
-typing baseline once you have dictated something.</sub>
+<sub>Home. Your speaking speed is measured from how long you actually spoke, not
+from wall-clock time, and placed against the 40 wpm typing baseline — because the
+alternative to dictating is typing, not silence. The figures here are fixture
+data; see <a href="#design">Design</a>.</sub>
 </div>
 
 ---
@@ -77,6 +79,76 @@ cargo run -p ov-cli -- format "cube control get pods" --profile terminal --trace
 It works the same in an email, a chat box, a document or a terminal. What changes
 is how it formats: OpenVoice knows which app has focus and applies the rules that
 app deserves.
+
+## What it looks like
+
+One window and one floating pill. The window is where you teach it; the pill is
+the only part you see while you work.
+
+<div align="center">
+<img src="docs/images/hub-advanced.png" width="880" alt="The Advanced screen. A box contains the phrase 'um so we need to call use effect here comma then return null', and beneath it a table shows the sentence after each rule in turn: raw, fillers, dictionary, commands, capitalize. Below that, a Files card gives the log path and the settings folder">
+<br>
+<sub><b>The formatter, rule by rule.</b> Every stage the sentence passed through
+and what it looked like after each one. When a transcript comes out wrong this
+turns "the dictation is bad" into the name of the rule that did it — and it is
+the same trace <code>ov format --trace</code> prints in a terminal.</sub>
+</div>
+
+<br>
+
+<div align="center">
+<img src="docs/images/hub-dictionary.png" width="880" alt="The Dictionary screen. A phrase typed into 'Try a phrase' reads 'um so we need to call use effect here comma then return null', and the box below shows the formatted result: 'So we need to call useEffect here, then return null.' Underneath, a table of corrections maps spoken forms such as 'use effect' and 'jason' to written forms useEffect and JSON">
+<br>
+<sub><b>Dictionary.</b> Type what OpenVoice wrote, and watch the rules run on it.
+The corrections below are the ones it ships with; add your own and the box above
+changes as you type.</sub>
+</div>
+
+<br>
+
+<div align="center">
+<img src="docs/images/flow-bar-states.png" width="880" alt="The Flow Bar in six states over a white document: idle showing 'Hold Right Ctrl', listening with a green waveform and a 0:04 timer, working showing 'Writing…', landed, a clipboard fallback reading 'Copied to clipboard — press Ctrl+V', and a failure reading 'No text was produced'">
+<br>
+<sub><b>The Flow Bar</b>, every state, over a white document — one of the four
+backdrops it is reviewed against, because a border that reads on black and
+disappears on white is a defect worth catching before you ship it.</sub>
+</div>
+
+<details>
+<summary><b>Writing style, Speech model and Settings</b></summary>
+
+<br>
+
+<div align="center">
+<img src="docs/images/hub-writing-style.png" width="880" alt="The Writing style screen with tabs for default, Terminals, Code editors, and Messages and documents. The default tab shows toggles for capitalising sentences, ending with a full stop, spoken punctuation and spoken naming styles, and a dropdown for filler word removal set to Light">
+<br>
+<sub>The same words should look different depending on where they land. Four sets
+of rules, and OpenVoice picks one from whichever app has focus — a chat message
+gets a capital letter and a full stop, a terminal command gets neither.</sub>
+</div>
+
+<br>
+
+<div align="center">
+<img src="docs/images/hub-speech-model.png" width="880" alt="The Speech model screen listing three models: Accurate (large-v3-turbo, 1.6 GB, about 650 ms), Light (small.en, 249 MB, about 300 ms) and Fastest (base.en, 75 MB, about 190 ms), the last marked as in use">
+<br>
+<sub>Described by what they cost you, not by their identifiers. The catalogue is
+<a href="crates/ov-asr/src/catalog.rs"><code>ov-asr/src/catalog.rs</code></a>, the
+one place those sizes exist; the timings are measured on the reference machine
+named in the paragraph underneath them.</sub>
+</div>
+
+<br>
+
+<div align="center">
+<img src="docs/images/hub-settings.png" width="880" alt="The Settings screen: shortcut set to Right Ctrl, activation set to Hold to talk, microphone on the system default, language on auto-detect, sound feedback on, maximum recording of 2 minutes, and an Updates section explaining that the launch check sends one request carrying no identifier">
+<br>
+<sub>Nothing here is decorative. Transcript redaction, audio retention, toggle
+activation and the recording limit were all controls with nothing behind them
+until v0.2.0; each now does what it says.</sub>
+</div>
+
+</details>
 
 ## Principles
 
@@ -380,10 +452,21 @@ npm --prefix apps/ui ci
 npm run dev:ui          # then open http://localhost:5199/?window=sheet
 ```
 
-`?window=hub` is the main window and `?window=overlay` is the Flow Bar on its own.
-Screenshots in this README are captured from that same running UI by
-[`scripts/screenshots.mjs`](scripts/screenshots.mjs), so they cannot drift from
-the interface they claim to show.
+`?window=hub` is the main window, `?window=overlay` is the Flow Bar on its own,
+and `?window=flowbar` is every Flow Bar state at once, over the four kinds of
+surface it has to stay legible against.
+
+Every screenshot in this README is captured from that same running UI by
+[`scripts/screenshots.mjs`](scripts/screenshots.mjs), so none of them can drift
+from the interface it claims to show. What the screens are *reading* is fixture
+data from [`scripts/screenshot-fixtures.mjs`](scripts/screenshot-fixtures.mjs) —
+the dictionary, profiles and model catalogue copied from the Rust sources they
+mirror, the history rows taken from tests in `ov-format`, and one invented
+month's worth of totals. Nothing here is a mocked component or a drawing of a
+screen: the real `Hub` renders against the real `invoke` boundary, and only the
+far side of it is canned. That is also why these are safe to recapture — the
+previous versions came off a live machine and published whatever had last been
+dictated into it.
 
 ## Contributing
 
