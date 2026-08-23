@@ -1,122 +1,90 @@
 /* The overlay window is transparent; only the pill and its menu paint. */
 
-/* The window is sized to the pill exactly, so this fills it edge to edge. Any
-   spare window area would be visible as a rectangle — transparency on a Windows
-   webview is unreliable enough that the safe answer is to leave no spare area. */
+/* The window is a fixed 404x248 and the pill sits at a fixed offset inside it.
+   See ADR 0007.
+
+   Everything below used to be derived from `100vw`/`100vh`, and that is what the
+   bar's position bug was. The pill was centred in the viewport so that a window
+   moved by half its growth would leave the pill where it was — but the viewport
+   reaches the renderer after the window has already moved, so for that gap the
+   pill was painted centred in the *old* viewport inside the *new* window
+   rectangle, displaced by (-67, -22) on idle to listening.
+
+   The window no longer moves or resizes, so the viewport is a constant and there
+   is nothing left to be late. Nothing in this file reads `100vw` or `100vh`. */
 .overlay-root {
   height: 100vh;
   width: 100vw;
   display: flex;
   flex-direction: column;
-  /* Centred both ways, so the pill sits in the middle of whatever box the
-     window currently is. That is what lets `useWindowGeometry` hold the pill
-     still by holding the window's centre still — including in the frame where
-     the resize has landed and the move has not.
+  /* Always `flex-start`, in every state including the menu. The pill's top edge
+     is a constant — `PILL_TOP` in Overlay.tsx and `overlay.rs` — and the padding
+     below puts it there. The menu then hangs beneath it in document order, which
+     is why this no longer needs a `data-menu` override.
 
-     `justify-content` is overridden to `flex-start` while the menu is open,
-     because the menu hangs below the pill rather than surrounding it.
-
-     `overflow: visible` because the glow is painted by the pill and has to
-     reach into the margin the window reserves for it. */
+     `overflow: visible` because the glow is painted by the pill and reaches into
+     the margin around it, which the window's region leaves unclipped. */
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  padding-top: 22px;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
   overflow: visible;
   box-sizing: border-box;
 
-  /* The pill's height, and the constant the width formula below is built on.
-     It must equal `PILL_H` in Overlay.tsx: that is the number the window height
-     is computed from, and this is the number the pill's width is recovered with.
-     They are the two halves of one identity. */
+  /* The pill's height. Must equal `PILL_H` in Overlay.tsx and `overlay.rs`.
+     Three copies of one identity, one per language, each with a comment saying
+     so, because the region Rust clips to and the box CSS paints have to be the
+     same rectangle. */
   --pill-h: 40px;
-}
-
-.overlay-root[data-menu="true"] {
-  justify-content: flex-start;
 }
 
 /* No width transition, deliberately.
  *
- * An eased pill width means the pill and its window disagree about how big the
- * bar is for the length of the transition, and the difference is bare window —
- * which on a transparent Windows webview can paint as a translucent rectangle.
- * That is exactly what appeared on key release. The pill is therefore always
- * precisely the size the window is, and the width change is instant.
+ * An eased pill width would make the pill and the window's region disagree about
+ * how big the bar is for the length of the transition. The region is what stops
+ * the rest of the window swallowing clicks, so a pill easing outside it would be
+ * visible but not clickable. The width change is therefore instant.
  *
  * The bar has plenty of motion without it: the content cross-fades, the
  * waveform has real ballistics, the glow tracks the voice, the landing has its
- * ring, and a snapped drag now slides. None of those can desynchronise the pill
- * from its window, because none of them change its size. */
+ * ring, and a snapped drag slides. None of those change its size.
+ *
+ * THE PILL'S SIZE IS THE JS NUMBER AGAIN — AND THAT IS NOW SAFE.
+ *
+ * It was not safe before, and the comment this replaces explained why at length:
+ * the pill's width was a React number applied inline while the *window's* width
+ * was the same number sent to Rust a round trip later, so for at least one frame
+ * a 240px pill sat inside a 150px window and was cropped into a black rectangle.
+ * ADR 0006 fixed that by deriving the width from the viewport instead.
+ *
+ * That fix was correct about size and created a bug about position, because a
+ * viewport-derived width also implies a viewport-derived *centre*, and the
+ * viewport arrives late. See the note at the top of this file.
+ *
+ * What makes the JS number safe now is that nothing clips the pill to the window
+ * any more. The window is 404x248 in every state, which is larger than the widest
+ * pill, so a pill briefly painted at the previous width is simply the previous
+ * width — never cropped, never displaced. The window's *region* follows the pill
+ * rather than the other way round, and it is grown before it is shrunk, so it
+ * cannot clip either.
+ *
+ * `--pill-w` is set inline by Overlay.tsx. `data-fit` no longer scopes anything,
+ * because this arithmetic is now the same in the real window and in the
+ * component sheet. */
 .overlay-hit {
   pointer-events: auto;
   cursor: grab;
   flex: none;
-  /* Only ever used outside the real overlay window — opening
-     `index.html?window=overlay` in a browser to look at the bar, where there is
-     no window to read a size off and `--pill-w` is the JS number instead. The
-     rule below outranks this one wherever it applies. */
   width: var(--pill-w, auto);
-}
-
-/* THE PILL'S SIZE IS READ OFF THE WINDOW. IT IS NEVER TOLD.
- *
- * This is the rule the whole surface depends on, and stating it in CSS rather
- * than in JavaScript is the entire point.
- *
- * The pill's width used to be a React number applied as an inline style, while
- * the window's width was the same number sent to Rust over IPC and applied a
- * round trip later. Two owners, no shared clock — so every state change had a
- * window of at least one frame in which the pill was 240px wide inside a 150px
- * window. What the user saw was a black rectangle with the pill cropped inside
- * it: both rounded ends off the surface, both side borders gone, the timer cut
- * mid-glyph at the right edge.
- *
- * Deriving it here removes the race rather than narrowing it. Both terms below
- * come from the same viewport, so they cannot be read at different instants, and
- * the pill is therefore correct in every frame including the ones mid-resize —
- * it is simply briefly the previous size, which is a correct pill of the wrong
- * width rather than a broken one.
- *
- * The arithmetic: the window is the pill plus the glow margin on all four sides,
- * so `height = pillHeight + 2m` and `width = pillWidth + 2m`. Pill height is
- * fixed at PILL_H, which makes the margin recoverable as `(100vh - PILL_H) / 2`,
- * and the pill's width the viewport less twice that. No JavaScript state
- * appears in it, so none can be stale.
- *
- * JS still computes the same widths — see `pillWidth` in Overlay.tsx. It is the
- * *target* for the window, which is what it always should have been; the pill
- * then follows the window there. Keeping one number as the source for both is
- * what let them disagree.
- *
- * `data-fit` scopes this to the real overlay window. In the component sheet the
- * same component runs in an ordinary browser window, where the viewport is the
- * whole page and this arithmetic is nonsense. */
-.overlay-root[data-fit="true"] .overlay-hit {
   height: var(--pill-h);
-  width: calc(100vw - 100vh + var(--pill-h));
-  /* Belt and braces, and the reason this is structural rather than merely
-     correct: `100vw` and `100vh` round to physical pixels independently, so on a
-     fractional display scale the derived margin can come out a fraction under
-     the real one. A fraction of a pixel is invisible; a pill wider than its
-     window is the bug. Clamping makes "the pill fits" a property of the
-     stylesheet instead of a property of the arithmetic. */
-  max-width: 100vw;
-  /* The pill's own height is PILL_H less its 1px breathing room either side (see
-     `.flowbar`), so it is centred in this box exactly as it was centred in the
-     window before this box had a height. */
   display: flex;
   align-items: center;
 }
 
-/* The menu claims the rest of the window below the pill, so the window's height
-   is no longer the pill's plus a margin and the formula above does not hold. The
-   margin is zero whenever the menu is open (see `glowing` in Overlay.tsx), which
-   makes the pill exactly the viewport width — still read off the window, still
-   nothing to disagree with. */
-.overlay-root[data-fit="true"][data-menu="true"] .overlay-hit {
-  width: 100vw;
+/* The menu makes the pill a fixed width and lets its own height grow. */
+.overlay-root[data-menu="true"] .overlay-hit {
   height: auto;
 }
 
