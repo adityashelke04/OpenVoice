@@ -298,18 +298,34 @@ export function responses(now = Date.now()) {
       currentVersion: "0.3.0",
     },
     get_log_path: "C:\\Users\\you\\AppData\\Roaming\\OpenVoice\\openvoice.log",
-    preview_format: [
-      ["raw", "um so we need to call use effect here comma then return null"],
-      ["fillers", "so we need to call use effect here comma then return null"],
-      ["dictionary", "so we need to call useEffect here comma then return null"],
-      ["commands", "so we need to call useEffect here, then return null"],
-      ["capitalize", "So we need to call useEffect here, then return null"],
-      // The Dictionary preview asks for the `prose` profile, and prose sets
-      // `end_period`. Without this stage the box would show a sentence the
-      // profile it named would not actually produce.
-      ["end_period", "So we need to call useEffect here, then return null."],
-    ],
   };
+}
+
+/**
+ * The formatter trace, as `preview_format` returns it.
+ *
+ * Profile-dependent, because the two screens that ask for it ask for different
+ * profiles: Dictionary requests `prose`, Advanced requests `editor`. Prose sets
+ * `end_period` and editor does not, so a single fixed answer would have put a
+ * full stop on the Advanced screen that the profile named directly above it
+ * would never add — a screenshot contradicting the rules table beside it.
+ *
+ * The stages are the real ones for this sentence; it is the phrase README
+ * quotes and `ov-format` asserts.
+ */
+function previewFormat(profile) {
+  const stages = [
+    ["raw", "um so we need to call use effect here comma then return null"],
+    ["fillers", "so we need to call use effect here comma then return null"],
+    ["dictionary", "so we need to call useEffect here comma then return null"],
+    ["commands", "so we need to call useEffect here, then return null"],
+    ["capitalize", "So we need to call useEffect here, then return null"],
+  ];
+  const endPeriod = (PROFILES.find((p) => p.name === profile) ?? PROFILES[0]).end_period;
+  if (endPeriod) {
+    stages.push(["end_period", "So we need to call useEffect here, then return null."]);
+  }
+  return stages;
 }
 
 /**
@@ -326,8 +342,14 @@ export function responses(now = Date.now()) {
  * and needs no stub at all.
  */
 export function tauriStub(now = Date.now()) {
+  // One trace per profile, resolved here rather than in the page, so the stub
+  // stays a lookup table and the rule that decides the shape lives with the
+  // profiles it reads.
+  const previews = Object.fromEntries(PROFILES.map((p) => [p.name, previewFormat(p.name)]));
+
   return `(() => {
   const RESPONSES = ${JSON.stringify(responses(now), null, 2)};
+  const PREVIEWS = ${JSON.stringify(previews, null, 2)};
   let nextId = 1;
 
   window.__TAURI_INTERNALS__ = {
@@ -359,6 +381,12 @@ export function tauriStub(now = Date.now()) {
       if (cmd === "plugin:event|unlisten") return Promise.resolve();
       // Mutations echo, so the UI keeps whatever the capture just set.
       if (cmd === "save_settings") return Promise.resolve(args && args.settings);
+      // The trace depends on which profile was asked for -- Dictionary asks for
+      // prose, Advanced asks for editor, and only one of them ends a sentence
+      // with a full stop.
+      if (cmd === "preview_format") {
+        return Promise.resolve(PREVIEWS[(args && args.profile) || "default"] ?? PREVIEWS.default);
+      }
       if (cmd in RESPONSES) return Promise.resolve(RESPONSES[cmd]);
       // Anything unlisted resolves empty rather than rejecting. A rejection
       // surfaces as an error banner across the screenshot, which is a worse
