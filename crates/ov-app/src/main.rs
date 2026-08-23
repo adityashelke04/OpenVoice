@@ -510,18 +510,27 @@ fn overlay_placement(state: tauri::State<'_, AppState>) -> overlay::Placement {
 /// Commit a drag. The frontend reports where the bar ended up; snapping and
 /// persistence happen here so the rules live in one place.
 #[tauri::command]
-fn overlay_move(app: AppHandle, x: f64, y: f64) -> (f64, f64) {
+fn overlay_move(app: AppHandle, x: f64, y: f64, pill_w: f64, pill_h: f64) -> (f64, f64) {
     match overlay::window(&app) {
-        Some(win) => app.state::<AppState>().overlay.move_to(&win, x, y),
+        Some(win) => app
+            .state::<AppState>()
+            .overlay
+            .move_to(&win, x, y, pill_w, pill_h),
         None => (x, y),
     }
 }
 
-/// Move and resize the bar in one call. See `Overlay::set_box`.
+/// Clip the window to the pill. See `Overlay::set_shape`.
+///
+/// This replaced `overlay_set_box`. The window is a fixed rectangle now, so the
+/// frontend has no business knowing where it is or how big it is — it says how
+/// big the *pill* is, and the shape follows.
 #[tauri::command]
-fn overlay_set_box(app: AppHandle, x: f64, y: f64, w: f64, h: f64) {
+fn overlay_set_shape(app: AppHandle, pill_w: f64, pill_h: f64, margin: f64) {
     if let Some(win) = overlay::window(&app) {
-        app.state::<AppState>().overlay.set_box(&win, x, y, w, h);
+        app.state::<AppState>()
+            .overlay
+            .set_shape(&win, pill_w, pill_h, margin);
     }
 }
 
@@ -548,9 +557,12 @@ fn overlay_log(level: String, msg: String, data: String) {
 
 /// Where the bar would snap to if released here. Drives the drag cue.
 #[tauri::command]
-fn overlay_snap_preview(app: AppHandle, x: f64, y: f64) -> (f64, f64) {
+fn overlay_snap_preview(app: AppHandle, x: f64, y: f64, pill_w: f64, pill_h: f64) -> (f64, f64) {
     match overlay::window(&app) {
-        Some(win) => app.state::<AppState>().overlay.snap_preview(&win, x, y),
+        Some(win) => app
+            .state::<AppState>()
+            .overlay
+            .snap_preview(&win, x, y, pill_w, pill_h),
         None => (x, y),
     }
 }
@@ -666,7 +678,7 @@ fn main() {
             open_data_dir,
             overlay_placement,
             overlay_move,
-            overlay_set_box,
+            overlay_set_shape,
             overlay_log,
             overlay_snap_preview,
             overlay_snooze,

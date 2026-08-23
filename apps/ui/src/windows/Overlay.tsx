@@ -14,7 +14,14 @@ import { FlowBar } from "../ui";
 import { playCompletionChime, playStartTone } from "../ui/sound";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
 import { useSettings } from "../screens/Settings";
-import { checkInvariants, mark, reportStuckBox, watchViewport } from "./overlay-trace";
+import {
+  checkInvariants,
+  mark,
+  noteWindowAt,
+  probePill,
+  reportStuckBox,
+  watchViewport,
+} from "./overlay-trace";
 import "./overlay.css";
 
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -29,24 +36,39 @@ async function call(cmd: string, args?: Record<string, unknown>) {
  * Window space reserved on every side while listening, so the pill's glow has
  * somewhere to land.
  *
- * A `box-shadow` is clipped at the window edge, and the window is sized to the
- * pill exactly — which is why this surface had no glow for so long despite
- * DESIGN.md granting it one. Reserving the margin is the same trick the
- * right-click menu already uses for its own shadow. It is claimed only while
- * listening: the window swallows OS clicks across its whole rectangle, so the
- * dead zone this creates is only acceptable during the seconds the user is
- * holding a key and talking rather than clicking.
+ * A `box-shadow` is clipped at the window edge, and the window used to be sized
+ * to the pill exactly — which is why this surface had no glow for so long
+ * despite DESIGN.md granting it one. It is claimed only while listening, because
+ * the window's *region* is the pill plus this margin: everything outside that is
+ * clipped, so it neither paints nor takes clicks, and widening the region
+ * widens the dead zone punched into whatever is underneath.
  */
 const GLOW_MARGIN = 22;
 
 /**
+ * The window's fixed width, and where the pill sits inside it.
+ *
+ * These are the contract with `overlay.rs`, which declares the same constants
+ * (plus the height, which only it and `tauri.conf.json` need), and with
+ * `tauri.conf.json`, which creates the window at that size. All three must
+ * agree: the window exists before this script does, and Rust places it without
+ * waiting to be told anything.
+ *
+ * The width is the widest pill any state can produce — the alert clamp, 360 —
+ * plus the glow margin on both sides. Nothing here varies with what the bar is
+ * doing; that is the entire point.
+ */
+const OVERLAY_W = 404;
+/** The pill's top edge, from the window's top. Constant in every state. */
+const PILL_TOP = 22;
+
+/**
  * The pill's height, in every state but the menu.
  *
- * Duplicated as `--pill-h` in `overlay.css`, deliberately and with a comment at
- * each end. The window's height is computed from it here; the pill's width is
- * recovered from the window using it there. The two are one identity written
- * twice because it has to hold in both languages, and the CSS half is what makes
- * the pill unable to outgrow its window. Change one and the other is wrong.
+ * Duplicated as `--pill-h` in `overlay.css` and as `PILL_H` in `overlay.rs`,
+ * deliberately and with a comment at each end. CSS paints the box; Rust clips the
+ * window to a region computed from the same number. If they disagree, the bar and
+ * its clickable area come apart. Change one and the other two are wrong.
  */
 const PILL_H = 40;
 
@@ -132,114 +154,81 @@ const DISCARD_MS = 1600;
 const FAILED_OUTCOMES = new Set(["asr_failed", "capture_failed"]);
 
 /**
- * Keep the Tauri window exactly the size of what is painted in it, and keep the
- * pill still while that changes.
+ * The window is a fixed rectangle. The pill moves inside it. See ADR 0007.
  *
- * NO SPARE AREA, EVER. This is the invariant the whole window depends on, and
- * breaking it is what made the bar flash a rectangle on key release. Webview
- * transparency on Windows is not reliable enough to lean on, so any window area
- * with nothing painted in it can show up as a translucent box. An earlier
- * version here held the window at the larger size for a quarter of a second so
- * the pill could ease between widths — and on release, live → working, that left
- * a 284×84 window around a 170×40 pill with the glow already switched off. The
- * pill therefore does not animate its width: it is always exactly the window's
- * content box, and the window is resized once per state change. The one
- * deliberate exception is the glow margin while listening, which the glow itself
- * paints into.
+ * THE WINDOW NEVER MOVES OR RESIZES ON A STATE CHANGE. That is the whole design,
+ * and it replaces the one this file used to implement.
  *
- * ANCHORED, ABSOLUTELY. The window grows from its top-left, so without
- * compensation, reserving the glow margin shoves the pill down and to the right
- * by exactly that margin. The fix is an anchor — where the *pill* belongs, as
- * its centre-x and top edge — from which each window position is computed
- * outright.
+ * The old rule was "no spare area, ever": the window was sized exactly to the
+ * pill, so it changed size five times a dictation, and to keep the pill visually
+ * still while it grew, the window was moved in the opposite direction by half the
+ * growth. Holding the pill still therefore required the window move and the
+ * pill's internal re-centring to be presented in the same composited frame. They
+ * cannot be. The move is applied by the compositor synchronously; the re-centring
+ * is CSS derived from the layout viewport, which reaches the renderer
+ * asynchronously, in another process. In the gap the pill is painted at its old
+ * size, centred in its old viewport, inside the window's new rectangle.
  *
- * Computing it outright is the part that matters. An earlier version adjusted
- * the previous position by the change in size, which is correct once and wrong
- * forever: every logical coordinate makes a lossy round trip through physical
- * pixels, the measured pill widths are frequently odd so the half-difference is
- * fractional, and each hotkey press folded that residue into the next position.
- * Spamming the key walked the bar across the screen. An absolute anchor cannot
- * drift, because nothing it produces is ever fed back into it.
+ * Measured in production, on a real hotkey press, with the window commanded to
+ * (626, 706, 284, 84) while the viewport still read 151x40:
  *
- * The anchor moves only when the user moves the bar, and is re-derived from the
- * window itself whenever that happens.
+ *     pill displaced from anchor  dx=-67  dy=-22  viewportBehind=true
+ *
+ * which is exactly half the size delta in each axis, and exactly the "bar jumps
+ * up and to the left" users reported. Four rounds of fixes tightened that
+ * bargain. It is not winnable, so it had to be deleted rather than narrowed.
+ *
+ * The window is now a constant `OVERLAY_W` x `OVERLAY_H` whose position is a pure
+ * function of the anchor, and the pill is centred in a viewport that never
+ * changes. A late viewport cannot displace anything, because there is nothing for
+ * it to be late about. What this side sends on a state change is not a box but a
+ * *shape* — the rectangle to clip the window to, so the parts painting nothing
+ * also swallow no clicks. A shape can only ever hide painting, never move it.
+ *
+ * The "no spare area" rule it replaces rested on a premise that turned out to be
+ * false: bare transparent window area does not paint as a rectangle on this
+ * stack. The rectangle people saw came from an element painting a background
+ * before script ran, which `global.css` fixed, and from a pill cropped by a
+ * window smaller than itself. Both are gone.
+ *
+ * The anchor still moves when the user moves the bar, and only then.
  */
 type Anchor = { cx: number; top: number };
+/** The pill, not the window: its painted size and the margin its glow needs. */
 type Box = { w: number; h: number; m: number };
 
 /**
- * Where the pill is, given where its window is — read off the window, not off
- * React state.
+ * Where the pill is, given where its window is.
  *
- * This is the same correction ADR 0006 applied to the pill's width, applied to
- * the pill's position, and for the same reason. Every one of these conversions
- * used to multiply the window's position by `box.current`, which is the box this
- * side *intends* the window to become — written synchronously in the layout
- * effect, before the resize has even been sent. The three places that convert a
- * window position into an anchor were all reading it as though it were the box
- * the window *is*.
+ * Constant arithmetic, and that is the point. Every previous version of this
+ * conversion multiplied the window position by something that could be a state
+ * ahead — first `box.current`, the box this side *intends* the window to become,
+ * and then the layout viewport, which is the quantity that turned out to be
+ * lagging. Both produced an anchor wrong by the difference between two states,
+ * which is how re-deriving the anchor from a move corrupted it.
  *
- * That is what made the bar jump when the hotkey was spammed. `onMoved` fires for
- * every move including the ones we command ourselves, and when one arrived after
- * the next state had already updated `box.current`, the anchor was rebuilt with
- * the wrong half-width and the wrong margin: listening to transcribing put it
- * 57px left and 22px up, and the next press put it back. The displacement is
- * exactly `(w_new - w_prev) / 2` horizontally and `m_new - m_prev` vertically, it
- * survives until the following transition, and around a full cycle it sums to
- * zero — which is why the bar appeared to jump away and come back rather than
- * drifting.
- *
- * The viewport is the honest source and it is synchronous: no IPC, no await, and
- * nothing that can be a state ahead. The window carries its own margin, by the
- * identity ADR 0006 already depends on — the window is the pill plus the margin
- * on all four sides, so with the pill's height fixed the margin is
- * `(clientHeight - PILL_H) / 2`.
- *
- * The menu is the exception, as it is there: it claims the window below the pill,
- * so the height identity does not hold. Its margin is always zero, which makes
- * the conversion simpler rather than absent.
+ * With a fixed window there is nothing to read. The window's width and the pill's
+ * offset within it are constants shared with `overlay.rs`, so this cannot be
+ * stale, cannot drift, and reproduces the anchor exactly when applied to a move
+ * this side commanded itself.
  */
 function anchorFrom(x: number, y: number): Anchor {
-  const w = document.documentElement.clientWidth;
-  const h = document.documentElement.clientHeight;
-  // Menu-ness is read off the window, not off React.
-  //
-  // This used to take a `menuOpen` argument sourced from a ref assigned during
-  // render, which is the same "one value, two instants" mistake this function
-  // exists to remove — just moved up a level. Between closing the menu and the
-  // window shrinking out of the menu box, React says "not a menu" while the
-  // window is still 226 tall, and the margin computes as (226-40)/2 = 93 instead
-  // of 0. Right-clicking the bar and then dragging it hit exactly that gap and
-  // dropped the anchor 93px.
-  //
-  // The window's own shape answers the question without a second source. A pill
-  // window is never taller than the pill plus a glow margin on each side, so
-  // anything taller is the menu, whose margin is always zero.
-  const isPill = h <= PILL_H + GLOW_MARGIN * 2 + 1;
-  const m = isPill ? Math.max(0, (h - PILL_H) / 2) : 0;
-  return { cx: x + w / 2, top: y + m };
+  return { cx: x + OVERLAY_W / 2, top: y + PILL_TOP };
 }
-function useWindowGeometry(
+function useWindowShape(
   pillW: number,
   pillH: number,
   margin: number,
-  anchor: React.MutableRefObject<Anchor | null>,
   want: React.MutableRefObject<Box>,
   ready: boolean,
-  commanded: React.MutableRefObject<Array<[number, number]>>,
 ) {
-  const boxW = pillW + margin * 2;
-  const boxH = pillH + margin * 2;
-
   // Whether a command is already in flight. With `want`, this makes the sender
-  // single-flight: bursts collapse to the latest desired box instead of
-  // queueing, so a stale size can never land last — which is what left the
-  // window bigger than the pill, showing as a rectangle, when the hotkey was
-  // spammed.
+  // single-flight: bursts collapse to the latest desired shape instead of
+  // queueing, so a stale one can never land last.
   const sending = useRef(false);
 
-  /** The box Rust has actually been told about, as opposed to the one this side
-   *  currently wants. Null until the first command completes. */
+  /** The shape Rust has actually been told about, as opposed to the one this
+   *  side currently wants. Null until the first command completes. */
   const sent = useRef<Box | null>(null);
 
   /**
@@ -279,34 +268,25 @@ function useWindowGeometry(
         const s = sent.current;
         if (s && s.w === target.w && s.h === target.h && s.m === target.m) return;
 
-        // No anchor yet: the window's own position is still being read. Returning
-        // is safe rather than lossy — `sent` is left untouched, so the next run
-        // of the effect (which `geomReady` guarantees) finds the two still
-        // disagreeing and converges then.
-        const a = anchor.current;
-        if (!a) return;
-
-        // Integer logical pixels. A fractional coordinate is rounded on the way
-        // to physical pixels and rounded differently on the way back, and with
-        // the odd pill widths that come out of measuring text, that residue is
-        // what walked the bar sideways a fraction at a time.
-        const x = Math.round(a.cx - target.w / 2);
-        const y = Math.round(a.top - target.m);
-        mark("flush", { x, y, w: target.w, h: target.h, m: target.m });
-        // Remembered before the call, not after: the window starts moving inside
-        // `overlay_set_box`, and the `onMoved` it produces can reach the handler
-        // before this await resolves. A record written afterwards would arrive
-        // too late to recognise its own echo.
-        commanded.current.push([x, y]);
-        if (commanded.current.length > COMMANDED_HISTORY) commanded.current.shift();
-        await call("overlay_set_box", { x, y, w: target.w, h: target.h });
+        // No position and no anchor in this call, deliberately.
+        //
+        // Everything that used to be computed here — the window's x and y from
+        // the anchor and the box — is what made the bar's position a function of
+        // its state, and therefore of a value that could be stale. The window is
+        // a constant now. All that crosses the boundary is how big the pill is.
+        mark("flush", { w: target.w, h: target.h, m: target.m });
+        await call("overlay_set_shape", {
+          pillW: target.w,
+          pillH: target.h,
+          margin: target.m,
+        });
         sent.current = target;
         mark("flushed", { w: target.w, h: target.h, m: target.m });
       }
     } finally {
       sending.current = false;
     }
-  }, [anchor, want, commanded]);
+  }, [want]);
 
   // Records what is wanted and asks for it. No conditions, deliberately.
   //
@@ -318,9 +298,9 @@ function useWindowGeometry(
   // calling it on a pass that has nothing to do costs one comparison.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    want.current = { w: boxW, h: boxH, m: margin };
+    want.current = { w: pillW, h: pillH, m: margin };
     void flush();
-  }, [boxW, boxH, margin, ready, flush, want]);
+  }, [pillW, pillH, margin, ready, flush, want]);
 
   // A resize that never lands is silent, and that is what made this expensive.
   //
@@ -401,9 +381,13 @@ export function Overlay() {
     let un: (() => void) | undefined;
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
+      // The payload is the anchor itself now, not the window's origin. Rust owns
+      // the conversion, so there is no longer a second implementation of it here
+      // to disagree with the first.
       un = await listen<[number, number]>("overlay-parked", ({ payload }) => {
-        anchor.current = anchorFrom(payload[0], payload[1]);
-        mark("parked", { x: payload[0], y: payload[1], anchor: anchor.current });
+        anchor.current = { cx: payload[0], top: payload[1] };
+        noteWindowAt(payload[0] - OVERLAY_W / 2, payload[1] - PILL_TOP);
+        mark("parked", { anchor: anchor.current });
       });
     })();
     return () => un?.();
@@ -419,11 +403,16 @@ export function Overlay() {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       const win = getCurrentWindow();
       const scale = await win.scaleFactor();
-      const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
+      const pos = await win.outerPosition();
       if (!live) return;
       scaleRef.current = scale;
-      box.current = { w: size.width / scale, h: size.height / scale, m: 0 };
+      // The window's size is not read, because it is a constant. Reading it was
+      // the last place a window dimension could reach the anchor, and every such
+      // path has been a bug at least once.
       anchor.current = anchorFrom(pos.x / scale, pos.y / scale);
+      // Seeds the trace's idea of where the window is. It is maintained after
+      // this by parking and by the settle, the only two things that move it.
+      noteWindowAt(pos.x / scale, pos.y / scale);
       setGeomReady(true);
     })();
     return () => {
@@ -577,6 +566,10 @@ export function Overlay() {
       // dragging — which is how a settle used to feed itself.
       commanded.current.push([nx, ny]);
       if (commanded.current.length > COMMANDED_HISTORY) commanded.current.shift();
+      // The trace needs this too, and for the same reason: it reconstructs the
+      // pill's screen rectangle from the last position the window was commanded
+      // to, and a settle moves the window without going through `flush`.
+      noteWindowAt(nx, ny);
       void win.setPosition(new LogicalPosition(nx, ny));
       // Only at the end, and from the destination rather than from the frame.
       //
@@ -654,7 +647,12 @@ export function Overlay() {
         if (now - cueAt > 90) {
           cueAt = now;
           void (async () => {
-            const to = (await call("overlay_snap_preview", { x: lx, y: ly })) as
+            const to = (await call("overlay_snap_preview", {
+              x: lx,
+              y: ly,
+              pillW: box.current.w,
+              pillH: box.current.h,
+            })) as
               | [number, number]
               | undefined;
             if (!to) return;
@@ -671,7 +669,12 @@ export function Overlay() {
           // too, and those events must not be read as more dragging.
           dragging.current = 0;
           setSnapping(false);
-          const to = (await call("overlay_move", { x: lx, y: ly })) as
+          const to = (await call("overlay_move", {
+            x: lx,
+            y: ly,
+            pillW: box.current.w,
+            pillH: box.current.h,
+          })) as
             | [number, number]
             | undefined;
           // `lx, ly` is where the drag actually ended, captured in the same turn
@@ -756,7 +759,7 @@ export function Overlay() {
   const glowing = live && !menu;
   const margin = glowing ? GLOW_MARGIN : 0;
 
-  useWindowGeometry(pillWidth, pillHeight, margin, anchor, box, geomReady, commanded);
+  useWindowShape(pillWidth, pillHeight, margin, box, geomReady);
 
   // Measure what was actually painted against the window it was painted in.
   //
@@ -767,7 +770,12 @@ export function Overlay() {
   // catches are the ones nobody is watching for. See overlay-trace.ts.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    checkInvariants(hit.current, margin);
+    checkInvariants(hit.current, PILL_TOP);
+    // And separately: where the pill actually landed *on screen*, against where
+    // it belongs. `checkInvariants` can pass in full while the bar is visibly in
+    // the wrong place, because a pill centred in a viewport that has not caught
+    // up with its window is still perfectly centred. See `probePill`.
+    probePill(hit.current, anchor.current);
   });
 
   useEffect(() => watchViewport(), []);
@@ -793,12 +801,16 @@ export function Overlay() {
     return () => un?.();
   }, []);
 
-  // A state change re-places the window, so any settle still interpolating
-  // towards an older destination is abandoned. Without this the slide and the
-  // resize fight, sixty writes a second against one, and the slide wins.
-  useLayoutEffect(() => {
-    settleGen.current += 1;
-  }, [pillWidth, pillHeight, margin]);
+  // A state change no longer re-places the window, so a settle running across
+  // one has nothing to fight and is left alone.
+  //
+  // This used to bump `settleGen` on every state change, abandoning the slide.
+  // It had to, because a resize moved the window and the slide would drag it
+  // back off the position the resize had just given it — two authorities on one
+  // number, sixty writes a second against one. With a fixed window the resize
+  // does not move anything, so the slide is now the only writer and cancelling
+  // it mid-flight would just make a snap look broken if the user happened to
+  // start dictating while it travelled.
 
 
   // Close the menu when a session starts.
@@ -834,11 +846,7 @@ export function Overlay() {
         : "Ready. Hold the shortcut to dictate.";
 
   return (
-    // `data-fit` is what turns on reading the pill's size off the window. It is
-    // true only in the real overlay window: the component sheet renders this same
-    // component in an ordinary browser window, where the viewport is the whole
-    // page and a pill sized to it would be absurd.
-    <div className="overlay-root" data-menu={menu} data-fit={inTauri()}>
+    <div className="overlay-root" data-menu={menu}>
       {/* `assertive` when something went wrong: a failure announced politely
           waits for the screen reader to finish whatever it was saying, which
           for a message about text that did not land is too late to be useful. */}
@@ -849,12 +857,11 @@ export function Overlay() {
         className="overlay-hit"
         ref={hit}
         data-snapping={snapping}
-        // Not a width. A fallback for the browser preview, where there is no
-        // window to read a size off; in the real overlay window the rule keyed on
-        // `data-fit` outranks it and this is never consulted. Setting it as a
-        // custom property rather than a width is what keeps that true: an inline
-        // `width` would beat every stylesheet rule and reintroduce exactly the
-        // JavaScript-owned pill size this change exists to remove.
+        // A custom property rather than an inline `width`, so the stylesheet
+        // still decides how it is used and the component sheet can override it.
+        // The number itself is safe to own here again: the window is bigger than
+        // the widest pill in every state, so a pill painted at the previous width
+        // for a frame is the previous width rather than a cropped one.
         style={{ "--pill-w": `${pillWidth}px` } as React.CSSProperties}
         onMouseDown={startDrag}
         onContextMenu={(e) => {

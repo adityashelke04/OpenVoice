@@ -24,6 +24,22 @@ least context, at the moment they have the least time.
 
 ### Fixed
 
+- **The Flow Bar no longer jumps up and to the left when you press the hotkey.**
+  The bar was held still while it changed size by moving its window in the
+  opposite direction and letting the pill re-centre itself inside it. That only
+  works if the move and the re-centring are drawn in the same frame, and they are
+  produced by two processes on two schedules — so for the gap between them the
+  pill was drawn at its old size inside the window's new position, displaced by
+  exactly half the size change. Idle to listening, that is 67px left and 22px up.
+
+  The window is now a fixed size and never moves when the bar changes state, so
+  there is nothing left to be out of step. It is clipped to the pill, which means
+  the parts of it you cannot see still do not swallow clicks meant for whatever is
+  underneath. Your saved bar position is migrated automatically.
+
+  Four earlier releases fixed real defects in this mechanism without fixing the
+  symptom; this removes the mechanism. See [ADR 0007](docs/adr/0007-flow-bar-fixed-window.md).
+
 - **Dictated sentences now capitalize "I" and the days and months.** Whisper
   transcribes the pronoun and every weekday and month name in lowercase, and
   nothing downstream lifted them, so "so i think we should ship on friday" landed

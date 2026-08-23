@@ -9,7 +9,8 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, LogicalPosition, Manager, WebviewWindow};
@@ -19,30 +20,106 @@ const SNAP_PX: f64 = 28.0;
 /// Clearance left below the bar when it is auto-placed, enough for a taskbar.
 const BOTTOM_GAP: f64 = 96.0;
 
+// The window is a fixed size, and the pill moves inside it. See ADR 0007.
+//
+// The bar used to be sized exactly to its pill, which meant the window changed
+// size on every state change — and to keep the pill visually still while the
+// window grew, the window was moved in the opposite direction by half the growth.
+// That bargain requires the window move and the pill's internal re-centring to
+// land in the same composited frame. They cannot: the move is applied by the
+// compositor synchronously, while the re-centring is CSS derived from the layout
+// viewport, which reaches the renderer asynchronously, in another process. In
+// the gap the pill is painted at its old size, centred in its old viewport,
+// inside the window's new rectangle — displaced by exactly half the size delta.
+// Measured in production on a real hotkey press: (-67, -22) for idle to
+// listening, which is the artefact users reported as the bar jumping up-left.
+//
+// Fixing the window's size removes the variable. The pill is centred in a
+// viewport that never changes, so a late viewport cannot displace it, and the
+// window's position stops being a function of the bar's state.
+
+/// The window's width. The widest pill (the alert clamp, 360) plus the glow
+/// margin on both sides, so every state fits without the window ever changing.
+pub const OVERLAY_W: f64 = 404.0;
+/// The window's height: the glow margin above the pill, the pill, and the room
+/// the right-click menu needs below it.
+pub const OVERLAY_H: f64 = 248.0;
+/// The pill's top edge, measured from the window's top. Constant by construction:
+/// the space above the pill is the glow's, and the menu hangs below.
+pub const PILL_TOP: f64 = 22.0;
+/// The pill's height. Must equal `PILL_H` in `Overlay.tsx` and `--pill-h` in
+/// `overlay.css`; the three are one identity split across three languages.
+pub const PILL_H: f64 = 40.0;
+
+/// The window origin that puts the pill's anchor where it belongs.
+///
+/// The anchor is the pill's centre-x and its top edge — where the *bar* is, as
+/// distinct from where its window is. With a fixed window the two differ by a
+/// constant, which is the entire point: no term here depends on the bar's state.
+fn origin_for(cx: f64, top: f64) -> (f64, f64) {
+    (cx - OVERLAY_W / 2.0, top - PILL_TOP)
+}
+
+/// The pill's anchor for a given window origin. Inverse of [`origin_for`].
+fn anchor_for(x: f64, y: f64) -> (f64, f64) {
+    (x + OVERLAY_W / 2.0, y + PILL_TOP)
+}
+
 /// Persisted overlay state.
+///
+/// What is stored is the *pill's* anchor, not the window's origin. The window is
+/// a fixed rectangle around the pill and its position is derived, so persisting
+/// the window origin would tie the saved file to the window's dimensions and
+/// silently move every user's bar the next time those changed. The anchor is
+/// what the user actually chose.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Placement {
-    pub x: f64,
-    pub y: f64,
+    /// The pill's centre-x, in logical pixels.
+    #[serde(default = "nan")]
+    pub cx: f64,
+    /// The pill's top edge, in logical pixels.
+    #[serde(default = "nan")]
+    pub top: f64,
     /// Whether the bar is shown when nothing is being dictated.
     #[serde(default = "yes")]
     pub always_visible: bool,
     /// Unix millis until which the user has asked for quiet.
     #[serde(default)]
     pub hidden_until: u64,
+
+    /// Legacy window origin, from before the window was a fixed size.
+    ///
+    /// Read once and converted in [`Placement::load`], never written back. A user
+    /// upgrading has a saved `x`/`y` describing the top-left of a window that was
+    /// sized to the idle pill; dropping it would silently move their bar back to
+    /// the default position.
+    #[serde(default, skip_serializing)]
+    x: Option<f64>,
+    #[serde(default, skip_serializing)]
+    y: Option<f64>,
 }
 
 fn yes() -> bool {
     true
 }
 
+fn nan() -> f64 {
+    f64::NAN
+}
+
+/// The idle window's width before the window became a fixed size. Used only to
+/// convert a legacy saved position into an anchor.
+const LEGACY_IDLE_W: f64 = 150.0;
+
 impl Default for Placement {
     fn default() -> Self {
         Self {
-            x: f64::NAN,
-            y: f64::NAN,
+            cx: f64::NAN,
+            top: f64::NAN,
             always_visible: true,
             hidden_until: 0,
+            x: None,
+            y: None,
         }
     }
 }
@@ -53,10 +130,41 @@ impl Placement {
     }
 
     pub fn load() -> Self {
-        std::fs::read_to_string(Self::path())
+        let mut p: Self = std::fs::read_to_string(Self::path())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        p.migrate();
+        p
+    }
+
+    /// Convert a legacy window origin into a pill anchor, once.
+    ///
+    /// The old file stored the top-left of a window sized to the idle pill, whose
+    /// margin was zero — so the pill's top edge *was* the window's, and its
+    /// centre-x was half the idle width along. Any later state had a different
+    /// window size, but a saved position only ever came from a drag, and the bar
+    /// is idle whenever the user is dragging it.
+    fn migrate(&mut self) {
+        if self.cx.is_finite() && self.top.is_finite() {
+            return;
+        }
+        let (Some(x), Some(y)) = (self.x, self.y) else {
+            return;
+        };
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
+        self.cx = x + LEGACY_IDLE_W / 2.0;
+        self.top = y;
+        tracing::info!(
+            x,
+            y,
+            cx = self.cx,
+            top = self.top,
+            "overlay placement migrated from a window origin to a pill anchor"
+        );
+        self.save();
     }
 
     pub fn save(&self) {
@@ -102,6 +210,43 @@ pub struct Overlay {
     /// echoes has routinely been overwritten by a newer one and is no longer
     /// recognised as ours. Remembering the last few closes that window.
     commanded: Mutex<VecDeque<(f64, f64)>>,
+    /// The exact region the window should currently be clipped to, in logical
+    /// window coordinates. `None` until the first shape arrives.
+    shape: Mutex<Option<Rect>>,
+    /// Bumped by every shape. A deferred shrink that wakes to find this changed
+    /// has been superseded and does nothing.
+    shape_gen: Arc<AtomicU64>,
+}
+
+/// A rectangle in logical window coordinates: left, top, right, bottom.
+type Rect = (f64, f64, f64, f64);
+
+/// How long to leave the window clipped to the union of the old and new shapes
+/// before shrinking to the new one. Long enough for the webview to have
+/// repainted — the layout viewport was measured settling in 6-20ms — and short
+/// enough that the extra dead zone is never noticed.
+const SHAPE_SETTLE_MS: u64 = 120;
+
+/// The pill's rectangle within the window, including the margin its glow paints
+/// into. Horizontally centred; the top edge is fixed by construction.
+fn shape_rect(pill_w: f64, pill_h: f64, margin: f64) -> Rect {
+    let left = (OVERLAY_W - pill_w) / 2.0 - margin;
+    let top = PILL_TOP - margin;
+    let right = left + pill_w + margin * 2.0;
+    let bottom = top + pill_h + margin * 2.0;
+    // Clamped to the window, so a pill that somehow outgrew it produces a region
+    // that is merely the whole window rather than one hanging off the edge. The
+    // tests assert no real state gets near this.
+    (
+        left.max(0.0),
+        top.max(0.0),
+        right.min(OVERLAY_W),
+        bottom.min(OVERLAY_H),
+    )
+}
+
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))
 }
 
 /// How many commanded positions to keep for echo detection. Enough to cover a
@@ -115,6 +260,8 @@ impl Overlay {
             placement: Mutex::new(Placement::load()),
             active: Mutex::new(false),
             commanded: Mutex::new(VecDeque::new()),
+            shape: Mutex::new(None),
+            shape_gen: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -131,8 +278,19 @@ impl Overlay {
     /// The frontend eases it over that distance instead — see `settleTo` in
     /// `Overlay.tsx`. The rules stay here; only the last few hundred milliseconds
     /// of travel happen where there is already an animation loop to do it in.
-    pub fn move_to(&self, win: &WebviewWindow, x: f64, y: f64) -> (f64, f64) {
-        let echo = self.is_echo(x, y);
+    /// `x`/`y` are the *window's* origin, as the OS reports it; `pill_w`/`pill_h`
+    /// are the pill actually painted inside it. The snap lines are computed
+    /// against the pill, not the window, because the window is now a fixed
+    /// rectangle much larger than the bar — snapping it flush to the bottom of
+    /// the screen would leave the pill floating 186px above the edge.
+    pub fn move_to(
+        &self,
+        win: &WebviewWindow,
+        x: f64,
+        y: f64,
+        pill_w: f64,
+        pill_h: f64,
+    ) -> (f64, f64) {
         // Logged unconditionally, including the echoes.
         //
         // This function writes the user's saved position to disk, and it had no
@@ -141,62 +299,89 @@ impl Overlay {
         // to show for it, and how days were spent reading a log that recorded
         // every resize perfectly while saying nothing about the one call that
         // was moving the bar.
-        let size = win_size(win);
-        if echo {
+        if self.is_echo(x, y) {
             tracing::debug!(x, y, "overlay move_to ignored as echo");
             return (x, y);
         }
-        let (sx, sy) = snap_box(win, x, y, size);
+
+        let (cx, top) = anchor_for(x, y);
+        let pill = (pill_w, pill_h);
+        let (sx, sy) = snap_box(win, cx - pill_w / 2.0, top, pill);
+        let (ncx, ntop) = (sx + pill_w / 2.0, sy);
+        let (wx, wy) = origin_for(ncx, ntop);
+
         tracing::debug!(
             from = ?(x, y),
-            to = ?(sx, sy),
-            box_size = ?size,
+            to = ?(wx, wy),
+            anchor = ?(ncx, ntop),
+            pill = ?pill,
             "overlay move_to committed"
         );
         {
             let mut p = self.placement.lock().expect("placement");
-            p.x = sx;
-            p.y = sy;
+            p.cx = ncx;
+            p.top = ntop;
             p.save();
         }
         // Recorded as commanded even though nothing was commanded: the frontend
         // is about to move the window here, and those moves coming back must not
         // be mistaken for a fresh drag.
-        self.remember(sx, sy);
-        (sx, sy)
+        self.remember(wx, wy);
+        (wx, wy)
     }
 
-    /// Move and resize in one step.
+    /// Clip the window to the pill, so the rest of the fixed rectangle is neither
+    /// painted nor clickable.
     ///
-    /// Two calls from the frontend are two round trips, and between them the
-    /// window is briefly the new size at the old position. With the glow margin
-    /// that gap was plainly visible: the pill appeared to slide down and to the
-    /// right every time the hotkey went down, then snap back. Doing both here
-    /// closes the gap to the width of one function body.
+    /// This replaces `set_box`. The window no longer changes size or position when
+    /// the bar changes state — only its *shape* does, and a shape can only ever
+    /// hide painting, never move it. That is the property the old design lacked:
+    /// a late region is invisible, whereas a late viewport moved the pill.
     ///
-    /// Position first when growing, size first when shrinking, so the window is
-    /// never momentarily covering ground it has no business covering.
-    pub fn set_box(&self, win: &WebviewWindow, x: f64, y: f64, w: f64, h: f64) {
-        self.remember(x, y);
+    /// **Grow now, shrink late.** The region is applied as the union of the old
+    /// and the new immediately, and the exact new region only after the webview
+    /// has had time to repaint. Growing early costs nothing, because nothing is
+    /// painted in the area being uncovered; shrinking early would clip a pill that
+    /// is still painted at its previous, larger size. The delay is cancelled by
+    /// any newer shape, so a burst of state changes settles once.
+    pub fn set_shape(&self, win: &WebviewWindow, pill_w: f64, pill_h: f64, margin: f64) {
+        let next = shape_rect(pill_w, pill_h, margin);
+        let now = {
+            let mut cur = self.shape.lock().expect("shape");
+            let union = cur.map_or(next, |c| union_rect(c, next));
+            *cur = Some(next);
+            union
+        };
 
-        #[cfg(windows)]
-        if set_box_atomic(win, x, y, w, h) {
+        apply_region(win, now);
+
+        if now == next {
             return;
         }
 
-        // Fallback, and visibly worse — see `set_box_atomic`. Size first, so the
-        // window is never briefly the old size at the new position, which is the
-        // ordering that throws the pill toward the top-left.
-        //
-        // Logged, and at `warn`. This path reintroduces the intermediate frame the
-        // atomic path exists to delete, so a bar that flickers because the atomic
-        // call is failing on this machine is otherwise indistinguishable from a bar
-        // that flickers for a new reason. The return value used to be discarded and
-        // neither branch said anything, which meant a whole class of report could
-        // not be triaged from a log.
-        tracing::warn!(x, y, w, h, "overlay set_box fell back to two calls");
-        let _ = win.set_size(tauri::LogicalSize::new(w, h));
-        let _ = win.set_position(LogicalPosition::new(x, y));
+        // Cancelled by identity rather than by a handle: any newer shape bumps the
+        // generation, and the task that wakes to find it changed does nothing. The
+        // window's state is never read back to decide, so two settles racing cannot
+        // apply each other's rectangles.
+        let generation = self.shape_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let win = win.clone();
+        let seen = Arc::clone(&self.shape_gen);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(SHAPE_SETTLE_MS));
+            if seen.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            // Back onto the thread that owns the message loop before touching the
+            // window. Checked again once there, because the wait to be scheduled
+            // is itself a window in which a newer shape can arrive.
+            let target = win.clone();
+            let _ = win.run_on_main_thread(move || {
+                if seen.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                apply_region(&target, next);
+            });
+        });
     }
 
     /// Where the bar *would* land if it were released at this position.
@@ -205,8 +390,17 @@ impl Overlay {
     /// can show the user where it is about to snap while they are still
     /// dragging, without the frontend having to reimplement `snap` — which would
     /// split one rule across two languages and guarantee they drift.
-    pub fn snap_preview(&self, win: &WebviewWindow, x: f64, y: f64) -> (f64, f64) {
-        snap(win, x, y)
+    pub fn snap_preview(
+        &self,
+        win: &WebviewWindow,
+        x: f64,
+        y: f64,
+        pill_w: f64,
+        pill_h: f64,
+    ) -> (f64, f64) {
+        let (cx, top) = anchor_for(x, y);
+        let (sx, sy) = snap_box(win, cx - pill_w / 2.0, top, (pill_w, pill_h));
+        origin_for(sx + pill_w / 2.0, sy)
     }
 
     pub fn set_always_visible(&self, win: &WebviewWindow, on: bool) {
@@ -305,19 +499,23 @@ impl Overlay {
     /// bottom-centre.
     pub fn park(&self, win: &WebviewWindow) {
         let p = self.placement();
-        if p.x.is_finite() && p.y.is_finite() && on_screen(win, p.x, p.y) {
-            self.command(win, p.x, p.y);
+        if p.cx.is_finite() && p.top.is_finite() && on_screen(win, p.cx, p.top) {
+            self.command(win, p.cx, p.top);
             return;
         }
 
         let Some((origin, area)) = monitor_logical(win) else {
             return;
         };
-        let size = win_size(win);
-        let x = origin.0 + (area.0 - size.0) / 2.0;
-        let y = origin.1 + area.1 - size.1 - BOTTOM_GAP;
-        self.command(win, x, y);
-        tracing::debug!(x, y, "overlay auto-placed");
+        // Placed by where the *pill* goes, not the window. Both terms are
+        // independent of the pill's width, so auto-placement no longer depends on
+        // which state the bar happens to be in when it runs — which is what made
+        // a bar parked during startup and a bar parked later land tens of pixels
+        // apart.
+        let cx = origin.0 + area.0 / 2.0;
+        let top = origin.1 + area.1 - BOTTOM_GAP - PILL_H;
+        self.command(win, cx, top);
+        tracing::debug!(cx, top, "overlay auto-placed");
     }
 
     /// Move the window, remembering that this side asked for it.
@@ -327,10 +525,15 @@ impl Overlay {
     /// places the bar at startup and whenever it comes back from hidden, and
     /// without being told, the frontend would go on sizing around wherever the
     /// bar used to be.
-    fn command(&self, win: &WebviewWindow, x: f64, y: f64) {
+    /// Takes the pill's anchor, not the window's origin. The frontend is told the
+    /// anchor directly, so it no longer has to reconstruct one from a window
+    /// position — the conversion that, done against a stale box, displaced the bar
+    /// by the difference between two states' half-widths.
+    fn command(&self, win: &WebviewWindow, cx: f64, top: f64) {
+        let (x, y) = origin_for(cx, top);
         self.remember(x, y);
         let _ = win.set_position(LogicalPosition::new(x, y));
-        let _ = win.emit("overlay-parked", (x, y));
+        let _ = win.emit("overlay-parked", (cx, top));
     }
 
     /// Whether a reported position is one of our own moves coming back.
@@ -357,22 +560,6 @@ impl Overlay {
     }
 }
 
-/// The bar's current size, which auto-placement centres on.
-///
-/// The window is declared in `tauri.conf.json` at the same size the frontend gives
-/// the idle pill, so this answers the same thing whether it is asked before or
-/// after the webview's first resize. When the two disagreed, a bar parked during
-/// startup and a bar parked later landed tens of pixels apart.
-fn win_size(win: &WebviewWindow) -> (f64, f64) {
-    let scale = win.scale_factor().unwrap_or(1.0);
-    win.outer_size()
-        .map(|s| {
-            let l = s.to_logical::<f64>(scale);
-            (l.width, l.height)
-        })
-        .unwrap_or((150.0, 40.0))
-}
-
 fn monitor_logical(win: &WebviewWindow) -> Option<((f64, f64), (f64, f64))> {
     let m = win
         .current_monitor()
@@ -397,11 +584,6 @@ fn on_screen(win: &WebviewWindow, x: f64, y: f64) -> bool {
         let s = m.size().to_logical::<f64>(scale);
         x >= p.x - 8.0 && y >= p.y - 8.0 && x < p.x + s.width - 40.0 && y < p.y + s.height - 20.0
     })
-}
-
-/// Pull the bar flush to a screen edge when released near one.
-fn snap(win: &WebviewWindow, x: f64, y: f64) -> (f64, f64) {
-    snap_box(win, x, y, win_size(win))
 }
 
 /// The snap rules, for a stated box rather than for whatever size the window
@@ -451,186 +633,77 @@ fn snap_box(win: &WebviewWindow, x: f64, y: f64, (w, h): (f64, f64)) -> (f64, f6
     (nx, ny)
 }
 
-/// Move and resize in a single, atomic Win32 call.
+/// A logical region rectangle in physical pixels, rounded *outward*.
 ///
-/// `set_position` and `set_size` are two separate window messages, and the
-/// compositor is free to paint between them. Whichever order they go in, one
-/// intermediate frame shows the wrong geometry: position first puts the old,
-/// smaller window at the new origin — throwing the pill up and to the left by
-/// the glow margin — and size first grows it at the old origin, throwing it the
-/// other way. Spamming the hotkey makes that single frame land often enough to
-/// look like the bar is crawling into the corner, and a half-painted window in
-/// that frame is the stray triangle.
-///
-/// `SetWindowPos` does both at once, so no such frame exists. Win32 works in
-/// physical pixels, hence the scaling; `SWP_NOZORDER` preserves always-on-top
-/// and `SWP_NOACTIVATE` preserves the thing this whole window depends on — that
-/// it never takes focus, and so never steals the caret from the user's editor.
-///
-/// `SWP_NOCOPYBITS` because every call here changes position *and* size. Without
-/// it Windows preserves the client bits it considers still valid and invalidates
-/// only the newly exposed region, so part of the window keeps showing the
-/// previous frame — a rounded corner and a length of border from the old, smaller
-/// pill, sitting in the new, larger box. Nothing painted here is worth salvaging;
-/// the whole client area is about to be redrawn anyway.
-#[cfg(windows)]
-fn set_box_atomic(win: &WebviewWindow, x: f64, y: f64, w: f64, h: f64) -> bool {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOZORDER,
-    };
-
-    let (Ok(scale), Ok(handle)) = (win.scale_factor(), win.hwnd()) else {
-        return false;
-    };
-    let (px, py, pw, ph) = physical_box(x, y, w, h, scale);
-
-    // Rebuilt from the raw pointer rather than passed through, so this does not
-    // depend on Tauri and this crate resolving the same `windows` version.
-    let hwnd = HWND(handle.0 as _);
-    let ok = unsafe {
-        SetWindowPos(
-            hwnd,
-            None,
-            px,
-            py,
-            pw,
-            ph,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
-        )
-        .is_ok()
-    };
-
-    if ok {
-        sync_webview_child(hwnd);
-    }
-    trace_box(hwnd, scale, (x, y, w, h), (px, py, pw, ph), ok);
-    ok
-}
-
-/// Logical box to physical, as Win32 wants it.
-///
-/// Separated out to be testable: this rounding is the only place a scale factor
-/// touches the bar's geometry, and getting it wrong is invisible at 100% and
-/// permanent at 125%.
-#[cfg(windows)]
-fn physical_box(x: f64, y: f64, w: f64, h: f64, scale: f64) -> (i32, i32, i32, i32) {
+/// Outward, not nearest. The region clips both painting and input, so a half
+/// pixel lost off an edge is a half pixel off the pill's 1px border — visible,
+/// and permanent at 125%. Rounding out can only ever leave a sliver of the
+/// window unclipped, which paints nothing and swallows nothing anyone notices.
+fn region_box((l, t, r, b): Rect, scale: f64) -> (i32, i32, i32, i32) {
     (
-        (x * scale).round() as i32,
-        (y * scale).round() as i32,
-        (w * scale).round() as i32,
-        (h * scale).round() as i32,
+        (l * scale).floor() as i32,
+        (t * scale).floor() as i32,
+        (r * scale).ceil() as i32,
+        (b * scale).ceil() as i32,
     )
 }
 
-/// Resize the WebView2 child window to match its parent *now*, not next tick.
+/// Clip the window to a rectangle, so the rest of it neither paints nor takes
+/// clicks.
 ///
-/// This is the fix for the bar appearing as a cropped rectangle with one rounded
-/// corner and a green border running into a hard edge.
+/// This is what makes a window permanently larger than its content acceptable. A
+/// transparent window still swallows OS-level clicks across its whole rectangle —
+/// `pointer-events: none` governs the webview, not the window — so without this
+/// the fixed 404x248 box would punch a dead zone into whatever is underneath.
 ///
-/// `wry` subclasses this window and handles `WM_SIZE` in two steps with two
-/// different timings. It calls `ICoreWebView2Controller::SetBounds` synchronously,
-/// which resizes the *layout viewport* immediately — the page relayouts to the new
-/// size before `SetWindowPos` above has even returned. It then moves the WebView2
-/// child HWND with `SWP_ASYNCWINDOWPOS`, which by definition only *posts* the
-/// request. So for at least one turn of the message pump the page is laid out at
-/// the new size while the surface actually on screen is still the old, smaller
-/// rectangle at the client origin — and what the user sees is the top-left crop of
-/// a correctly drawn pill. At the idle-to-listening transition that crop is 150x40
-/// of a 284x84 layout, which is exactly the top-left corner of the pill, its top
-/// border cut off mid-run, and two hard square edges where the surface ends.
+/// `SetWindowRgn` was rejected once on the grounds that it clips painting. It
+/// does; that is only fatal if the region is the pill. The region here is the
+/// pill *plus the margin its glow paints into*, which is byte-for-byte the
+/// rectangle the window used to occupy in each state, so nothing that was painted
+/// before is clipped now and the dead zone does not grow.
 ///
-/// Doing it again synchronously here closes that window. `wry`'s posted call
-/// lands afterwards with the same values and is a no-op.
+/// Verified against the running app before this was written: with a region
+/// applied, the pixels inside it were identical, input inside it still reached
+/// the overlay, and input outside it reached the window underneath. Tauri itself
+/// relies on the same behaviour in `undecorated_resizing.rs`.
 ///
-/// Every child is walked rather than just the first: the child chain is `wry`'s
-/// business, not ours, and one that stayed the old size would leave the same crop.
+/// The system takes ownership of the region on success and must not be asked to
+/// free it; on failure it is ours to delete.
 #[cfg(windows)]
-fn sync_webview_child(parent: windows::Win32::Foundation::HWND) {
-    use windows::Win32::Foundation::{HWND, RECT};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetClientRect, GetWindow, SetWindowPos, GW_CHILD, GW_HWNDNEXT, SWP_NOACTIVATE,
-        SWP_NOCOPYBITS, SWP_NOZORDER,
-    };
+fn apply_region(win: &WebviewWindow, rect: Rect) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 
-    let mut client = RECT::default();
-    // SAFETY: `parent` is a live window handle owned by this process.
-    if unsafe { GetClientRect(parent, &mut client) }.is_err() {
+    let (Ok(scale), Ok(handle)) = (win.scale_factor(), win.hwnd()) else {
         return;
-    }
-    let (cw, ch) = (client.right - client.left, client.bottom - client.top);
+    };
+    let (l, t, r, b) = region_box(rect, scale);
+    let hwnd = HWND(handle.0 as _);
 
-    // SAFETY: as above; `GetWindow` returns either a live handle or an error.
-    let mut child: Option<HWND> = unsafe { GetWindow(parent, GW_CHILD) }.ok();
-    // Bounded: the chain is two or three windows deep in practice, and a cycle
-    // here would hang the UI thread.
-    for _ in 0..8 {
-        let Some(hwnd) = child.filter(|h| !h.is_invalid()) else {
+    // SAFETY: `hwnd` is a live window handle owned by this process. The region is
+    // handed to the system on success and deleted by us only when it was refused.
+    unsafe {
+        let rgn = CreateRectRgn(l, t, r, b);
+        if rgn.is_invalid() {
+            tracing::warn!(l, t, r, b, "overlay could not create a window region");
             return;
-        };
-        // SAFETY: `hwnd` is a live child of a window owned by this process.
-        unsafe {
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                0,
-                0,
-                cw,
-                ch,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
-            );
-            child = GetWindow(hwnd, GW_HWNDNEXT).ok();
+        }
+        if SetWindowRgn(hwnd, rgn, true) == 0 {
+            let _ = DeleteObject(windows::Win32::Graphics::Gdi::HGDIOBJ(rgn.0));
+            tracing::warn!(l, t, r, b, "overlay SetWindowRgn was refused");
+            return;
         }
     }
-}
-
-/// Everything needed to tell which side of the resize handshake went wrong.
-///
-/// The parent's client rect and the child's are the direct test: if they disagree
-/// after the call, the surface is lagging the window (the cropped-rectangle
-/// symptom) and [`sync_webview_child`] did not do its job. If they agree and the
-/// bar still looks wrong, the fault is on the web side, where `overlay-trace.ts`
-/// is watching the other half of the same handshake.
-#[cfg(windows)]
-fn trace_box(
-    parent: windows::Win32::Foundation::HWND,
-    scale: f64,
-    logical: (f64, f64, f64, f64),
-    physical: (i32, i32, i32, i32),
-    ok: bool,
-) {
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindow, GW_CHILD};
-
-    if !tracing::enabled!(tracing::Level::DEBUG) {
-        return;
-    }
-
-    let client = |h| {
-        let mut r = RECT::default();
-        // SAFETY: `h` is a live window handle owned by this process.
-        unsafe { GetClientRect(h, &mut r) }
-            .ok()
-            .map(|()| (r.right - r.left, r.bottom - r.top))
-    };
-    let parent_client = client(parent);
-    // SAFETY: as above.
-    let child_client = unsafe { GetWindow(parent, GW_CHILD) }
-        .ok()
-        .filter(|h| !h.is_invalid())
-        .and_then(client);
-
     tracing::debug!(
-        ok,
         scale,
-        logical = ?logical,
-        physical = ?physical,
-        parent_client = ?parent_client,
-        child_client = ?child_client,
-        synced = parent_client == child_client,
-        "overlay set_box"
+        logical = ?rect,
+        physical = ?(l, t, r, b),
+        "overlay set_shape"
     );
 }
+
+#[cfg(not(windows))]
+fn apply_region(_win: &WebviewWindow, _rect: Rect) {}
 
 /// Put `WS_EX_NOACTIVATE` and `WS_EX_TOOLWINDOW` back on the overlay.
 ///
@@ -695,52 +768,138 @@ pub fn window(app: &tauri::AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("overlay")
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
-    use super::physical_box;
+    use super::*;
 
-    /// At 100% the logical box survives untouched. This is the case every
+    /// The anchor conversion is exactly invertible. If it were not, every park
+    /// would walk the bar a little further, which is how the old design drifted.
+    #[test]
+    fn anchor_and_origin_round_trip() {
+        for (cx, top) in [(960.0, 944.0), (0.0, 0.0), (-1720.0, 300.5)] {
+            let (x, y) = origin_for(cx, top);
+            assert_eq!(anchor_for(x, y), (cx, top));
+        }
+    }
+
+    /// The pill is centred horizontally and its top edge never moves, whatever
+    /// the state. This is the property the whole fix rests on: no term in the
+    /// pill's position depends on its width.
+    #[test]
+    fn pill_top_is_constant_across_states() {
+        let idle = shape_rect(150.0, PILL_H, 0.0);
+        let listening = shape_rect(240.0, PILL_H, 22.0);
+        let working = shape_rect(170.0, PILL_H, 0.0);
+        let alert = shape_rect(360.0, PILL_H, 0.0);
+
+        assert_eq!(idle.1, PILL_TOP);
+        assert_eq!(working.1, PILL_TOP);
+        assert_eq!(alert.1, PILL_TOP);
+        // Listening reserves the glow margin, so its rectangle starts a margin
+        // higher — but the pill inside it is still at PILL_TOP.
+        assert_eq!(listening.1, PILL_TOP - 22.0);
+        assert_eq!(listening.1 + 22.0, PILL_TOP);
+
+        // Every state is centred on the same vertical line.
+        for r in [idle, listening, working, alert] {
+            assert_eq!((r.0 + r.2) / 2.0, OVERLAY_W / 2.0);
+        }
+    }
+
+    /// Every state's rectangle fits inside the window. If one did not, the region
+    /// would clip the pill permanently rather than transiently.
+    #[test]
+    fn every_state_fits_the_window() {
+        for (w, h, m) in [
+            (150.0, PILL_H, 0.0),
+            (240.0, PILL_H, 22.0),
+            (170.0, PILL_H, 0.0),
+            (360.0, PILL_H, 0.0),
+            (280.0, 226.0, 0.0),
+        ] {
+            let (l, t, r, b) = shape_rect(w, h, m);
+            assert!(l >= 0.0, "{w}x{h}+{m} overflows the left edge: {l}");
+            assert!(t >= 0.0, "{w}x{h}+{m} overflows the top edge: {t}");
+            assert!(r <= OVERLAY_W, "{w}x{h}+{m} overflows the right edge: {r}");
+            assert!(b <= OVERLAY_H, "{w}x{h}+{m} overflows the bottom edge: {b}");
+        }
+    }
+
+    /// The union covers both rectangles, in both directions. This is what makes
+    /// grow-now/shrink-late safe: whichever way the bar changes size, the region
+    /// applied immediately contains the pill that is still painted.
+    #[test]
+    fn union_is_a_superset_both_ways() {
+        let states = [
+            shape_rect(150.0, PILL_H, 0.0),
+            shape_rect(240.0, PILL_H, 22.0),
+            shape_rect(170.0, PILL_H, 0.0),
+            shape_rect(360.0, PILL_H, 0.0),
+            shape_rect(280.0, 226.0, 0.0),
+        ];
+        for a in states {
+            for b in states {
+                let u = union_rect(a, b);
+                for r in [a, b] {
+                    assert!(u.0 <= r.0 && u.1 <= r.1 && u.2 >= r.2 && u.3 >= r.3);
+                }
+            }
+        }
+    }
+
+    /// Snap lines are computed against the pill, so a bar released at the bottom
+    /// of the screen puts the *pill* on the edge, not the window.
+    #[test]
+    fn shape_rect_is_the_pill_plus_its_margin() {
+        let (l, t, r, b) = shape_rect(240.0, PILL_H, 22.0);
+        assert_eq!(r - l, 240.0 + 44.0);
+        assert_eq!(b - t, PILL_H + 44.0);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod region_tests {
+    use super::*;
+
+    /// At 100% the logical rectangle survives untouched. This is the case every
     /// developer sees and the reason the scaled cases below went unnoticed.
     #[test]
-    fn unscaled_box_is_the_identity() {
+    fn unscaled_region_is_the_identity() {
+        assert_eq!(region_box((82.0, 0.0, 322.0, 40.0), 1.0), (82, 0, 322, 40));
+    }
+
+    /// 125%, the scale a 1080p laptop panel ships at — and the scale the machine
+    /// that reported this bug is actually running.
+    #[test]
+    fn scales_the_region() {
         assert_eq!(
-            physical_box(100.0, 200.0, 284.0, 84.0, 1.0),
-            (100, 200, 284, 84)
+            region_box((80.0, 0.0, 320.0, 40.0), 1.25),
+            (100, 0, 400, 50)
         );
     }
 
-    /// The listening box at 125%, the scale a 1080p laptop panel ships at.
+    /// Outward, not nearest. A rectangle that does not land on a physical pixel
+    /// must grow to the next one, never shrink to the previous: the pill's border
+    /// is 1px and the region clips it.
     #[test]
-    fn scales_position_and_size_together() {
-        assert_eq!(
-            physical_box(100.0, 200.0, 284.0, 84.0, 1.25),
-            (125, 250, 355, 105)
-        );
+    fn rounds_outward_never_inward() {
+        let (l, t, r, b) = region_box((10.4, 10.6, 20.4, 20.6), 1.0);
+        assert_eq!((l, t, r, b), (10, 10, 21, 21));
+
+        let (l, t, r, b) = region_box((82.0, 0.0, 322.0, 40.0), 1.5);
+        assert!(l <= (82.0f64 * 1.5) as i32);
+        assert!(r >= (322.0f64 * 1.5).ceil() as i32);
+        assert_eq!((l, t, r, b), (123, 0, 483, 60));
     }
 
-    /// Rounding, not truncation.
-    ///
-    /// The pill's width is measured off rendered text and is routinely odd, so
-    /// half-pixels are the normal case rather than the corner one. Truncating
-    /// loses up to a physical pixel off the right edge on every resize, and the
-    /// pill fills its window exactly — a pixel off the window is a pixel off the
-    /// pill's border, which is 1px to begin with.
+    /// A rectangle is never inverted by rounding, at any scale.
     #[test]
-    fn rounds_rather_than_truncates() {
-        assert_eq!(physical_box(0.0, 0.0, 241.0, 40.0, 1.5), (0, 0, 362, 60));
-        assert_eq!(
-            physical_box(10.5, 10.5, 151.0, 40.0, 1.0),
-            (11, 11, 151, 40)
-        );
-    }
-
-    /// Negative coordinates round the same way. A second monitor placed left of
-    /// the primary has a negative origin, and the bar can legitimately live there.
-    #[test]
-    fn handles_negative_origins() {
-        assert_eq!(
-            physical_box(-1920.0, -100.0, 150.0, 40.0, 1.0),
-            (-1920, -100, 150, 40)
-        );
+    fn stays_well_formed_at_every_scale() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for (w, m) in [(150.0, 0.0), (240.0, 22.0), (170.0, 0.0), (360.0, 0.0)] {
+                let (l, t, r, b) = region_box(shape_rect(w, PILL_H, m), scale);
+                assert!(r > l && b > t, "inverted at {scale} for {w}+{m}");
+            }
+        }
     }
 }
