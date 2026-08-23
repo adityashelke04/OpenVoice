@@ -87,23 +87,23 @@ This is not architecture astronautics. It buys three concrete things:
 flowchart LR
     subgraph driving["Driving adapters"]
         direction TB
-        HK["Keyboard hook<br/><b>ov-input</b>"]
-        MIC["WASAPI capture<br/><b>ov-audio</b>"]
+        HK["Keyboard hook<br/>ov-input"]
+        MIC["WASAPI capture<br/>ov-audio"]
     end
 
-    subgraph core["<b>ov-core</b> &mdash; pure. Compiles to wasm32."]
+    subgraph core["ov-core — pure. Compiles to wasm32."]
         direction TB
         SM["Session state machine"]
-        FMT["Formatting pipeline<br/><b>ov-format</b>"]
+        FMT["Formatting pipeline<br/>ov-format"]
         SM -- "event bus (broadcast)" --> FMT
     end
 
     subgraph driven["Driven adapters"]
         direction TB
-        ASR["faster-whisper sidecar<br/><b>ov-asr</b>"]
-        APP["Foreground app<br/><b>ov-input</b>"]
-        SINK["SendInput / clipboard<br/><b>ov-input</b>"]
-        DB["SQLite + FTS5<br/><b>ov-store</b>"]
+        ASR["faster-whisper sidecar<br/>ov-asr"]
+        APP["Foreground app<br/>ov-input"]
+        SINK["SendInput / clipboard<br/>ov-input"]
+        DB["SQLite + FTS5<br/>ov-store"]
     end
 
     HK   -- "HotkeyListener" --> SM

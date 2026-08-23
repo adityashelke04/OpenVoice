@@ -208,25 +208,25 @@ The boundary is enforced mechanically: CI compiles the core crates for
 
 ```mermaid
 flowchart LR
-    subgraph driving["Driving adapters &mdash; they call in"]
+    subgraph driving["Driving adapters — they call in"]
         direction TB
-        HK["Keyboard hook<br/><b>ov-input</b>"]
-        MIC["WASAPI capture<br/><b>ov-audio</b>"]
+        HK["Keyboard hook<br/>ov-input"]
+        MIC["WASAPI capture<br/>ov-audio"]
     end
 
-    subgraph core["Pure domain &mdash; no OS, no I/O, no async, no GUI"]
+    subgraph core["Pure domain — no OS, no I/O, no async, no GUI"]
         direction TB
-        SM["Session state machine<br/><b>ov-core</b>"]
-        FMT["Formatting pipeline<br/><b>ov-format</b>"]
+        SM["Session state machine<br/>ov-core"]
+        FMT["Formatting pipeline<br/>ov-format"]
         SM --> FMT
     end
 
-    subgraph driven["Driven adapters &mdash; the core calls out"]
+    subgraph driven["Driven adapters — the core calls out"]
         direction TB
-        ASR["faster-whisper sidecar<br/><b>ov-asr</b>"]
-        APP["Foreground app<br/><b>ov-input</b>"]
-        SINK["SendInput / clipboard<br/><b>ov-input</b>"]
-        DB["SQLite + FTS5<br/><b>ov-store</b>"]
+        ASR["faster-whisper sidecar<br/>ov-asr"]
+        APP["Foreground app<br/>ov-input"]
+        SINK["SendInput / clipboard<br/>ov-input"]
+        DB["SQLite + FTS5<br/>ov-store"]
     end
 
     HK   -- "HotkeyListener" --> SM
@@ -237,7 +237,7 @@ flowchart LR
     FMT  -- "TextSink"       --> SINK
 ```
 
-The six labelled edges are the entire contract surface &mdash; every trait is
+The six labelled edges are the entire contract surface — every trait is
 declared in [`ov-core/src/ports.rs`](crates/ov-core/src/ports.rs), and nothing
 reaches the operating system except through one of them. Adding a seventh
 requires an ADR.
