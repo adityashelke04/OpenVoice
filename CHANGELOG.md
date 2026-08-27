@@ -22,6 +22,13 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-27
+
+This release closes out the Flow Bar's geometry problems and its z-order
+problem in the same pass, then rebuilds it as a combination of Wispr Flow's and
+superwhisper's floating bars: a compact indicator, edge docking, and a menu
+that is a control surface rather than two links to the Hub.
+
 ### Added
 
 - **The Flow Bar can be shrunk instead of hidden.** "Compact bar" in its
