@@ -22,7 +22,53 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+### Added
+
+- **The Flow Bar can be shrunk instead of hidden.** "Compact bar" in its
+  right-click menu reduces it to a small indicator that still shows the status
+  light, and the waveform while you are speaking. Hover it and the full bar comes
+  back. The choice is remembered between restarts. Hiding a bar you cannot see is
+  the one thing that stops it telling you your microphone is open; making it
+  smaller does not.
+
+- **Drag the bar to the left or right edge of the screen and it stands up.** It
+  reorients into a vertical column so it takes a strip of the margin rather than a
+  bite out of whatever is maximised behind it. If something goes wrong while it is
+  docked it unfurls back to horizontal to show you the message, because a sentence
+  you have to tilt your head to read is not one you will read.
+
+- **Click the bar to start dictating.** The shortcut is still the fast way; this
+  is the discoverable one. Clicking to dismiss the menu does not start a
+  recording, and a click that turns into a drag is a drag.
+
+- **The Flow Bar's menu is now a real menu.** Start or stop dictating, paste the
+  last transcript, jump to your transcript history, microphone or settings,
+  switch between the compact and full bar, hide for an hour, or only show it
+  while dictating. Each destination opens the screen it names.
+
+- **The tray icon has a Flow Bar submenu:** Show Flow Bar, Hide until I dictate,
+  and Reset Flow Bar position. Every control for the bar used to live in a menu on
+  the bar itself, which is a dead end the moment the bar is not somewhere you can
+  reach it — snoozed, switched off, dragged into a corner, or behind another
+  window. The tray cannot be hidden.
+
 ### Fixed
+
+- **The Flow Bar no longer disappears behind other windows after a few minutes.**
+  Nothing was hiding it. Windows silently strips the always-on-top flag from
+  other windows when an application takes the screen fullscreen — a video, a game,
+  a screen share — and never puts it back. No event is raised, and the bar still
+  reports itself as visible, so it sat at the bottom of the stacking order with
+  everything painted over it until the app was restarted. It now notices within
+  two seconds and puts itself back, and records each time it had to, so the next
+  person to report this has a number rather than a feeling.
+
+- **The Flow Bar no longer claims to be ready while the speech engine is still
+  starting.** During the first-run model download, the several seconds of loading
+  after it, and permanently after the engine failed to start, the bar displayed
+  "Hold Right Ctrl" — an invitation to press a key that was going to do nothing.
+  It now shows the download's progress, says when it is starting, and says so in
+  red when the engine is not going to come up.
 
 - **The Flow Bar no longer jumps up and to the left when you press the hotkey.**
   The bar was held still while it changed size by moving its window in the
