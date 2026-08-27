@@ -65,6 +65,45 @@ fn anchor_for(x: f64, y: f64) -> (f64, f64) {
     (x + OVERLAY_W / 2.0, y + PILL_TOP)
 }
 
+/// Which screen edge the bar is docked against, and therefore which way it is
+/// laid out.
+///
+/// Wispr Flow's bar reorients vertically when dragged to a side edge, and it is
+/// right for the same reason it is there: a horizontal pill on a left or right
+/// edge either hangs off the screen or eats a strip of whatever is maximised
+/// underneath. A vertical bar on a vertical edge occupies the margin people
+/// already leave empty.
+///
+/// Bottom is the default and the only non-docked state — "bottom" here means
+/// "free-floating, laid out horizontally", not "flush with the bottom edge".
+///
+/// This does not change the *window*, which stays the fixed rectangle ADR 0007
+/// specifies. It changes the shape the pill paints inside it, which reaches this
+/// side as `set_shape`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Edge {
+    #[default]
+    Bottom,
+    Left,
+    Right,
+}
+
+/// What the Flow Bar is doing right now, for the Hub to display.
+#[derive(Debug, Clone, Serialize)]
+pub struct OverlayState {
+    pub visible: bool,
+    pub always_visible: bool,
+    /// Unix millis the snooze runs until, or `None` when not snoozed.
+    pub snoozed_until: Option<u64>,
+    pub mini: bool,
+    pub edge: Edge,
+    /// Whether the OS currently agrees the bar is on top.
+    pub topmost: bool,
+    /// How many times it has had to be put back. See `topmost.rs`.
+    pub topmost_recoveries: u64,
+}
+
 /// Persisted overlay state.
 ///
 /// What is stored is the *pill's* anchor, not the window's origin. The window is
@@ -86,6 +125,18 @@ pub struct Placement {
     /// Unix millis until which the user has asked for quiet.
     #[serde(default)]
     pub hidden_until: u64,
+    /// Whether the bar renders as the compact indicator rather than the full pill.
+    ///
+    /// superwhisper persists its mini state across restarts, and the reason is
+    /// worth copying: the choice between "I want to see the shortcut" and "I know
+    /// the shortcut, just tell me the microphone is alive" is a standing
+    /// preference about how much screen someone wants spent on a status light,
+    /// not a per-session decision.
+    #[serde(default)]
+    pub mini: bool,
+    /// Which edge the bar is docked to. See [`Edge`].
+    #[serde(default)]
+    pub edge: Edge,
 
     /// Legacy window origin, from before the window was a fixed size.
     ///
@@ -118,6 +169,8 @@ impl Default for Placement {
             top: f64::NAN,
             always_visible: true,
             hidden_until: 0,
+            mini: false,
+            edge: Edge::Bottom,
             x: None,
             y: None,
         }
@@ -290,7 +343,7 @@ impl Overlay {
         y: f64,
         pill_w: f64,
         pill_h: f64,
-    ) -> (f64, f64) {
+    ) -> (f64, f64, Edge) {
         // Logged unconditionally, including the echoes.
         //
         // This function writes the user's saved position to disk, and it had no
@@ -301,7 +354,7 @@ impl Overlay {
         // was moving the bar.
         if self.is_echo(x, y) {
             tracing::debug!(x, y, "overlay move_to ignored as echo");
-            return (x, y);
+            return (x, y, self.placement().edge);
         }
 
         let (cx, top) = anchor_for(x, y);
@@ -309,25 +362,32 @@ impl Overlay {
         let (sx, sy) = snap_box(win, cx - pill_w / 2.0, top, pill);
         let (ncx, ntop) = (sx + pill_w / 2.0, sy);
         let (wx, wy) = origin_for(ncx, ntop);
+        // Which edge the pill came to rest against, decided from the snapped
+        // position rather than the raw one. See `edge_at`.
+        let edge = monitor_logical(win)
+            .map(|(origin, area)| edge_at(origin.0, area.0, pill_w, sx))
+            .unwrap_or(Edge::Bottom);
 
         tracing::debug!(
             from = ?(x, y),
             to = ?(wx, wy),
             anchor = ?(ncx, ntop),
             pill = ?pill,
+            ?edge,
             "overlay move_to committed"
         );
         {
             let mut p = self.placement.lock().expect("placement");
             p.cx = ncx;
             p.top = ntop;
+            p.edge = edge;
             p.save();
         }
         // Recorded as commanded even though nothing was commanded: the frontend
         // is about to move the window here, and those moves coming back must not
         // be mistaken for a fresh drag.
         self.remember(wx, wy);
-        (wx, wy)
+        (wx, wy, edge)
     }
 
     /// Clip the window to the pill, so the rest of the fixed rectangle is neither
@@ -423,6 +483,70 @@ impl Overlay {
             p.save();
         }
         self.apply(win);
+    }
+
+    /// Cancel a snooze and bring the bar back now.
+    ///
+    /// The counterpart to `snooze`, and it was missing. Every control for this
+    /// window lived in a menu on the window, so hiding it also hid the only way
+    /// to unhide it: a snoozed bar could not be recovered for an hour, and a bar
+    /// the user believed was broken could not be told apart from one obeying an
+    /// instruction it had no way to report. Reached from the tray, which cannot
+    /// itself be hidden.
+    pub fn unsnooze(&self, win: &WebviewWindow) {
+        {
+            let mut p = self.placement.lock().expect("placement");
+            p.hidden_until = 0;
+            p.always_visible = true;
+            p.save();
+        }
+        self.apply(win);
+    }
+
+    /// Forget the remembered anchor and re-place the bar at bottom-centre.
+    ///
+    /// `on_screen` already guards against an anchor on a monitor that has since
+    /// been unplugged, but it cannot help with a bar the user dragged somewhere
+    /// they regret — behind a taskbar, onto a sliver of a second display, hard
+    /// into a corner. Clearing to NaN puts it back through the same
+    /// auto-placement path a first launch takes.
+    pub fn reset_position(&self, win: &WebviewWindow) {
+        {
+            let mut p = self.placement.lock().expect("placement");
+            p.cx = f64::NAN;
+            p.top = f64::NAN;
+            p.edge = Edge::Bottom;
+            p.save();
+        }
+        self.park(win);
+        self.apply(win);
+    }
+
+    /// Switch between the compact indicator and the full pill.
+    pub fn set_mini(&self, on: bool) {
+        let mut p = self.placement.lock().expect("placement");
+        p.mini = on;
+        p.save();
+    }
+
+    /// Everything a settings screen needs to say what this window is doing.
+    ///
+    /// Reported rather than inferred. The bug that prompted this was invisible
+    /// from inside the app — a bar that had lost its z-order looked exactly like
+    /// a bar obeying a snooze, which looked exactly like a bar that had crashed,
+    /// and nothing could distinguish them. Each field makes one of those
+    /// nameable.
+    pub fn state(&self, win: &WebviewWindow) -> OverlayState {
+        let p = self.placement();
+        OverlayState {
+            visible: win.is_visible().unwrap_or(false),
+            always_visible: p.always_visible,
+            snoozed_until: p.snoozed().then_some(p.hidden_until),
+            mini: p.mini,
+            edge: p.edge,
+            topmost: crate::topmost::is_topmost(win),
+            topmost_recoveries: crate::topmost::recoveries(),
+        }
     }
 
     /// Called by the engine as sessions start and finish.
@@ -599,6 +723,31 @@ fn on_screen(win: &WebviewWindow, x: f64, y: f64) -> bool {
 ///
 /// Taking the box as an argument does not by itself make the caller pass the
 /// right one, but it makes the dependency impossible to miss.
+/// Which edge a pill whose left edge landed at `x` is docked to.
+///
+/// Pure, and takes the monitor rectangle rather than a window, so the rule can be
+/// tested without a window manager. `snap_box` has always known where the screen
+/// edges are and has always thrown that knowledge away after moving the bar; this
+/// keeps it, because the answer decides how the pill is laid out and not just
+/// where it sits.
+///
+/// Compared against the already-snapped x. A bar is docked when it is *flush*,
+/// not when it is nearby: releasing 27px from the left snaps flush and docks,
+/// releasing 29px away leaves it floating and horizontal. That the same threshold
+/// decides both is deliberate — two thresholds would let the bar snap to an edge
+/// without adopting the layout for it.
+fn edge_at(origin_x: f64, width: f64, pill_w: f64, x: f64) -> Edge {
+    let left = origin_x;
+    let right = origin_x + width - pill_w;
+    if (x - left).abs() < 0.5 {
+        Edge::Left
+    } else if (x - right).abs() < 0.5 {
+        Edge::Right
+    } else {
+        Edge::Bottom
+    }
+}
+
 fn snap_box(win: &WebviewWindow, x: f64, y: f64, (w, h): (f64, f64)) -> (f64, f64) {
     let Some((origin, area)) = monitor_logical(win) else {
         return (x, y);
@@ -770,6 +919,76 @@ pub fn window(app: &tauri::AppHandle) -> Option<WebviewWindow> {
 
 #[cfg(test)]
 mod tests {
+
+    // -- Docking ---------------------------------------------------------
+
+    // A 1920-wide monitor at the origin, holding a 150px pill.
+    const ORIGIN: f64 = 0.0;
+    const WIDTH: f64 = 1920.0;
+    const PILL: f64 = 150.0;
+
+    #[test]
+    fn flush_left_docks_left() {
+        assert_eq!(edge_at(ORIGIN, WIDTH, PILL, 0.0), Edge::Left);
+    }
+
+    #[test]
+    fn flush_right_docks_right() {
+        assert_eq!(edge_at(ORIGIN, WIDTH, PILL, WIDTH - PILL), Edge::Right);
+    }
+
+    #[test]
+    fn the_middle_of_the_screen_is_not_docked() {
+        assert_eq!(edge_at(ORIGIN, WIDTH, PILL, 800.0), Edge::Bottom);
+    }
+
+    // Near an edge is not on it. `snap_box` decides whether a release becomes
+    // flush; this only reads the result. Were this fuzzy too, a bar could sit
+    // 20px from the left and still be laid out as though docked to it.
+    #[test]
+    fn near_an_edge_but_not_flush_stays_horizontal() {
+        assert_eq!(edge_at(ORIGIN, WIDTH, PILL, 20.0), Edge::Bottom);
+        assert_eq!(
+            edge_at(ORIGIN, WIDTH, PILL, WIDTH - PILL - 20.0),
+            Edge::Bottom
+        );
+    }
+
+    // A second monitor to the right of the first: edges are relative to the
+    // monitor the bar is on, not to the desktop origin. Without the offset every
+    // position on a secondary display reads as "not docked".
+    #[test]
+    fn edges_are_relative_to_the_monitor() {
+        assert_eq!(edge_at(1920.0, WIDTH, PILL, 1920.0), Edge::Left);
+        assert_eq!(
+            edge_at(1920.0, WIDTH, PILL, 1920.0 + WIDTH - PILL),
+            Edge::Right
+        );
+        assert_eq!(edge_at(1920.0, WIDTH, PILL, 0.0), Edge::Bottom);
+    }
+
+    #[test]
+    fn edge_round_trips_through_json() {
+        let json = serde_json::to_string(&Edge::Left).expect("serialize");
+        assert_eq!(json, "\"left\"");
+        assert_eq!(
+            serde_json::from_str::<Edge>(&json).expect("deserialize"),
+            Edge::Left
+        );
+    }
+
+    // The fields added after the fixed-window migration are all serde(default),
+    // so a file written by any older build still loads. This branch already
+    // migrates a legacy x/y; dropping mini or edge on top of that would be a
+    // second silent reset of something the user chose.
+    #[test]
+    fn a_placement_without_mini_or_edge_still_loads() {
+        let json = r#"{"cx":900.0,"top":940.0,"always_visible":true,"hidden_until":0}"#;
+        let p: Placement = serde_json::from_str(json).expect("placement");
+        assert_eq!(p.cx, 900.0);
+        assert!(!p.mini);
+        assert_eq!(p.edge, Edge::Bottom);
+    }
     use super::*;
 
     /// The anchor conversion is exactly invertible. If it were not, every park

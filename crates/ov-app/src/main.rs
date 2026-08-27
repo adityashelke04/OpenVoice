@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ov_core::event::Event;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
@@ -511,13 +511,19 @@ fn overlay_placement(state: tauri::State<'_, AppState>) -> overlay::Placement {
 /// Commit a drag. The frontend reports where the bar ended up; snapping and
 /// persistence happen here so the rules live in one place.
 #[tauri::command]
-fn overlay_move(app: AppHandle, x: f64, y: f64, pill_w: f64, pill_h: f64) -> (f64, f64) {
+fn overlay_move(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    pill_w: f64,
+    pill_h: f64,
+) -> (f64, f64, overlay::Edge) {
     match overlay::window(&app) {
         Some(win) => app
             .state::<AppState>()
             .overlay
             .move_to(&win, x, y, pill_w, pill_h),
-        None => (x, y),
+        None => (x, y, overlay::Edge::Bottom),
     }
 }
 
@@ -594,6 +600,41 @@ fn overlay_always_visible(app: AppHandle, on: bool) {
     if let Some(win) = overlay::window(&app) {
         app.state::<AppState>().overlay.set_always_visible(&win, on);
     }
+}
+
+/// Cancel a snooze and bring the bar back now.
+#[tauri::command]
+fn overlay_unsnooze(app: AppHandle) {
+    if let Some(win) = overlay::window(&app) {
+        app.state::<AppState>().overlay.unsnooze(&win);
+    }
+}
+
+/// Forget the remembered position and re-place at bottom-centre.
+#[tauri::command]
+fn overlay_reset_position(app: AppHandle) {
+    if let Some(win) = overlay::window(&app) {
+        app.state::<AppState>().overlay.reset_position(&win);
+    }
+}
+
+/// Switch between the compact indicator and the full pill.
+#[tauri::command]
+fn overlay_set_mini(app: AppHandle, on: bool) {
+    app.state::<AppState>().overlay.set_mini(on);
+    // Told rather than polled: the bar is the thing that has to re-render, and it
+    // may not be the window this command came from -- the Hub's settings toggle
+    // reaches the same state.
+    if let Some(win) = overlay::window(&app) {
+        let _ = win.emit("overlay-mini", on);
+    }
+}
+
+/// Everything the Hub needs to say what the Flow Bar is doing. See
+/// `Overlay::state`.
+#[tauri::command]
+fn overlay_state(app: AppHandle) -> Option<overlay::OverlayState> {
+    overlay::window(&app).map(|win| app.state::<AppState>().overlay.state(&win))
 }
 
 /// Always log to a file.
@@ -684,6 +725,10 @@ fn main() {
             overlay_snap_preview,
             overlay_snooze,
             overlay_always_visible,
+            overlay_unsnooze,
+            overlay_reset_position,
+            overlay_set_mini,
+            overlay_state,
             cancel_session,
             show_hub_cmd,
             get_settings,
@@ -868,7 +913,33 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit OpenVoice", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
 
-    let menu = Menu::with_items(app, &[&open, &paste, &sep, &folder, &sep, &quit])?;
+    // The Flow Bar's controls used to live exclusively in a menu on the Flow Bar,
+    // which is a dead end the moment the bar is not where the user can reach it:
+    // snoozed for an hour, switched to dictation-only, dragged somewhere awkward,
+    // or -- the case that prompted this -- sunk behind every other window because
+    // the shell took its topmost bit away. Every one of those looked identical
+    // from the outside, and none of them could be undone without restarting the
+    // app. The tray cannot be hidden, so the way back belongs here.
+    let bar_show = MenuItem::with_id(app, "bar_show", "Show Flow Bar", true, None::<&str>)?;
+    let bar_hide = MenuItem::with_id(app, "bar_hide", "Hide until I dictate", true, None::<&str>)?;
+    let bar_reset = MenuItem::with_id(
+        app,
+        "bar_reset",
+        "Reset Flow Bar position",
+        true,
+        None::<&str>,
+    )?;
+    let flow_bar = Submenu::with_items(
+        app,
+        "Flow Bar",
+        true,
+        &[&bar_show, &bar_hide, &sep, &bar_reset],
+    )?;
+
+    let menu = Menu::with_items(
+        app,
+        &[&open, &paste, &sep, &flow_bar, &sep, &folder, &sep, &quit],
+    )?;
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().expect("bundled icon").clone())
@@ -894,6 +965,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "folder" => open_data_dir(app.clone()),
+            // "Show" clears a snooze *and* re-enables always-visible, because from
+            // the tray those are the same wish: the user wants to see the bar, and
+            // should not have to know which of the two settings is currently
+            // suppressing it.
+            "bar_show" => overlay_unsnooze(app.clone()),
+            "bar_hide" => overlay_always_visible(app.clone(), false),
+            "bar_reset" => overlay_reset_position(app.clone()),
             "quit" => app.exit(0),
             _ => {}
         })
