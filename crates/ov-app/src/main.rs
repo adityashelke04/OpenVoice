@@ -30,6 +30,7 @@ mod engine;
 mod history;
 mod overlay;
 mod settings;
+mod topmost;
 mod update;
 
 /// The Tauri channel every domain event is published on.
@@ -729,6 +730,11 @@ fn main() {
                 handle.state::<AppState>().overlay.apply(&win);
             }
 
+            // Windows takes the bar off the top without telling anyone — see
+            // `topmost.rs`. Nothing else in the process would ever notice, which
+            // is why the bar appeared to hide itself after a few minutes.
+            topmost::spawn_watchdog(handle.clone());
+
             // Starting the engine loads ~1.6 GB of weights, so it happens off the
             // UI thread. The window paints immediately and reports progress rather
             // than showing a frozen frame for several seconds.
@@ -792,7 +798,9 @@ fn main() {
 fn configure_overlay(app: &AppHandle) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW,
     };
 
     let Some(win) = app.get_webview_window("overlay") else {
@@ -812,8 +820,30 @@ fn configure_overlay(app: &AppHandle) {
         let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let wanted = current | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
+
+        // `SetWindowLongPtrW` alone does not finish the job. Win32's contract is
+        // that extended-style changes take effect only once `SetWindowPos` is
+        // called with `SWP_FRAMECHANGED` to recalculate the frame; until then the
+        // window keeps behaving as it did before. The two flags above appeared to
+        // work only because the window happens to be shown and moved shortly
+        // afterwards, which is luck standing in for a guarantee on the property
+        // this whole file calls load-bearing.
+        //
+        // `HWND_TOPMOST` rides along in the same call: it is the moment the window
+        // is first given its z-order, and asking for it here rather than trusting
+        // `alwaysOnTop` in tauri.conf.json means one code path owns it. See
+        // `topmost.rs`.
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
-    tracing::info!("overlay set to non-activating");
+    tracing::info!("overlay set to non-activating, topmost, and frame-changed");
 }
 
 #[cfg(not(windows))]
