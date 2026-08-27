@@ -850,7 +850,13 @@ fn main() {
 /// additionally keeps it out of Alt-Tab, where a 260px status pill has no business.
 #[cfg(windows)]
 fn configure_overlay(app: &AppHandle) {
+    use std::mem::size_of;
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_DONOTROUND, DWMNCRP_DISABLED,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
         SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_NOACTIVATE,
@@ -871,6 +877,31 @@ fn configure_overlay(app: &AppHandle) {
     // extended style bits are read back before being modified so no other flag is
     // clobbered.
     unsafe {
+        // Suppress Windows 11 DWM 1px accent border, corner lighting, and non-client rendering
+        let border_color: u32 = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_color as *const _ as *const _,
+            size_of::<u32>() as u32,
+        );
+
+        let corner_pref: u32 = DWMWCP_DONOTROUND.0 as u32;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner_pref as *const _ as *const _,
+            size_of::<u32>() as u32,
+        );
+
+        let nc_policy: u32 = DWMNCRP_DISABLED.0 as u32;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &nc_policy as *const _ as *const _,
+            size_of::<u32>() as u32,
+        );
+
         let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let wanted = current | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
@@ -897,7 +928,7 @@ fn configure_overlay(app: &AppHandle) {
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
     }
-    tracing::info!("overlay set to non-activating, topmost, and frame-changed");
+    tracing::info!("overlay set to non-activating, topmost, and frame-changed with DWM border suppression");
 }
 
 #[cfg(not(windows))]

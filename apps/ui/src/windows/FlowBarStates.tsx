@@ -253,18 +253,23 @@ export function FlowBarStates() {
           <Row label="Key, now" width={176}>
             <FlowBar live={false} elapsed="0:00" hint="Ctrl+Alt+Space" />
           </Row>
-          <Row label="Long take" width={240}>
-            <FlowBar live levelRef={live} elapsed="12:34" onCancel={() => undefined} />
+          <Row label="Menu idle" width={280}>
+            <FlowBar live={false} elapsed="0:00" />
           </Row>
-          <div className="fbs-row">
-            <span className="fbs-row-label">Menu</span>
-            <span className="fbs-row-width">280px</span>
-            <div className="fbs-row-bar" style={{ width: 280 }}>
+          <div className="fbs-row" style={{ alignItems: "flex-start" }}>
+            <span className="fbs-row-label" style={{ paddingTop: 12 }}>Menu</span>
+            <span className="fbs-row-width" style={{ paddingTop: 12 }}>280px</span>
+            <div className="fbs-row-bar" style={{ width: 280, height: "auto" }}>
               <FlowBar live={false} elapsed="0:00" />
               <div className="overlay-menu" role="presentation">
-                <button type="button">Open OpenVoice</button>
+                <button type="button">Start dictating</button>
                 <button type="button">Paste last transcript</button>
                 <div className="overlay-menu-sep" />
+                <button type="button">Transcript history</button>
+                <button type="button">Microphone</button>
+                <button type="button">Settings</button>
+                <div className="overlay-menu-sep" />
+                <button type="button">Compact bar</button>
                 <button type="button">Hide for an hour</button>
                 <button type="button">Only show while dictating</button>
               </div>

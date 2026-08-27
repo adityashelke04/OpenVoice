@@ -51,8 +51,9 @@ pub const OVERLAY_W: f64 = 404.0;
 /// `shape_rect` is bounded by it, and the test below asserts every state fits.
 pub const OVERLAY_H: f64 = 360.0;
 /// The pill's top edge, measured from the window's top. Constant by construction:
-/// the space above the pill is the glow's, and the menu hangs below.
-pub const PILL_TOP: f64 = 22.0;
+/// 22px Win32 caption exclusion buffer plus 22px glow margin above the pill,
+/// with the menu hanging below.
+pub const PILL_TOP: f64 = 44.0;
 /// The pill's height. Must equal `PILL_H` in `Overlay.tsx` and `--pill-h` in
 /// `overlay.css`; the three are one identity split across three languages.
 pub const PILL_H: f64 = 40.0;
@@ -412,16 +413,17 @@ impl Overlay {
     /// any newer shape, so a burst of state changes settles once.
     pub fn set_shape(&self, win: &WebviewWindow, pill_w: f64, pill_h: f64, margin: f64) {
         let next = shape_rect(pill_w, pill_h, margin);
-        let now = {
+        let (now, is_shrink) = {
             let mut cur = self.shape.lock().expect("shape");
-            let union = cur.map_or(next, |c| union_rect(c, next));
+            let is_shrink = cur.map_or(false, |c| (next.2 - next.0) <= (c.2 - c.0) && (next.3 - next.1) <= (c.3 - c.1));
+            let union = cur.map_or(next, |c| if is_shrink { next } else { union_rect(c, next) });
             *cur = Some(next);
-            union
+            (union, is_shrink)
         };
 
         apply_region(win, now);
 
-        if now == next {
+        if now == next || is_shrink {
             return;
         }
 
@@ -843,7 +845,7 @@ fn apply_region(win: &WebviewWindow, rect: Rect) {
             tracing::warn!(l, t, r, b, "overlay could not create a window region");
             return;
         }
-        if SetWindowRgn(hwnd, rgn, true) == 0 {
+        if SetWindowRgn(hwnd, rgn, false) == 0 {
             let _ = DeleteObject(windows::Win32::Graphics::Gdi::HGDIOBJ(rgn.0));
             tracing::warn!(l, t, r, b, "overlay SetWindowRgn was refused");
             return;
@@ -1040,7 +1042,7 @@ mod tests {
             (240.0, PILL_H, 22.0),
             (170.0, PILL_H, 0.0),
             (360.0, PILL_H, 0.0),
-            (280.0, 226.0, 0.0),
+            (280.0, 302.0, 0.0),
         ] {
             let (l, t, r, b) = shape_rect(w, h, m);
             assert!(l >= 0.0, "{w}x{h}+{m} overflows the left edge: {l}");
@@ -1060,7 +1062,7 @@ mod tests {
             shape_rect(240.0, PILL_H, 22.0),
             shape_rect(170.0, PILL_H, 0.0),
             shape_rect(360.0, PILL_H, 0.0),
-            shape_rect(280.0, 226.0, 0.0),
+            shape_rect(280.0, 302.0, 0.0),
         ];
         for a in states {
             for b in states {

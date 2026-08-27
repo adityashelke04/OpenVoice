@@ -189,7 +189,11 @@ export type Reading = {
  *
  * Returns the reading whether or not it was valid, so callers can log it.
  */
-export function checkInvariants(el: HTMLElement | null, pillTop: number): Reading | null {
+export function checkInvariants(
+  el: HTMLElement | null,
+  pillTop: number,
+  expectedPillH?: number,
+): Reading | null {
   if (!el) return null;
 
   const view = {
@@ -218,6 +222,17 @@ export function checkInvariants(el: HTMLElement | null, pillTop: number): Readin
       reading,
     );
     toLog("error", "pill exceeds window", reading);
+    return reading;
+  }
+
+  // The pill height collapsed or deviated from the expected height.
+  if (expectedPillH !== undefined && Math.abs(pill.h - expectedPillH) > slack) {
+    console.error(
+      `[flowbar] INVARIANT: pill height ${pill.h} deviates from expected height ${expectedPillH}. ` +
+        `The pill is squished, crunched or incorrectly sized.`,
+      reading,
+    );
+    toLog("error", "pill height deviated", { ...reading, expectedPillH });
     return reading;
   }
 
@@ -257,8 +272,65 @@ export function checkInvariants(el: HTMLElement | null, pillTop: number): Readin
     return reading;
   }
 
+  // Check internal content centering if el has a .flowbar child
+  checkContentCentering(el);
+
   mark("render", reading as unknown as Record<string, unknown>);
   return reading;
+}
+
+/**
+ * Measure horizontal content centering within the Flow Bar pill.
+ * Asserts that distLeft (pill.left -> first child) == distRight (last child -> pill.right).
+ */
+export function checkContentCentering(
+  el: HTMLElement | null,
+  slack = 2,
+): { centered: boolean; leftGap: number; rightGap: number; diff: number } | null {
+  if (!el) return null;
+  const pillEl = el.classList.contains("flowbar")
+    ? el
+    : el.querySelector<HTMLElement>(".flowbar");
+  if (!pillEl) return null;
+
+  const pillRect = pillEl.getBoundingClientRect();
+  if (pillRect.width === 0) return null;
+
+  const contentEls = Array.from(
+    pillEl.querySelectorAll<HTMLElement>(
+      ".flowbar-mic, .flowbar-idle > *, .flowbar-msg, .flowbar-working-text, .flowbar-wave, .flowbar-time, .flowbar-cancel, .flowbar-go",
+    ),
+  ).filter((e) => {
+    const r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  });
+
+  if (contentEls.length === 0) return null;
+
+  let minLeft = Infinity;
+  let maxRight = -Infinity;
+
+  for (const child of contentEls) {
+    const r = child.getBoundingClientRect();
+    if (r.left < minLeft) minLeft = r.left;
+    if (r.right > maxRight) maxRight = r.right;
+  }
+
+  const leftGap = Math.round((minLeft - pillRect.left) * 10) / 10;
+  const rightGap = Math.round((pillRect.right - maxRight) * 10) / 10;
+  const diff = Math.round(Math.abs(leftGap - rightGap) * 10) / 10;
+  const centered = diff <= slack;
+
+  if (!centered && pillRect.width > 200) {
+    console.error(
+      `[flowbar] INVARIANT: Content not centered horizontally within pill (${Math.round(pillRect.width)}px pill). ` +
+        `leftGap=${leftGap}px vs rightGap=${rightGap}px (diff=${diff}px).`,
+      { pillW: Math.round(pillRect.width), leftGap, rightGap, diff },
+    );
+    toLog("error", "content not centered in pill", { pillW: Math.round(pillRect.width), leftGap, rightGap, diff });
+  }
+
+  return { centered, leftGap, rightGap, diff };
 }
 
 /** A window box: the size asked of the window, and the margin inside it. */
