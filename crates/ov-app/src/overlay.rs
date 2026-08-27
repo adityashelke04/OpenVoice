@@ -43,7 +43,13 @@ const BOTTOM_GAP: f64 = 96.0;
 pub const OVERLAY_W: f64 = 404.0;
 /// The window's height: the glow margin above the pill, the pill, and the room
 /// the right-click menu needs below it.
-pub const OVERLAY_H: f64 = 248.0;
+///
+/// Raised from 248 when the Flow Menu grew from four items to eight. Changing it
+/// is safe in a way it would not have been before ADR 0007: what is persisted is
+/// the pill's *anchor*, so the window's dimensions no longer appear in anything
+/// that survives a restart and nobody's saved bar moves because this number did.
+/// `shape_rect` is bounded by it, and the test below asserts every state fits.
+pub const OVERLAY_H: f64 = 360.0;
 /// The pill's top edge, measured from the window's top. Constant by construction:
 /// the space above the pill is the glow's, and the menu hangs below.
 pub const PILL_TOP: f64 = 22.0;

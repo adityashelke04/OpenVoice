@@ -81,11 +81,14 @@ const PLATES = [
 function Row({
   label,
   width,
+  height = 40,
   freeze,
   children,
 }: {
   label: string;
   width: number;
+  /** The pill fills its window, and on this surface the row is the window. */
+  height?: number;
   /** Hold a one-shot animation open so it can be seen and captured. */
   freeze?: boolean;
   children: React.ReactNode;
@@ -93,8 +96,10 @@ function Row({
   return (
     <div className="fbs-row" data-freeze={freeze}>
       <span className="fbs-row-label">{label}</span>
-      <span className="fbs-row-width">{width}px</span>
-      <div className="fbs-row-bar" style={{ width }}>
+      <span className="fbs-row-width">
+        {width}x{height}
+      </span>
+      <div className="fbs-row-bar" style={{ width, height }}>
         {children}
       </div>
     </div>
@@ -124,8 +129,8 @@ export function FlowBarStates() {
           </div>
 
           <div className="fbs-plate" data-plate={plate.id}>
-            <Row label="Idle" width={150}>
-              <FlowBar live={false} elapsed="0:00" />
+            <Row label="Idle" width={173}>
+              <FlowBar live={false} elapsed="0:00" onToggle={() => undefined} />
             </Row>
             <Row label="Listening" width={240}>
               <FlowBar live levelRef={live} elapsed="0:04" onCancel={() => undefined} />
@@ -137,14 +142,50 @@ export function FlowBarStates() {
                 review surface holds it open at the point the ring is widest;
                 otherwise every screenshot of it would be of the frame after it
                 finished. The row below it runs at real speed. */}
-            <Row label="Landed" width={150} freeze>
-              <FlowBar live={false} confirm elapsed="0:00" />
+            <Row label="Landed" width={173} freeze>
+              <FlowBar live={false} confirm elapsed="0:00" onToggle={() => undefined} />
             </Row>
             <Row label="Clipboard" width={248}>
               <FlowBar live={false} elapsed="0:00" message="Copied to clipboard — press Ctrl+V" />
             </Row>
             <Row label="Failed" width={248}>
               <FlowBar live={false} failed elapsed="0:00" message="No text was produced" />
+            </Row>
+            {/* The states the bar had no way to show until now. Through the
+                first-run download and the model load that follows it, this
+                window used to display "Hold Right Ctrl" -- an invitation to
+                press a key that was not going to do anything -- and a hard
+                engine failure displayed it forever. */}
+            <Row label="Starting" width={224}>
+              <FlowBar live={false} status="loading" elapsed="0:00" />
+            </Row>
+            <Row label="Downloading" width={252}>
+              <FlowBar live={false} status="loading" progress={0.43} elapsed="0:00" />
+            </Row>
+            <Row label="Engine down" width={310}>
+              <FlowBar
+                live={false}
+                status="error"
+                elapsed="0:00"
+                message="Speech engine unavailable — open OpenVoice"
+              />
+            </Row>
+            {/* Compact: superwhisper's mini window. The bar gives up its labels
+                rather than giving up the screen, and hovering brings them back. */}
+            <Row label="Compact" width={44} height={22}>
+              <FlowBar live={false} mini elapsed="0:00" />
+            </Row>
+            <Row label="Compact, live" width={78} height={22}>
+              <FlowBar live mini levelRef={live} elapsed="0:04" />
+            </Row>
+            {/* Docked: Wispr Flow reorients at the left and right edges, because
+                a horizontal pill on a vertical edge either hangs off the screen
+                or bites into whatever is maximised behind it. */}
+            <Row label="Docked" width={34} height={52}>
+              <FlowBar live={false} edge="left" elapsed="0:00" />
+            </Row>
+            <Row label="Docked, live" width={34} height={132}>
+              <FlowBar live edge="left" levelRef={live} elapsed="0:04" />
             </Row>
           </div>
         </section>

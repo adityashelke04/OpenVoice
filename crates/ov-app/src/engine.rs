@@ -152,6 +152,15 @@ pub struct Engine {
     /// `start` builds the engine, then the channel, then the threads. Set once,
     /// immediately, and never replaced.
     inputs: std::sync::OnceLock<std::sync::mpsc::Sender<Input>>,
+    /// How the user's chord is configured, so `toggle` can reproduce it.
+    activation: ov_core::config::ActivationMode,
+    /// Whether `toggle` currently believes it is holding the key down.
+    ///
+    /// The session machine is driven entirely by key transitions, and it
+    /// deliberately does not care where they come from. Clicking the bar
+    /// therefore has to produce the same press/release pattern a real key would,
+    /// which means remembering which half of it we are in.
+    synthetic_down: std::sync::atomic::AtomicBool,
 }
 
 impl Engine {
@@ -257,6 +266,57 @@ impl Engine {
     pub fn cancel(&self) {
         if let Some(tx) = self.inputs.get() {
             let _ = tx.send(Input::Cancelled { at: self.now() });
+        }
+    }
+
+    /// Start or stop a dictation from a click rather than the chord.
+    ///
+    /// Wispr Flow's bar starts a dictation when you click it, and it is the right
+    /// affordance for the same reason their bar has it: a floating control that
+    /// only reports is a status light, and one you can press is an instrument.
+    /// The shortcut stays the fast path; this is the discoverable one.
+    ///
+    /// Synthesises the key transitions rather than reaching into the machine, so
+    /// there is one activation path and no second set of rules to keep in step —
+    /// the same argument `cancel` makes. That means honouring the configured
+    /// style, because the two modes read a press differently: in toggle mode a
+    /// complete tap starts and a second complete tap stops, while push-to-talk
+    /// needs the press and the release separated by however long the user speaks.
+    ///
+    /// Sampling the foreground application here is correct and not a
+    /// coincidence: the overlay is `WS_EX_NOACTIVATE`, so clicking it never takes
+    /// focus, and the window the user was typing into is still the foreground
+    /// one. The property that makes this window safe is the property that makes
+    /// this method possible.
+    pub fn toggle(&self) {
+        use ov_core::config::ActivationMode;
+        use std::sync::atomic::Ordering;
+
+        let Some(tx) = self.inputs.get() else { return };
+        let at = self.now();
+
+        let press = |tx: &std::sync::mpsc::Sender<Input>| {
+            let app = self.apps.foreground().unwrap_or_default();
+            let profile = self.profile_for(&app.exe);
+            let _ = tx.send(Input::HotkeyPressed { at, app, profile });
+        };
+
+        match self.activation {
+            // One complete tap per click. The machine's own toggle handling then
+            // does the starting and stopping.
+            ActivationMode::Toggle => {
+                press(tx);
+                let _ = tx.send(Input::HotkeyReleased { at });
+            }
+            // Hold-to-talk, with the hold spanning two clicks.
+            ActivationMode::PushToTalk => {
+                if self.synthetic_down.swap(true, Ordering::SeqCst) {
+                    self.synthetic_down.store(false, Ordering::SeqCst);
+                    let _ = tx.send(Input::HotkeyReleased { at });
+                } else {
+                    press(tx);
+                }
+            }
         }
     }
 
@@ -530,6 +590,8 @@ pub fn start(
         start: Instant::now(),
         shell,
         inputs: std::sync::OnceLock::new(),
+        activation: config.activation,
+        synthetic_down: std::sync::atomic::AtomicBool::new(false),
     });
 
     let (tx, rx) = channel::<Input>();

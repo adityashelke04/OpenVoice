@@ -521,7 +521,10 @@
   height: 100%;
   border-radius: var(--r-full);
   background: var(--live);
-  transform: scaleY(0.05);
+  /* Driven by the animation loop as a magnitude rather than a transform, so the
+     stylesheet picks the axis -- the wave runs vertically when the bar is docked
+     to a side edge. See `.flowbar[data-column]` and `Waveform`. */
+  transform: scaleY(var(--v, 0.05));
   transform-origin: center;
   will-change: transform;
   backface-visibility: hidden;
@@ -536,13 +539,31 @@
  *
  * The only interface visible while dictating, so it is sized to be read in
  * peripheral vision and ignored the rest of the time. Compact by default; it grows
- * only while listening, and the growth is itself the signal that it heard you. */
+ * only while listening, and the growth is itself the signal that it heard you.
+ *
+ * Four forms, one component:
+ *
+ *   full      the pill, horizontal — everything is legible
+ *   compact   superwhisper's mini window — the dot, and the wave while live
+ *   column    docked to a side edge, laid out vertically
+ *   speaking  a column that has words to deliver unfurls back to horizontal,
+ *             because a sentence you have to tilt your head to read is not a
+ *             sentence you will read
+ *
+ * The box for every one of them is decided in `geometry()` in Overlay.tsx and
+ * applied to `.overlay-hit`. Nothing here sets a width or a height that the
+ * window does not already know about — the last time this file owned a height,
+ * it disagreed with the window by 2px and the difference was bare, translucent
+ * window. */
 
 .flowbar {
   display: flex;
   align-items: center;
   gap: var(--s-3);
-  height: 38px;
+  /* Whatever the window is. See the note above: a constant here is a second
+     opinion about the size of something that can only have one. */
+  height: 100%;
+  width: 100%;
   padding: 0 var(--s-4);
   /* Nearly opaque, and no backdrop-filter.
    *
@@ -558,16 +579,41 @@
   border-radius: var(--r-full);
   /* No shadow.
    *
-   * The window is now sized to the pill exactly (see Overlay.tsx). Previously it
-   * was 280x52 with a 148px pill inside, and that ~60px of window either side —
-   * kept for the shadow — is precisely the translucent rectangle that was visible
-   * around the bar. Removing the gap removes the artefact, and a shadow clipped at
-   * the window edge would read as a hard line anyway. */
+   * The window is sized to the pill exactly (see Overlay.tsx). Previously it was
+   * 280x52 with a 148px pill inside, and that ~60px of window either side — kept
+   * for the shadow — is precisely the translucent rectangle that was visible
+   * around the bar. Removing the gap removes the artefact, and a shadow clipped
+   * at the window edge would read as a hard line anyway. */
   transition:
     border-color var(--t-base) var(--ease),
     background-color var(--t-base) var(--ease);
-  width: 100%;
   overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* Compact.
+ *
+ * The honest answer to "this is in my way" is a smaller bar, not a hidden one:
+ * a bar you have dismissed cannot tell you the microphone is open, which is the
+ * one thing it exists to do. Everything goes except the dot and, while live, the
+ * wave. Hovering brings the full pill back — see `compact` in Overlay.tsx. */
+.flowbar[data-mini="true"] {
+  gap: var(--s-2);
+  padding: 0 7px;
+  justify-content: center;
+}
+
+/* Docked to a side edge: the same pill turned through ninety degrees.
+ *
+ * Wispr Flow reorients its bar this way at the left and right edges, and the
+ * reason is geometric rather than decorative — a horizontal pill on a vertical
+ * edge either hangs off the screen or takes a bite out of whatever is maximised
+ * behind it. */
+.flowbar[data-column="true"] {
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3) 0;
+  justify-content: center;
 }
 
 /* Full chroma, not `--live-dim`.
@@ -602,23 +648,25 @@
     0 0 calc(22px + 10px * var(--level, 0)) 0 rgb(68 214 44 / 5%);
 }
 
-/* The two ways a dictation ends that are not a silent success. They are
-   deliberately different colours: one is a failure, the other is the fallback
-   working as designed, and painting both red would teach the user to ignore
-   red. */
-/* Border and dot only — no tinted fill.
- *
- * A `--danger-soft` wash over the pill's near-black looked plausible on the app
- * canvas and fell apart over a white document, where it renders as a muddy grey
- * rectangle that reads as a broken component rather than a failure. It is also
- * exactly the "tinted pill" the status rule prohibits: the colour belongs in the
- * dot. The pill widening to fit a sentence is the thing that catches the eye
- * here; the red only has to name what kind of event it was. */
-.flowbar[data-mode="failed"] {
+/* The endings that are not a silent success, and the two states that are about
+   the engine rather than about a dictation. They are deliberately different
+   colours: a clipboard fallback is the fallback working as designed, and
+   painting it the same red as a failure would teach the user to ignore red.
+
+   Border and dot only — no tinted fill. A `--danger-soft` wash over the pill's
+   near-black looked plausible on the app canvas and fell apart over a white
+   document, where it renders as a muddy grey rectangle that reads as a broken
+   component rather than a failure. It is also exactly the "tinted pill" the
+   status rule prohibits: the colour belongs in the dot. The pill widening to fit
+   a sentence is the thing that catches the eye here; the colour only has to name
+   what kind of event it was. */
+.flowbar[data-mode="failed"],
+.flowbar[data-mode="enginefail"] {
   border-color: var(--danger);
 }
 
-.flowbar[data-mode="notice"] {
+.flowbar[data-mode="notice"],
+.flowbar[data-mode="loading"] {
   border-color: var(--warn);
 }
 
@@ -626,6 +674,28 @@
   flex: 1;
   height: 18px;
   min-width: 0;
+}
+
+/* Turned through ninety degrees with the rest of the pill. The wave itself is
+   axis-agnostic — the animation loop writes a magnitude, not a transform — so
+   this is a layout change and not a rotation, and it needs no advance knowledge
+   of how long the column is. */
+.flowbar[data-column="true"] .flowbar-wave {
+  flex: 1;
+  width: 18px;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.flowbar[data-column="true"] .wave {
+  flex-direction: column;
+}
+
+.flowbar[data-column="true"] .wave-bar {
+  width: 100%;
+  height: 2px;
+  transform: scaleX(var(--v, 0.05));
 }
 
 /* Everything right of the dot. Keyed by mode in the component, so this is also
@@ -637,6 +707,19 @@
   flex: 1;
   min-width: 0;
   animation: flowbar-enter var(--t-base) var(--ease) both;
+}
+
+.flowbar[data-column="true"] .flowbar-body {
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+}
+
+/* Compact and column both shed their labels, so an empty body must not claim
+   the space the dot is centred in. */
+.flowbar[data-mini="true"] .flowbar-body:empty,
+.flowbar[data-column="true"] .flowbar-body:empty {
+  display: none;
 }
 
 /* A state change should read as the bar becoming something else, not as a label
@@ -676,7 +759,8 @@
  * Not `--danger`: throwing away a sentence you did not mean to say is a normal
  * outcome, not an error, and colouring it red would put a warning next to the
  * microphone every single time it opens. */
-.flowbar-cancel {
+.flowbar-cancel,
+.flowbar-go {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -691,14 +775,25 @@
     background var(--t-fast) var(--ease);
 }
 
-.flowbar-cancel:hover {
+.flowbar-cancel:hover,
+.flowbar-go:hover {
   color: var(--ink);
   background: var(--surface-4);
 }
 
-.flowbar-cancel:focus-visible {
+.flowbar-cancel:focus-visible,
+.flowbar-go:focus-visible {
   outline: 2px solid var(--live);
   outline-offset: 1px;
+}
+
+/* The one control on this window that opens a microphone, so the one thing on
+   it that may be green — and only when the pointer is on it, because a green
+   idle bar would say the microphone is already open. Wispr Flow's bar starts a
+   dictation when you click it; this is the part of the pill that says so. */
+.flowbar-go:hover {
+  color: var(--live);
+  background: var(--live-soft);
 }
 
 /* One line, truncated. The bar cannot grow to fit an arbitrary message from the
@@ -714,14 +809,23 @@
   color: var(--body);
 }
 
-.flowbar[data-mode="failed"] .flowbar-msg {
+.flowbar[data-mode="failed"] .flowbar-msg,
+.flowbar[data-mode="enginefail"] .flowbar-msg {
   color: var(--ink);
 }
 
 /* Still no spinner — but not motionless either. Between key-release and text
    landing the bar previously showed a static grey word for one to three
    seconds, which is the one stretch where the user is actually waiting on it.
-   A slow breathe says "working" without asking to be watched. */
+   A slow breathe says "working" without asking to be watched.
+
+   The engine's startup message does NOT breathe, though it is the same kind of
+   wait. Two reasons, and the first is the file's own argument against the
+   pulsing dot: the dot already breathes in that state, and two things saying
+   "still going" is one thing too many. The second is contrast — this is a
+   sentence rather than a single word, and a sentence spending half its life at
+   0.55 opacity is a sentence at roughly 4.2:1, which is below the floor for
+   text someone is expected to read. */
 .flowbar-working-text {
   color: var(--body);
   animation: flowbar-breathe 1.5s ease-in-out infinite;
@@ -763,17 +867,31 @@
 }
 
 /* Between key-release and text landing. Neutral, not green: the microphone is
-   closed, and green must only ever mean it is open. */
+ * closed, and green must only ever mean it is open.
+ *
+ * superwhisper uses blue for this state and yellow for a loading model. The
+ * yellow has a counterpart here — `--warn` already means "not wrong, but not
+ * finished" — but the blue does not, and inventing one would break the rule that
+ * makes the green mean anything. Neutral says the same thing without spending a
+ * colour the system has not got. */
 .flowbar[data-working="true"] .flowbar-mic {
   background: var(--body);
 }
 
-.flowbar[data-mode="failed"] .flowbar-mic {
+.flowbar[data-mode="failed"] .flowbar-mic,
+.flowbar[data-mode="enginefail"] .flowbar-mic {
   background: var(--danger);
 }
 
-.flowbar[data-mode="notice"] .flowbar-mic {
+.flowbar[data-mode="notice"] .flowbar-mic,
+.flowbar[data-mode="loading"] .flowbar-mic {
   background: var(--warn);
+}
+
+/* The engine is not up yet, and in the compact form the dot is the only thing
+   that can say so. Slow, so it reads as waiting rather than as alarm. */
+.flowbar[data-mode="loading"] .flowbar-mic {
+  animation: flowbar-breathe 1.8s ease-in-out infinite;
 }
 
 /* The landing.
@@ -814,6 +932,7 @@
 @media (prefers-reduced-motion: reduce) {
   .flowbar-body,
   .flowbar-working-text,
+  .flowbar[data-mode="loading"] .flowbar-mic,
   .flowbar-mic[data-confirm="true"] {
     animation: none;
   }

@@ -149,6 +149,11 @@ const SHOTS = [
   {
     name: "flow-bar",
     url: `${BASE}/?window=overlay`,
+    // The bar now reports the engine honestly, which means that without a
+    // bridge it correctly renders "Starting the speech engine…" -- there is no
+    // engine behind a browser tab. The README wants the idle pill, so this shot
+    // needs the same stubbed `get_status` every other screen uses.
+    stub: true,
     // Sized to the pill itself. Extra height would be captured as transparent
     // padding, which reads in a README as a misaligned image.
     width: 420,
