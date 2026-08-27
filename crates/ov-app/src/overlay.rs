@@ -415,7 +415,9 @@ impl Overlay {
         let next = shape_rect(pill_w, pill_h, margin);
         let (now, is_shrink) = {
             let mut cur = self.shape.lock().expect("shape");
-            let is_shrink = cur.map_or(false, |c| (next.2 - next.0) <= (c.2 - c.0) && (next.3 - next.1) <= (c.3 - c.1));
+            let is_shrink = cur.is_some_and(|c| {
+                (next.2 - next.0) <= (c.2 - c.0) && (next.3 - next.1) <= (c.3 - c.1)
+            });
             let union = cur.map_or(next, |c| if is_shrink { next } else { union_rect(c, next) });
             *cur = Some(next);
             (union, is_shrink)

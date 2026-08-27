@@ -853,9 +853,8 @@ fn configure_overlay(app: &AppHandle) {
     use std::mem::size_of;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
-        DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE,
-        DWMWCP_DONOTROUND, DWMNCRP_DISABLED,
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
@@ -928,7 +927,9 @@ fn configure_overlay(app: &AppHandle) {
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
     }
-    tracing::info!("overlay set to non-activating, topmost, and frame-changed with DWM border suppression");
+    tracing::info!(
+        "overlay set to non-activating, topmost, and frame-changed with DWM border suppression"
+    );
 }
 
 #[cfg(not(windows))]
