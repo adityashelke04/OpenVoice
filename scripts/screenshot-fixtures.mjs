@@ -271,6 +271,15 @@ export function responses(now = Date.now()) {
       shortcut: "Right Ctrl",
       mic: "Microphone Array (Realtek Audio)",
     },
+    // The Flow Bar asks for this on launch to restore its compact/docked form.
+    overlay_placement: {
+      x: 0,
+      y: 0,
+      always_visible: true,
+      hidden_until: 0,
+      mini: false,
+      edge: "bottom",
+    },
     get_settings: {
       config: CONFIG,
       model: "base.en",

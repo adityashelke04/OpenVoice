@@ -10,7 +10,8 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FlowBar } from "../ui";
+import { FlowBar, flowMode, flowSpeaks, flowText } from "../ui";
+import type { FlowEdge, FlowMode, FlowStatus } from "../ui";
 import { playCompletionChime, playStartTone } from "../ui/sound";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
 import { useSettings } from "../screens/Settings";
@@ -72,6 +73,93 @@ const PILL_TOP = 22;
  */
 const PILL_H = 40;
 
+/**
+ * The compact indicator's short axis.
+ *
+ * Big enough to hold the 7px status dot and a hairline border with room left to
+ * read as a pill rather than as a line.
+ */
+const MINI_H = 22;
+
+/**
+ * Pointer travel, in pixels, that turns a press into a drag rather than a click.
+ *
+ * There has to be a threshold, because the bar is both a handle and a button.
+ * Four pixels is below what anyone moves on purpose and above what a hand resting
+ * on a mouse produces while clicking.
+ */
+const DRAG_SLOP = 4;
+
+/** The pill's painted box, in logical pixels. */
+type Geo = { w: number; h: number };
+
+/**
+ * How big the pill has to be to say what it is currently saying.
+ *
+ * One function, consulted by the shape sent to Rust and by the pill's own style,
+ * so the region the window is clipped to and the box CSS paints cannot disagree.
+ * It replaces a nested ternary that knew about four states and a fixed CSS height
+ * that knew about none of them — which is what made a compact or a docked form
+ * impossible to express.
+ */
+function geometry(v: {
+  mode: FlowMode;
+  mini: boolean;
+  edge: FlowEdge;
+  menu: boolean;
+  hint: string;
+  text?: string;
+  menuH: number;
+}): Geo {
+  // The menu claims its own box regardless of what the bar is saying behind it.
+  if (v.menu) return { w: 280, h: v.menuH };
+
+  // Docked to a side edge, with nothing that needs words: a column. Anything
+  // with a sentence to deliver unfurls back to horizontal — see `flowSpeaks`.
+  const column = v.edge !== "bottom" && !flowSpeaks(v.mode);
+  if (column) {
+    const short = v.mini ? MINI_H : 34;
+    if (v.mode === "live") return { w: short, h: v.mini ? 74 : 132 };
+    return { w: short, h: v.mini ? MINI_H : 52 };
+  }
+
+  if (v.mini) {
+    // Wide enough for the dot plus seven waveform bars while live; a squat pill
+    // around the dot alone otherwise.
+    return { w: v.mode === "live" ? 78 : 44, h: MINI_H };
+  }
+
+  if (v.mode === "live") return { w: 240, h: PILL_H };
+  if (v.mode === "working") return { w: 170, h: PILL_H };
+
+  // Measured from their own content rather than fixed. The old 248px alert tier
+  // truncated real engine messages at about thirty characters, which is reliably
+  // before the part that says what to do about it.
+  if (v.text !== undefined) {
+    const w = Math.ceil(MSG_CHROME + textWidth(v.text, "400 12px $sans"));
+    return { w: Math.min(360, Math.max(200, w)), h: PILL_H };
+  }
+
+  // Idle. The fixed 150px tier fit exactly one shortcut — the default — and any
+  // remap collided with the word "Hold" and was clipped.
+  const w = Math.ceil(IDLE_CHROME + textWidth(v.hint, "500 11px $mono"));
+  return { w: Math.max(150, w), h: PILL_H };
+}
+
+/** One row of the Flow Menu. `sep` renders a divider before the item. */
+type MenuRow = { id: string; label: string; run: () => void; sep?: boolean };
+
+const MENU_PAD = 4;
+const MENU_ITEM = 28;
+const MENU_SEP = 9;
+
+/** The menu's height, computed from its contents rather than pinned to a number
+ *  that silently stops matching the moment an item is added. */
+function menuHeight(rows: MenuRow[]): number {
+  const seps = rows.filter((r) => r.sep).length;
+  return PILL_H + MENU_PAD * 2 + rows.length * MENU_ITEM + seps * MENU_SEP + 12;
+}
+
 /** How long the bar takes to slide into a snapped position after a drag. */
 const SETTLE_MS = 220;
 
@@ -119,7 +207,7 @@ function isEcho(history: Array<[number, number]>, x: number, y: number): boolean
  * point of computing it is every *other* shortcut, which previously collided
  * with the word "Hold" and got clipped by the pill's own `overflow: hidden`.
  */
-const IDLE_CHROME = 85;
+const IDLE_CHROME = 85 + 22;
 
 /** Padding, border, dot and gap around a message. Same method as above. */
 const MSG_CHROME = 49;
@@ -327,6 +415,12 @@ export function Overlay() {
   const { settings } = useSettings();
   const [menu, setMenu] = useState(false);
   const [snapping, setSnapping] = useState(false);
+  /** Compact rather than full. Persisted in Rust; see `overlay_set_mini`. */
+  const [mini, setMini] = useState(false);
+  /** Whether the pointer is over the bar, which is what expands a compact one. */
+  const [hovering, setHovering] = useState(false);
+  /** Which edge the bar is docked to, and so which axis it lays out on. */
+  const [edge, setEdge] = useState<FlowEdge>("bottom");
   /**
    * When the current drag was last known to be real, as a `performance.now()`
    * stamp, or 0 for "not dragging".
@@ -384,11 +478,28 @@ export function Overlay() {
       // The payload is the anchor itself now, not the window's origin. Rust owns
       // the conversion, so there is no longer a second implementation of it here
       // to disagree with the first.
-      un = await listen<[number, number]>("overlay-parked", ({ payload }) => {
+      un = await listen<[number, number, FlowEdge]>("overlay-parked", ({ payload }) => {
         anchor.current = { cx: payload[0], top: payload[1] };
         noteWindowAt(payload[0] - OVERLAY_W / 2, payload[1] - PILL_TOP);
-        mark("parked", { anchor: anchor.current });
+        // The edge rides along with the anchor, because a bar restored onto a
+        // side edge has to come back as a column rather than as a horizontal
+        // pill hanging off the screen.
+        if (payload[2]) setEdge(payload[2]);
+        mark("parked", { anchor: anchor.current, edge: payload[2] });
       });
+    })();
+    return () => un?.();
+  }, []);
+
+  // The compact/full choice is persisted in Rust and can be changed from either
+  // the bar's own menu or the Hub, so it arrives as an event rather than being
+  // owned here.
+  useEffect(() => {
+    if (!inTauri()) return;
+    let un: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      un = await listen<boolean>("overlay-mini", ({ payload }) => setMini(payload));
     })();
     return () => un?.();
   }, []);
@@ -410,6 +521,16 @@ export function Overlay() {
       // the last place a window dimension could reach the anchor, and every such
       // path has been a bug at least once.
       anchor.current = anchorFrom(pos.x / scale, pos.y / scale);
+      // The persisted compact and docked choices come back on the same trip, so
+      // the bar is never briefly the wrong shape on launch.
+      void (async () => {
+        const saved = (await call("overlay_placement")) as
+          | { mini?: boolean; edge?: FlowEdge }
+          | undefined;
+        if (!live || !saved) return;
+        if (saved.mini) setMini(true);
+        if (saved.edge) setEdge(saved.edge);
+      })();
       // Seeds the trace's idea of where the window is. It is maintained after
       // this by parking and by the settle, the only two things that move it.
       noteWindowAt(pos.x / scale, pos.y / scale);
@@ -423,6 +544,24 @@ export function Overlay() {
   const live = view.state === "listening";
   const working = view.state === "transcribing" || view.state === "injecting";
   const soundEnabled = settings?.config.sound_enabled ?? true;
+
+  /**
+   * Whether the speech engine is actually up, which this window used to have no
+   * opinion about.
+   *
+   * `main.rs` says of showing the bar at startup that it "is the only evidence
+   * the user has that anything is happening during those nine seconds" — and then
+   * this file read neither `view.download` nor `view.error`, so it spent those
+   * nine seconds, and the 1.6 GB download before them, displaying "Hold Right
+   * Ctrl". A hard engine failure displayed it forever. The invitation was to
+   * press a key that was not going to do anything, on the one surface that is on
+   * screen while it matters.
+   */
+  const status: FlowStatus = view.error ? "error" : view.ready ? "ready" : "loading";
+  const progress =
+    view.download && view.download.total > 0
+      ? view.download.done / view.download.total
+      : undefined;
 
   // Two tones: one when the hotkey engages, one when a dictation finishes and
   // actually landed. Tracked off the raw state transition rather than the
@@ -675,14 +814,18 @@ export function Overlay() {
             pillW: box.current.w,
             pillH: box.current.h,
           })) as
-            | [number, number]
+            | [number, number, FlowEdge]
             | undefined;
           // `lx, ly` is where the drag actually ended, captured in the same turn
           // as the move that reported it. Passing it to `settleTo` as the origin
           // removes the three awaits that used to stand between the commit and
           // reading the window's position back — during which a resize could land
           // and leave the slide travelling from somewhere the bar no longer was.
-          if (to) void settleTo(lx, ly, to[0], to[1]);
+          if (!to) return;
+          // The edge comes back with the position, so docking to a side and
+          // reorienting into a column are one event rather than two.
+          setEdge(to[2] ?? "bottom");
+          void settleTo(lx, ly, to[0], to[1]);
         }, 120);
       });
     })();
@@ -693,13 +836,54 @@ export function Overlay() {
     };
   }, [settleTo]);
 
-  const startDrag = useCallback(async (e: React.MouseEvent) => {
-    if (e.button !== 0 || !inTauri()) return;
-    setMenu(false);
+  /**
+   * Press, then either a drag or a click.
+   *
+   * The bar is both a handle and a button, so the press cannot commit to either
+   * until the pointer says which. `startDragging` is therefore deferred until the
+   * pointer has travelled `DRAG_SLOP`: hand off to the Windows move loop any
+   * earlier and there is no click at all, because that loop dispatches
+   * `WM_NCLBUTTONDOWN` and swallows the mouse-up — the same property the
+   * `dragging` timestamp above exists to work around.
+   */
+  const press = useRef<{ x: number; y: number; moved: boolean; dismissed: boolean } | null>(
+    null,
+  );
+
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0 || !inTauri()) return;
+      // A click that closes the menu has already done its job. Without
+      // remembering that, dismissing the menu by clicking the bar behind it also
+      // opened the microphone — two outcomes from one click, and the one the user
+      // did not ask for is the one that starts recording them.
+      press.current = { x: e.screenX, y: e.screenY, moved: false, dismissed: menu };
+      setMenu(false);
+    },
+    [menu],
+  );
+
+  const onMouseMove = useCallback(async (e: React.MouseEvent) => {
+    const p = press.current;
+    if (!p || p.moved) return;
+    if (Math.abs(e.screenX - p.x) < DRAG_SLOP && Math.abs(e.screenY - p.y) < DRAG_SLOP) return;
+    p.moved = true;
     dragging.current = performance.now();
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().startDragging();
   }, []);
+
+  const onMouseUp = useCallback(() => {
+    const p = press.current;
+    press.current = null;
+    // A drag ends inside the OS move loop, which never returns a mouse-up here.
+    // Reaching this line at all means the pointer stayed put: a click.
+    if (!p || p.moved || p.dismissed) return;
+    // Nothing to start yet. The bar says so in this state — see `status` — and a
+    // click that silently did nothing would contradict what it is displaying.
+    if (status !== "ready") return;
+    void call("toggle_session");
+  }, [status]);
 
   // The window is sized to exactly what is painted, and resized whenever that
   // changes.
@@ -727,10 +911,29 @@ export function Overlay() {
   // tier truncated real engine messages at about thirty characters, which is
   // reliably before the part that says what to do about it.
   const hint = view.ready?.shortcut ?? "Right Ctrl";
-  const idleWidth = Math.max(150, Math.ceil(IDLE_CHROME + textWidth(hint, "500 11px $mono")));
-  const alertWidth = alertText
-    ? Math.min(360, Math.max(200, Math.ceil(MSG_CHROME + textWidth(alertText, "400 12px $sans"))))
-    : 248;
+
+  // Hovering a compact bar shows the full one. superwhisper's mini window does
+  // the same, and the reason is that a compact bar has deliberately given up its
+  // labels — hover is how you get them back without giving up the space
+  // permanently. A live session always renders full: the whole point of the
+  // window is being readable while the microphone is open.
+  const compact = mini && !hovering && !live && !menu;
+
+  const messageText = alerting ? alertText : undefined;
+  const mode = flowMode({
+    live,
+    working,
+    failed: failed && alerting,
+    message: messageText,
+    status,
+  });
+  // The same words the component will render. Sizing the window from a private
+  // copy of this logic is what clipped "Starting the speech engine…" down to
+  // "Starting the speech en…": the shape was measured for the idle pill because
+  // only the component knew there was a sentence coming.
+  const barText = flowText({ mode, message: messageText, progress });
+
+  const rows = useFlowMenu({ mini, live, working, setMenu, setMini });
 
   // These are the *window's* target, not the pill's painted size.
   //
@@ -742,16 +945,17 @@ export function Overlay() {
   // The pill now reads its width off the window instead (`.overlay-hit` in
   // overlay.css), so it can be briefly the previous size but never the wrong
   // shape, and this stays what it always meant: where the window is going.
-  const pillWidth = menu
-    ? 280
-    : alerting
-      ? alertWidth
-      : live
-        ? 240
-        : working
-          ? 170
-          : idleWidth;
-  const pillHeight = menu ? 226 : PILL_H;
+  const geo = geometry({
+    mode,
+    mini: compact,
+    edge,
+    menu,
+    hint,
+    text: barText,
+    menuH: menuHeight(rows),
+  });
+  const pillWidth = geo.w;
+  const pillHeight = geo.h;
 
   // Never both: the menu already claims a much larger box for its own purposes,
   // and stacking the glow margin on top would overshoot it. The menu also closes
@@ -841,12 +1045,35 @@ export function Overlay() {
     ? "Listening. Press Escape to discard."
     : working
       ? "Writing your words"
-      : alerting
-        ? alertText
-        : "Ready. Hold the shortcut to dictate.";
+      : mode === "enginefail"
+        ? "The speech engine is unavailable. Open OpenVoice for details."
+        : mode === "loading"
+          ? progress != null
+            ? `Getting the speech model, ${Math.round(progress * 100)} percent`
+            : "Starting the speech engine"
+          : alerting
+            ? alertText
+            : `Ready. Hold ${hint} to dictate, or click the bar.`;
 
   return (
-    <div className="overlay-root" data-menu={menu}>
+    <div
+      className="overlay-root"
+      data-menu={menu}
+      data-edge={edge}
+      // On the root rather than on the pill, because the menu hangs *beside* the
+      // pill in the DOM and a custom property only inherits downward — set on
+      // `.overlay-hit`, the menu could not read it and sized itself to the whole
+      // 404px window. The height is here for the same reason the width is: the
+      // compact and docked forms are not 40px tall, and a CSS constant cannot
+      // know which one is on screen. Both are the numbers `geometry()` produced,
+      // which is also what Rust clips the window's region to.
+      style={
+        {
+          "--pill-w": `${pillWidth}px`,
+          "--pill-h": `${pillHeight}px`,
+        } as React.CSSProperties
+      }
+    >
       {/* `assertive` when something went wrong: a failure announced politely
           waits for the screen reader to finish whatever it was saying, which
           for a message about text that did not land is too late to be useful. */}
@@ -862,13 +1089,20 @@ export function Overlay() {
         // The number itself is safe to own here again: the window is bigger than
         // the widest pill in every state, so a pill painted at the previous width
         // for a frame is the previous width rather than a cropped one.
-        style={{ "--pill-w": `${pillWidth}px` } as React.CSSProperties}
-        onMouseDown={startDrag}
+        data-mini={compact}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        onMouseEnter={() => setHovering(true)}
+        onMouseLeave={() => {
+          setHovering(false);
+          press.current = null;
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenu((m) => !m);
         }}
-        title="Drag to move · right-click for options"
+        title="Click to dictate · drag to move · right-click for options"
       >
         <FlowBar
           live={live}
@@ -877,30 +1111,125 @@ export function Overlay() {
           hint={hint}
           working={working}
           failed={failed && alerting}
-          message={alerting ? alertText : undefined}
+          message={messageText}
           confirm={confirm}
           publish={hit}
+          status={status}
+          progress={progress}
+          mini={compact}
+          edge={edge}
           onCancel={() => void call("cancel_session")}
+          onToggle={status === "ready" ? () => void call("toggle_session") : undefined}
         />
       </div>
 
       {menu && (
         <div className="overlay-menu" role="menu">
-          <button role="menuitem" onClick={() => { call("show_hub_cmd"); setMenu(false); }}>
-            Open OpenVoice
-          </button>
-          <button role="menuitem" onClick={() => { call("paste_last"); setMenu(false); }}>
-            Paste last transcript
-          </button>
-          <div className="overlay-menu-sep" />
-          <button role="menuitem" onClick={() => { call("overlay_snooze", { minutes: 60 }); setMenu(false); }}>
-            Hide for an hour
-          </button>
-          <button role="menuitem" onClick={() => { call("overlay_always_visible", { on: false }); setMenu(false); }}>
-            Only show while dictating
-          </button>
+          {rows.map((r) => (
+            <div key={r.id}>
+              {r.sep && <div className="overlay-menu-sep" />}
+              <button role="menuitem" onClick={r.run}>
+                {r.label}
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * The Flow Menu.
+ *
+ * Modelled on Wispr Flow's, which offers Hide for 1 hour, Settings, Microphone,
+ * transcript history and Paste last transcript — and is the part of their bar
+ * that makes it a control surface rather than a status light. The two items this
+ * menu used to have could open the Hub and hide the bar, which meant every other
+ * thing a person might want mid-dictation required finding the Hub first.
+ *
+ * Destinations route to a named Hub section (see `show_hub_cmd`), so the labels
+ * name where they actually go.
+ */
+function useFlowMenu(v: {
+  mini: boolean;
+  live: boolean;
+  working: boolean;
+  setMenu: (b: boolean) => void;
+  setMini: (b: boolean) => void;
+}): MenuRow[] {
+  const { mini, live, working, setMenu, setMini } = v;
+  const close = useCallback(() => setMenu(false), [setMenu]);
+
+  return [
+    {
+      id: "dictate",
+      label: live ? "Stop dictating" : "Start dictating",
+      run: () => {
+        void call("toggle_session");
+        close();
+      },
+    },
+    {
+      id: "paste",
+      label: "Paste last transcript",
+      run: () => {
+        void call("paste_last");
+        close();
+      },
+    },
+    {
+      id: "history",
+      label: "Transcript history",
+      sep: true,
+      run: () => {
+        void call("show_hub_cmd", { tab: "home" });
+        close();
+      },
+    },
+    {
+      id: "mic",
+      label: "Microphone",
+      run: () => {
+        void call("show_hub_cmd", { tab: "settings" });
+        close();
+      },
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      run: () => {
+        void call("show_hub_cmd", { tab: "settings" });
+        close();
+      },
+    },
+    {
+      id: "mini",
+      label: mini ? "Full bar" : "Compact bar",
+      sep: true,
+      run: () => {
+        setMini(!mini);
+        void call("overlay_set_mini", { on: !mini });
+        close();
+      },
+    },
+    {
+      // Named for what it does rather than for how long, because an hour is a
+      // detail and "you will not see this again today" is the decision.
+      id: "snooze",
+      label: "Hide for an hour",
+      run: () => {
+        void call("overlay_snooze", { minutes: 60 });
+        close();
+      },
+    },
+    {
+      id: "dictate-only",
+      label: "Only show while dictating",
+      run: () => {
+        void call("overlay_always_visible", { on: false });
+        close();
+      },
+    },
+  ].filter((r) => !(working && r.id === "dictate"));
 }

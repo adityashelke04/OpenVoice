@@ -96,6 +96,19 @@ export function Hub() {
   const [rows, setRows] = useState<Row[]>([]);
   const [query, setQuery] = useState("");
 
+  // The Flow Bar's menu names destinations — Microphone, History, Settings — and
+  // this is what makes those labels true rather than three different ways to
+  // open whatever screen the Hub was last left on.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    let un: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      un = await listen<string>("hub-navigate", ({ payload }) => setTab(payload));
+    })();
+    return () => un?.();
+  }, []);
+
   const [totals, setTotals] = useState<Totals | null>(null);
 
   const load = useCallback(async (search: string) => {

@@ -588,6 +588,14 @@ fn cancel_session(state: tauri::State<'_, AppState>) {
     }
 }
 
+/// Start or stop a dictation from the Flow Bar itself. See `Engine::toggle`.
+#[tauri::command]
+fn toggle_session(state: tauri::State<'_, AppState>) {
+    if let Some(e) = state.engine.lock().expect("engine").as_ref() {
+        e.toggle();
+    }
+}
+
 #[tauri::command]
 fn overlay_snooze(app: AppHandle, minutes: u64) {
     if let Some(win) = overlay::window(&app) {
@@ -730,6 +738,7 @@ fn main() {
             overlay_set_mini,
             overlay_state,
             cancel_session,
+            toggle_session,
             show_hub_cmd,
             get_settings,
             save_settings,
@@ -990,9 +999,19 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Show the Hub, optionally on a named section.
+///
+/// The Flow Bar's menu offers Microphone, History and Settings as distinct
+/// destinations -- Wispr Flow's does the same -- and each of them landing the
+/// user on whatever screen the Hub happened to be showing would make the labels
+/// decorative. The tab name is a hint, not a command: an unrecognised one leaves
+/// the Hub where it was rather than blanking it.
 #[tauri::command]
-fn show_hub_cmd(app: AppHandle) {
+fn show_hub_cmd(app: AppHandle, tab: Option<String>) {
     show_hub(&app);
+    if let (Some(tab), Some(win)) = (tab, app.get_webview_window("hub")) {
+        let _ = win.emit("hub-navigate", tab);
+    }
 }
 
 /// Restart the app so a new speech model can be loaded.

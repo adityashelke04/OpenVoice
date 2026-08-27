@@ -84,6 +84,9 @@
    can be read as a sequence instead of guessed at. */
 .fbs-frame-bar {
   width: 150px;
+  /* The pill takes its height from its window, which on this review surface is
+     whatever the row gives it. Without a height here it collapses to nothing. */
+  height: 40px;
 }
 
 .fbs-frame-bar .flowbar-mic[data-confirm="true"] {
@@ -179,6 +182,9 @@
    there. Left flexible here so the tier is stated in one place only. */
 .fbs-row-bar {
   flex: none;
+  /* See `.fbs-frame-bar`: the pill is sized by its window in the app, and by
+     the row here. Overridden per row for the compact and docked forms. */
+  height: 40px;
 }
 
 .fbs-row-width {

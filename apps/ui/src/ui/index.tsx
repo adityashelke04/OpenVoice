@@ -367,7 +367,13 @@ export function Waveform({
         // sqrt approximates perceived loudness, so quiet speech still moves the
         // bar visibly while loud speech does not slam into the ceiling.
         const v = MIN + Math.sqrt(current[i]) * (1 - MIN);
-        nodes[i].style.transform = `scaleY(${v.toFixed(4)})`;
+        // A custom property rather than the transform itself, so the stylesheet
+        // owns which axis this scales. Docked to a side edge the bar runs
+        // vertically and the wave has to run with it, and the alternative — a
+        // quarter-turn `rotate` on the container — needs the container's own
+        // length in advance, which is a number this loop has no business
+        // knowing. The write is the same cost either way.
+        nodes[i].style.setProperty("--v", v.toFixed(4));
       }
     };
 
@@ -392,6 +398,97 @@ export function Waveform({
  * it is the confirmation that the key registered, readable in peripheral vision
  * before any glyph or colour is resolved.
  */
+/** Which way the bar is laid out, mirroring `Edge` in `overlay.rs`. */
+export type FlowEdge = "bottom" | "left" | "right";
+
+/** Engine health, independent of whatever a session is doing. */
+export type FlowStatus = "loading" | "ready" | "error";
+
+/**
+ * The states the bar can be in, in precedence order.
+ *
+ * One name for what the bar is currently saying, so the class hooks, the
+ * content, the window size and the entrance animation cannot disagree about it.
+ */
+export type FlowMode =
+  | "failed"
+  | "enginefail"
+  | "notice"
+  | "live"
+  | "working"
+  | "loading"
+  | "idle";
+
+/**
+ * What the bar is saying, resolved once.
+ *
+ * Exported because the window has to size itself to this before it renders it,
+ * and a second copy of the precedence rules in `Overlay.tsx` would drift from
+ * this one the first time either changed.
+ */
+export function flowMode(v: {
+  live?: boolean;
+  working?: boolean;
+  failed?: boolean;
+  message?: string;
+  status?: FlowStatus;
+}): FlowMode {
+  if (v.failed) return "failed";
+  if (v.live) return "live";
+  if (v.working) return "working";
+  // Everything below here is a resting state, and they are ordered by how much
+  // the user needs to know. A dead engine outranks a stale notice: the notice
+  // describes one dictation that went sideways, the engine describes every
+  // dictation that is not going to happen.
+  if (v.status === "error") return "enginefail";
+  if (v.message) return "notice";
+  if (v.status === "loading") return "loading";
+  return "idle";
+}
+
+/**
+ * Whether this mode has something to say in words.
+ *
+ * Docked vertically, the bar is a narrow column — too narrow for a sentence, and
+ * rotating the text would make a failure message something you have to tilt your
+ * head to read. So the modes that carry words unfurl back to horizontal even
+ * while docked; the column is for the resting states, which say everything they
+ * need to with a colour and a shape.
+ */
+export function flowSpeaks(mode: FlowMode): boolean {
+  return mode === "failed" || mode === "notice" || mode === "enginefail" || mode === "loading";
+}
+
+/**
+ * The words this mode puts on the bar, or `undefined` when it has none.
+ *
+ * Exported for the same reason `flowMode` is, and it was a real bug before it
+ * was: the window is sized from the text *before* the component renders it, so
+ * when the component generated the loading and engine-failure sentences
+ * privately, the window sized itself for the idle pill and the sentence was
+ * clipped at "Starting the speech en…". One function, two callers, no drift.
+ */
+export function flowText(v: {
+  mode: FlowMode;
+  message?: string;
+  progress?: number;
+}): string | undefined {
+  switch (v.mode) {
+    case "failed":
+      return v.message ?? "Dictation failed";
+    case "notice":
+      return v.message;
+    case "enginefail":
+      return v.message ?? "Speech engine unavailable — open OpenVoice";
+    case "loading":
+      return v.progress != null
+        ? `Getting the speech model… ${Math.round(v.progress * 100)}%`
+        : "Starting the speech engine…";
+    default:
+      return undefined;
+  }
+}
+
 export function FlowBar({
   live,
   level,
@@ -404,6 +501,11 @@ export function FlowBar({
   confirm,
   publish,
   onCancel,
+  status = "ready",
+  progress,
+  mini = false,
+  edge = "bottom",
+  onToggle,
 }: {
   live: boolean;
   /** Static level, for the component sheet and previews. The overlay uses
@@ -439,6 +541,30 @@ export function FlowBar({
    * is what makes the capability real; the key remains the fast way.
    */
   onCancel?: () => void;
+  /**
+   * Whether the speech engine is up.
+   *
+   * The bar used to have no opinion about this, which made it dishonest in the
+   * one window that is on screen while it matters: through the first-run model
+   * download and the several seconds of loading that follow it, and forever
+   * after a hard engine failure, it displayed "Hold Right Ctrl" — an invitation
+   * to press a key that was not going to do anything.
+   */
+  status?: FlowStatus;
+  /** Download progress, 0..1, when the size is known. */
+  progress?: number;
+  /**
+   * Render as the compact indicator rather than the full pill.
+   *
+   * superwhisper's mini window, and the reason to copy it is that the honest
+   * answer to "this thing is in my way" is to make it smaller rather than to
+   * hide it. A bar you have hidden cannot tell you the microphone is open.
+   */
+  mini?: boolean;
+  /** Which edge the bar is docked to, and so which axis it lays out on. */
+  edge?: FlowEdge;
+  /** Start or stop a dictation by clicking the bar. */
+  onToggle?: () => void;
 }) {
   /**
    * Where the live level gets published.
@@ -451,17 +577,11 @@ export function FlowBar({
   const root = useRef<HTMLDivElement>(null);
   const sink = publish ?? root;
 
-  // One name for what the bar is currently saying, so the class hooks, the
-  // content and the entrance animation cannot disagree about it.
-  const mode = failed
-    ? "failed"
-    : message && !live && !working
-      ? "notice"
-      : live
-        ? "live"
-        : working
-          ? "working"
-          : "idle";
+  const mode = flowMode({ live, working, failed, message, status });
+  // Docked vertically *and* with nothing to say. See `flowSpeaks`.
+  const column = edge !== "bottom" && !flowSpeaks(mode);
+
+  const text = flowText({ mode, message, progress });
 
   return (
     <div
@@ -471,13 +591,15 @@ export function FlowBar({
       data-working={working}
       data-failed={failed}
       data-mode={mode}
+      data-mini={mini}
+      data-column={column}
     >
       <span className="flowbar-mic" data-confirm={confirm} />
       {/* Keyed on the mode so React replaces the subtree on every change, which
           is what replays the entrance animation. Without the key the text
           swaps in place and the bar reads as a label that changed rather than a
           state that did. */}
-      <div className="flowbar-body" key={mode}>
+      <div className="flowbar-body" key={`${mode}:${mini}:${column}`}>
         {mode === "live" ? (
           <>
             <div className="flowbar-wave">
@@ -485,13 +607,20 @@ export function FlowBar({
                   At 1:1 — the size this is actually seen at, in the corner of an
                   eye — thirty-two bars across ~150px read as a green texture
                   rather than "a shape that travels", which is the whole claim
-                  the waveform makes. Same argument DESIGN.md already used to put
-                  seven bars in the tray icon instead of thirty-two, applied at
-                  the size this one is really used. */}
-              <Waveform level={level} levelRef={levelRef} bars={24} publish={sink} />
+                  the waveform makes.
+
+                  The compact forms get fewer still: the count has to fall with
+                  the space or the bars stop being individually visible and the
+                  shape stops travelling, which is the only thing this is for. */}
+              <Waveform
+                level={level}
+                levelRef={levelRef}
+                bars={mini ? 7 : column ? 10 : 24}
+                publish={sink}
+              />
             </div>
-            <span className="flowbar-time">{elapsed}</span>
-            {onCancel ? (
+            {!mini && !column && <span className="flowbar-time">{elapsed}</span>}
+            {onCancel && !mini && !column ? (
               <button
                 type="button"
                 className="flowbar-cancel"
@@ -501,7 +630,10 @@ export function FlowBar({
                 // hands the pointer to the Windows move loop and the click never
                 // lands.
                 onMouseDown={(e) => e.stopPropagation()}
-                onClick={onCancel}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCancel();
+                }}
               >
                 <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden focusable="false">
                   <path
@@ -514,21 +646,53 @@ export function FlowBar({
               </button>
             ) : null}
           </>
-        ) : mode === "failed" || mode === "notice" ? (
-          <span className="flowbar-msg" title={message}>
-            {message ?? "Dictation failed"}
+        ) : text !== undefined ? (
+          <span className="flowbar-msg" title={text}>
+            {text}
           </span>
         ) : mode === "working" ? (
           // No spinner. The bar itself is already the indicator, and this
           // window exists to be glanced at, not watched. The motion it does get
           // is the text's own — see `.flowbar-working-text`.
-          <span className="flowbar-working-text t-caption">Writing…</span>
-        ) : (
+          <span className="flowbar-working-text t-caption">
+            {mini || column ? "···" : "Writing…"}
+          </span>
+        ) : mini || column ? // Nothing but the dot. In the compact forms the dot *is* the bar, and
+        // the shortcut it would otherwise name is one the user already knows —
+        // which is why they made it small. Hovering brings the words back.
+        null : (
           <div className="flowbar-idle">
             <span className="t-caption" style={{ color: "var(--mute)" }}>
               Hold
             </span>
             <Kbd>{hint}</Kbd>
+            {onToggle ? (
+              <button
+                type="button"
+                className="flowbar-go"
+                aria-label="Start dictating"
+                title="Click to dictate"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggle();
+                }}
+              >
+                {/* A microphone, because this is the one control that opens one.
+                    Drawn rather than pulled from an icon font: two shapes and an
+                    arc is less code than a dependency. */}
+                <svg viewBox="0 0 12 16" width="10" height="13" aria-hidden focusable="false">
+                  <rect x="4" y="1" width="4" height="7" rx="2" fill="currentColor" />
+                  <path
+                    d="M2 7a4 4 0 0 0 8 0M6 11v3"
+                    stroke="currentColor"
+                    strokeWidth="1.3"
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                </svg>
+              </button>
+            ) : null}
           </div>
         )}
       </div>

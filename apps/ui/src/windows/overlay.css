@@ -33,11 +33,23 @@
   overflow: visible;
   box-sizing: border-box;
 
-  /* The pill's height. Must equal `PILL_H` in Overlay.tsx and `overlay.rs`.
-     Three copies of one identity, one per language, each with a comment saying
-     so, because the region Rust clips to and the box CSS paints have to be the
-     same rectangle. */
+  /* The full pill's height, and only a fallback now.
+     Overlay.tsx sets `--pill-h` inline on `.overlay-hit` from the same
+     `geometry()` call that decides the shape Rust clips the window to, because
+     the compact and docked forms are not 40px tall and a constant here could not
+     know which one is on screen. This value is what the component sheet and any
+     other host outside the real window fall back to. */
   --pill-h: 40px;
+}
+
+/* Docked to a side edge, the menu has to open away from that edge or it opens
+   off the screen. The pill stays where it is; only the panel changes side. */
+.overlay-root[data-edge="left"][data-menu="true"] {
+  align-items: flex-start;
+}
+
+.overlay-root[data-edge="right"][data-menu="true"] {
+  align-items: flex-end;
 }
 
 /* No width transition, deliberately.
@@ -104,10 +116,26 @@
   cursor: grabbing;
 }
 
+/* The compact bar is a button before it is a handle: at 44x22 there is not much
+   of it to grab, and the thing people want from a bar that small is to press it
+   or to hover it back to full size. */
+.overlay-hit[data-mini="true"] {
+  cursor: pointer;
+}
+
+/* The Flow Menu.
+ *
+ * Modelled on Wispr Flow's: the bar's own control surface, so that the things
+ * you want mid-dictation — paste the last transcript, change the microphone,
+ * make the bar smaller, make it go away for an hour — do not require finding
+ * the Hub first. */
 .overlay-menu {
   pointer-events: auto;
   margin-top: var(--s-2);
-  min-width: 208px;
+  /* Matches the pill it hangs from rather than the window, which is a fixed 404
+     and much wider than the menu should be. `geometry()` widens the pill to 280
+     while the menu is open for exactly this reason. */
+  width: var(--pill-w, 208px);
   padding: var(--s-2);
   background: rgb(16 16 18 / 98%);
   border: 1px solid var(--hairline-strong);
@@ -120,10 +148,11 @@
 .overlay-menu button {
   display: block;
   width: 100%;
-  padding: 7px var(--s-3);
+  height: 28px;
+  padding: 0 var(--s-3);
   border-radius: var(--r-md);
   text-align: left;
-  font: 400 13px/1.3 var(--font-sans);
+  font: 400 13px/28px var(--font-sans);
   color: var(--body);
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
@@ -131,6 +160,11 @@
 .overlay-menu button:hover {
   background: var(--surface-3);
   color: var(--ink);
+}
+
+.overlay-menu button:focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: -2px;
 }
 
 .overlay-menu-sep {
