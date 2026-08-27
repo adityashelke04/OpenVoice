@@ -61,7 +61,7 @@ const GLOW_MARGIN = 22;
  */
 const OVERLAY_W = 404;
 /** The pill's top edge, from the window's top. Constant in every state. */
-const PILL_TOP = 22;
+const PILL_TOP = 44;
 
 /**
  * The pill's height, in every state but the menu.
@@ -109,10 +109,11 @@ function geometry(v: {
   menu: boolean;
   hint: string;
   text?: string;
-  menuH: number;
 }): Geo {
-  // The menu claims its own box regardless of what the bar is saying behind it.
-  if (v.menu) return { w: 280, h: v.menuH };
+  // When the menu is open, the pill is 280px wide to match the menu, but maintains
+  // its standard height (PILL_H or MINI_H). The window's overall shape is expanded
+  // to menuHeight(rows) separately in useWindowShape.
+  if (v.menu) return { w: 280, h: v.mini ? MINI_H : PILL_H };
 
   // Docked to a side edge, with nothing that needs words: a column. Anything
   // with a sentence to deliver unfurls back to horizontal — see `flowSpeaks`.
@@ -952,10 +953,10 @@ export function Overlay() {
     menu,
     hint,
     text: barText,
-    menuH: menuHeight(rows),
   });
   const pillWidth = geo.w;
   const pillHeight = geo.h;
+  const shapeHeight = menu ? menuHeight(rows) : pillHeight;
 
   // Never both: the menu already claims a much larger box for its own purposes,
   // and stacking the glow margin on top would overshoot it. The menu also closes
@@ -963,7 +964,7 @@ export function Overlay() {
   const glowing = live && !menu;
   const margin = glowing ? GLOW_MARGIN : 0;
 
-  useWindowShape(pillWidth, pillHeight, margin, box, geomReady);
+  useWindowShape(pillWidth, shapeHeight, margin, box, geomReady);
 
   // Measure what was actually painted against the window it was painted in.
   //
@@ -974,7 +975,7 @@ export function Overlay() {
   // catches are the ones nobody is watching for. See overlay-trace.ts.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    checkInvariants(hit.current, PILL_TOP);
+    checkInvariants(hit.current, PILL_TOP, pillHeight);
     // And separately: where the pill actually landed *on screen*, against where
     // it belongs. `checkInvariants` can pass in full while the bar is visibly in
     // the wrong place, because a pill centred in a viewport that has not caught

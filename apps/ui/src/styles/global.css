@@ -43,6 +43,12 @@ html[data-window="flowbar"] body {
   background: var(--canvas);
 }
 
+html[data-window="overlay"],
+html[data-window="overlay"] body,
+html[data-window="overlay"] #root {
+  background: transparent !important;
+}
+
 h1,
 h2,
 h3,

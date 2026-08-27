@@ -26,7 +26,7 @@
      the margin around it, which the window's region leaves unclipped. */
   align-items: center;
   justify-content: flex-start;
-  padding-top: 22px;
+  padding-top: 44px;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
@@ -42,49 +42,6 @@
   --pill-h: 40px;
 }
 
-/* Docked to a side edge, the menu has to open away from that edge or it opens
-   off the screen. The pill stays where it is; only the panel changes side. */
-.overlay-root[data-edge="left"][data-menu="true"] {
-  align-items: flex-start;
-}
-
-.overlay-root[data-edge="right"][data-menu="true"] {
-  align-items: flex-end;
-}
-
-/* No width transition, deliberately.
- *
- * An eased pill width would make the pill and the window's region disagree about
- * how big the bar is for the length of the transition. The region is what stops
- * the rest of the window swallowing clicks, so a pill easing outside it would be
- * visible but not clickable. The width change is therefore instant.
- *
- * The bar has plenty of motion without it: the content cross-fades, the
- * waveform has real ballistics, the glow tracks the voice, the landing has its
- * ring, and a snapped drag slides. None of those change its size.
- *
- * THE PILL'S SIZE IS THE JS NUMBER AGAIN — AND THAT IS NOW SAFE.
- *
- * It was not safe before, and the comment this replaces explained why at length:
- * the pill's width was a React number applied inline while the *window's* width
- * was the same number sent to Rust a round trip later, so for at least one frame
- * a 240px pill sat inside a 150px window and was cropped into a black rectangle.
- * ADR 0006 fixed that by deriving the width from the viewport instead.
- *
- * That fix was correct about size and created a bug about position, because a
- * viewport-derived width also implies a viewport-derived *centre*, and the
- * viewport arrives late. See the note at the top of this file.
- *
- * What makes the JS number safe now is that nothing clips the pill to the window
- * any more. The window is 404x248 in every state, which is larger than the widest
- * pill, so a pill briefly painted at the previous width is simply the previous
- * width — never cropped, never displaced. The window's *region* follows the pill
- * rather than the other way round, and it is grown before it is shrunk, so it
- * cannot clip either.
- *
- * `--pill-w` is set inline by Overlay.tsx. `data-fit` no longer scopes anything,
- * because this arithmetic is now the same in the real window and in the
- * component sheet. */
 .overlay-hit {
   pointer-events: auto;
   cursor: grab;
@@ -93,11 +50,6 @@
   height: var(--pill-h);
   display: flex;
   align-items: center;
-}
-
-/* The menu makes the pill a fixed width and lets its own height grow. */
-.overlay-root[data-menu="true"] .overlay-hit {
-  height: auto;
 }
 
 /* Dragging, and within reach of a snap line.

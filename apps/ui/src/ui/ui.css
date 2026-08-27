@@ -559,6 +559,7 @@
 .flowbar {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--s-3);
   /* Whatever the window is. See the note above: a constant here is a second
      opinion about the size of something that can only have one. */
@@ -571,7 +572,7 @@
    * not the desktop behind it — so it blurs nothing, while still forcing a
    * compositing layer that defeats the window transparency. It was contributing
    * to the visible rectangle. A solid fill is honest and cheaper. */
-  background: rgb(14 14 16 / 98%);
+  background: rgb(14 14 16);
   /* Slightly brighter than the app's hairline. This border is the pill's only
      separation: it fills its window edge to edge, so there is no room for a
      shadow, and it has to read against a white document as well as a dark one. */
@@ -703,10 +704,18 @@
 .flowbar-body {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--s-3);
-  flex: 1;
   min-width: 0;
   animation: flowbar-enter var(--t-base) var(--ease) both;
+}
+
+.flowbar[data-live="true"] .flowbar-body,
+.flowbar[data-mode="failed"] .flowbar-body,
+.flowbar[data-mode="enginefail"] .flowbar-body,
+.flowbar[data-mode="notice"] .flowbar-body,
+.flowbar[data-mode="loading"] .flowbar-body {
+  flex: 1;
 }
 
 .flowbar[data-column="true"] .flowbar-body {
@@ -738,8 +747,8 @@
 .flowbar-idle {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--s-3);
-  flex: 1;
   min-width: 0;
   white-space: nowrap;
 }
