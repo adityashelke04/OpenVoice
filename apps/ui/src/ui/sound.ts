@@ -13,6 +13,9 @@ let ctx: AudioContext | null = null;
 function getCtx(): AudioContext | null {
   if (typeof window === "undefined" || !("AudioContext" in window)) return null;
   ctx ??= new AudioContext();
+  if (ctx.state === "suspended") {
+    void ctx.resume();
+  }
   return ctx;
 }
 

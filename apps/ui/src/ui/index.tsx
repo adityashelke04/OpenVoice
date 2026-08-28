@@ -9,7 +9,24 @@
 
 import { useEffect, useRef } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { LoadingDots, TickingEllipsis } from "./LoadingDots";
+import { MicTestMeter } from "./MicTestMeter";
+import { useCountUp } from "./useCountUp";
+import { useLiveTimeAgo, formatTimeAgo } from "./useLiveTimeAgo";
 import "./ui.css";
+import "./loading-dots.css";
+import "./mic-test-meter.css";
+
+export { LoadingDots, TickingEllipsis, MicTestMeter, useCountUp, useLiveTimeAgo, formatTimeAgo };
+export type {
+  LoadingDotsProps,
+  TickingEllipsisProps,
+  LoadingTone,
+  LoadingSize,
+  LoadingVariant,
+} from "./LoadingDots";
+export type { MicTestMeterProps } from "./MicTestMeter";
+export type { CountUpOptions } from "./useCountUp";
 
 export type Tone = "neutral" | "live" | "warn" | "danger";
 
@@ -498,6 +515,7 @@ export function FlowBar({
   working,
   failed,
   message,
+  action,
   confirm,
   publish,
   onCancel,
@@ -528,6 +546,8 @@ export function FlowBar({
    * look like one, or the colour stops meaning anything.
    */
   message?: string;
+  /** Action control (e.g. interactive "Paste Now" button for clipboard fallback). */
+  action?: ReactNode;
   /** Momentary, on a clean landing. See `.flowbar-mic[data-confirm]`. */
   confirm?: boolean;
   /** Element the live level is published onto; see `Waveform`. */
@@ -646,17 +666,41 @@ export function FlowBar({
               </button>
             ) : null}
           </>
+        ) : mode === "loading" ? (
+          mini || column ? (
+            <LoadingDots size="sm" tone="warn" variant="wave" />
+          ) : (
+            <span className="flowbar-msg" title={text}>
+              {progress != null ? (
+                <TickingEllipsis
+                  text="Getting the speech model"
+                  suffix={` ${Math.round(progress * 100)}%`}
+                  tone="warn"
+                />
+              ) : (
+                <TickingEllipsis text="Starting the speech engine" tone="warn" />
+              )}
+            </span>
+          )
         ) : text !== undefined ? (
-          <span className="flowbar-msg" title={text}>
-            {text}
-          </span>
+          <>
+            <span className="flowbar-msg" title={text}>
+              {text}
+            </span>
+            {action && !mini && !column ? (
+              <div className="flowbar-action" onMouseDown={(e) => e.stopPropagation()}>
+                {action}
+              </div>
+            ) : null}
+          </>
         ) : mode === "working" ? (
-          // No spinner. The bar itself is already the indicator, and this
-          // window exists to be glanced at, not watched. The motion it does get
-          // is the text's own — see `.flowbar-working-text`.
-          <span className="flowbar-working-text t-caption">
-            {mini || column ? "···" : "Writing…"}
-          </span>
+          mini || column ? (
+            <LoadingDots size="sm" tone="body" variant="wave" />
+          ) : (
+            <span className="flowbar-working-text t-caption">
+              <TickingEllipsis text="Writing" tone="body" />
+            </span>
+          )
         ) : mini || column ? // Nothing but the dot. In the compact forms the dot *is* the bar, and
         // the shortcut it would otherwise name is one the user already knows —
         // which is why they made it small. Hovering brings the words back.

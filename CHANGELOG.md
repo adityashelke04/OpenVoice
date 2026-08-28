@@ -22,6 +22,26 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-28
+
+This release completely overhauls the design system typography with bundled modern font packages (Geist Sans, Geist Mono, Inter, JetBrains Mono), introduces GPU-accelerated harmonic kinetic wave loading animations and ticking ellipsis, adds live UI reactivity (smooth WPM count-ups, auto-refreshing timestamps, real-time LED microphone VU meter), eliminates the Flow Bar rectangular window clipping artifact, and removes clutter from the idle Flow Bar.
+
+### Fixed
+
+- **Flow Bar translucent rectangular border artifact eliminated.**
+  Removed the outer drop shadow on `.flowbar` that was bleeding outside the 40px rounded pill into the zero-margin Win32 GDI clipping region, strictly constraining shadows to an inner specular highlight (`box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 8%)`) and ensuring zero pixel bleed beyond the pill curvature.
+- **Streamlined idle Flow Bar visual design.**
+  Removed the redundant `· Prose` / `· Code` profile tag in the idle Flow Bar state to maintain a clean, distraction-free indicator displaying exclusively `Hold [Right Ctrl]` alongside the microphone trigger.
+
+### Added
+
+- **Modern bundled typography system.**
+  Integrated `@fontsource-variable/geist`, `@fontsource-variable/geist-mono`, `@fontsource-variable/inter`, and `@fontsource/jetbrains-mono` locally into the app bundle with full OpenType feature support (`tnum`, `calt`, `kern`, `liga`, `cv02-cv11`), replacing system defaults with crisp, high-legibility typefaces.
+- **Kinetic harmonic loading dots and ticking ellipsis.**
+  Implemented GPU-accelerated harmonic 3-dot wave bounce (`<LoadingDots />`) and synchronized kinetic ticking text (`<TickingEllipsis />`) during speech engine initialization, model downloads, and audio transcription.
+- **Live audio reactivity and zero-render LED VU meter.**
+  Added a real-time 12-segment green/amber/red LED VU meter in Settings with direct microphone testing mode (`<MicTestMeter />`), smooth numeric interpolation (`useCountUp`), and self-updating relative timestamps (`useLiveTimeAgo`).
+
 ## [0.4.1] - 2026-08-28
 
 This release fixes the Flow Bar context menu clipping into the taskbar or screen edge when the bar is positioned near the bottom of the display, introducing upward menu placement with zero-pixel pill displacement and precise native window region masking.
@@ -568,7 +588,8 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.2.0...v0.3.0

@@ -1,0 +1,145 @@
+/* MicTestMeter — Live audio input VU meter.
+ * Follows OpenVoice design tokens: #44D62C on pure black, no shadows, hairline borders.
+ */
+
+.mic-test-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: var(--control-h);
+  padding: 0 var(--s-3);
+  background: var(--surface-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  box-sizing: border-box;
+  user-select: none;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+.mic-test-meter:hover {
+  border-color: var(--hairline-strong);
+}
+
+.mic-test-meter[data-active="true"] {
+  border-color: var(--live-dim);
+  background: var(--surface-2);
+}
+
+.mic-test-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--mute);
+  transition: color var(--t-fast) var(--ease);
+}
+
+.mic-test-meter[data-active="true"] .mic-test-icon-wrap {
+  color: var(--live);
+}
+
+/* VU meter track holding segmented LED bars */
+.mic-test-track {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 96px;
+  height: 14px;
+  padding: 2px;
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  box-sizing: border-box;
+}
+
+/* Segmented LED bars */
+.mic-test-segment {
+  flex: 1;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--surface-4);
+  opacity: 0.25;
+  transition: opacity 40ms var(--ease), background-color 40ms var(--ease);
+}
+
+.mic-test-segment[data-zone="normal"] {
+  --segment-lit: var(--live);
+}
+
+.mic-test-segment[data-zone="warm"] {
+  --segment-lit: var(--warn);
+}
+
+.mic-test-segment[data-zone="hot"] {
+  --segment-lit: var(--danger);
+}
+
+.mic-test-segment[data-lit="true"] {
+  background: var(--segment-lit, var(--live));
+  opacity: 1;
+}
+
+.mic-test-segment[data-peak="true"] {
+  background: var(--segment-lit, var(--live));
+  opacity: 0.85;
+}
+
+/* Test button toggle */
+.mic-test-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 var(--s-2);
+  background: var(--surface-4);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  color: var(--mute);
+  font: 500 11px/1 var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.mic-test-btn:hover {
+  color: var(--ink);
+  background: var(--surface-3);
+  border-color: var(--hairline-strong);
+}
+
+.mic-test-btn[data-testing="true"] {
+  color: var(--live);
+  background: var(--live-soft);
+  border-color: var(--live-dim);
+}
+
+.mic-test-btn:focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: 1px;
+}
+
+/* Level readout */
+.mic-test-readout {
+  font: 400 11px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  min-width: 28px;
+  text-align: right;
+}
+
+.mic-test-meter[data-active="true"] .mic-test-readout {
+  color: var(--mute);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic-test-segment {
+    transition: none;
+  }
+}

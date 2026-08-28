@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Badge, Button, Card, Notice, Select, Toggle } from "../ui";
+import { Badge, Button, Card, MicTestMeter, Notice, Select, Toggle } from "../ui";
 import {
   checkForUpdate,
   deleteModel,
@@ -216,10 +216,12 @@ export function SettingsScreen({
   settings,
   patch,
   error,
+  levelRef,
 }: {
   settings: S;
   patch: (fn: (s: S) => void) => void;
   error: string | null;
+  levelRef?: { current: number };
 }) {
   const [mics, setMics] = useState<string[]>([]);
   useEffect(() => {
@@ -287,8 +289,9 @@ export function SettingsScreen({
                     e.target.value === "System default" ? null : e.target.value;
                 })
               }
-              style={{ width: 260 }}
+              style={{ width: 220 }}
             />
+            <MicTestMeter levelRef={levelRef} />
           </Row>
           <Row
             label="Language"

@@ -51,8 +51,8 @@
   /* -- Type ---------------------------------------------------------------
    * Mono is for transcripts, numbers and code only. Using it for atmosphere
    * is the tell of a design pretending to be technical. */
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --font-sans: "Geist Sans Variable", "Geist Sans", "Geist Variable", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
 
   /* -- Space. 8px base. --------------------------------------------------- */
   --s-1: 2px;
@@ -115,16 +115,19 @@
 
 .t-body {
   font: 400 14px/1.55 var(--font-sans);
+  letter-spacing: 0;
   color: var(--body);
 }
 
 .t-body-strong {
   font: 500 14px/1.55 var(--font-sans);
+  letter-spacing: 0;
   color: var(--ink);
 }
 
 .t-caption {
   font: 400 12px/1.45 var(--font-sans);
+  letter-spacing: 0;
   color: var(--mute);
 }
 
@@ -140,6 +143,7 @@
 .t-mono {
   font: 400 13px/1.5 var(--font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
   color: var(--body);
 }
 

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FlowBar, flowMode, flowSpeaks, flowText } from "../ui";
+import { FlowBar, Kbd, flowMode, flowSpeaks, flowText } from "../ui";
 import type { FlowEdge, FlowMode, FlowStatus } from "../ui";
 import { playCompletionChime, playStartTone } from "../ui/sound";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
@@ -108,6 +108,7 @@ function geometry(v: {
   edge: FlowEdge;
   menu: boolean;
   hint: string;
+  hasAction?: boolean;
   text?: string;
 }): Geo {
   // When the menu is open, the pill is 280px wide to match the menu, but maintains
@@ -137,8 +138,9 @@ function geometry(v: {
   // truncated real engine messages at about thirty characters, which is reliably
   // before the part that says what to do about it.
   if (v.text !== undefined) {
-    const w = Math.ceil(MSG_CHROME + textWidth(v.text, "400 12px $sans"));
-    return { w: Math.min(360, Math.max(200, w)), h: PILL_H };
+    const actionW = v.hasAction ? 96 : 0;
+    const w = Math.ceil(MSG_CHROME + textWidth(v.text, "400 12px $sans") + actionW);
+    return { w: Math.min(380, Math.max(200, w)), h: PILL_H };
   }
 
   // Idle. The fixed 150px tier fit exactly one shortcut — the default — and any
@@ -938,6 +940,26 @@ export function Overlay() {
 
   const rows = useFlowMenu({ mini, live, working, setMenu, setMini });
 
+  const isClipboardFallback =
+    alerting &&
+    (view.lastOutcome === "clipboard_fallback" ||
+      (view.notice != null && view.notice.message.toLowerCase().includes("clipboard")));
+
+  const pasteAction = isClipboardFallback ? (
+    <button
+      type="button"
+      className="flowbar-btn"
+      title="Paste now (Ctrl+V)"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        void call("paste_last");
+      }}
+    >
+      Paste Now <Kbd>Ctrl+V</Kbd>
+    </button>
+  ) : undefined;
+
   // These are the *window's* target, not the pill's painted size.
   //
   // The pill used to be given this number directly, as an inline width, while
@@ -954,6 +976,7 @@ export function Overlay() {
     edge,
     menu,
     hint,
+    hasAction: Boolean(pasteAction),
     text: barText,
   });
   const pillWidth = geo.w;
@@ -1134,6 +1157,7 @@ export function Overlay() {
           working={working}
           failed={failed && alerting}
           message={messageText}
+          action={pasteAction}
           confirm={confirm}
           publish={hit}
           status={status}

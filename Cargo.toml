@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
@@ -28,14 +28,14 @@ authors = ["Aditya Shelke <adityashelke04@gmail.com>"]
 # requirement resolves to `*`, which `cargo deny check bans` correctly flags as a
 # wildcard: a workspace where every internal edge is "any version" cannot be
 # audited. Keep these in step with `workspace.package.version` above.
-ov-core = { path = "crates/ov-core", version = "0.4.1" }
-ov-format = { path = "crates/ov-format", version = "0.4.1" }
-ov-audio = { path = "crates/ov-audio", version = "0.4.1" }
-ov-asr = { path = "crates/ov-asr", version = "0.4.1" }
-ov-input = { path = "crates/ov-input", version = "0.4.1" }
+ov-core = { path = "crates/ov-core", version = "0.4.2" }
+ov-format = { path = "crates/ov-format", version = "0.4.2" }
+ov-audio = { path = "crates/ov-audio", version = "0.4.2" }
+ov-asr = { path = "crates/ov-asr", version = "0.4.2" }
+ov-input = { path = "crates/ov-input", version = "0.4.2" }
 # Not yet written. Declared here so the crate lands without a manifest change;
 # harmless while unused, because Cargo only resolves an entry a member consumes.
-ov-store = { path = "crates/ov-store", version = "0.4.1" }
+ov-store = { path = "crates/ov-store", version = "0.4.2" }
 
 # Errors
 thiserror = "2"

@@ -1,3 +1,7 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource-variable/inter";
+@import "@fontsource/jetbrains-mono";
 @import "./tokens.css";
 
 *,
@@ -16,8 +20,9 @@ body,
 body {
   color: var(--body);
   font: 400 14px/1.55 var(--font-sans);
-  font-feature-settings: "calt", "kern", "liga", "ss03";
+  font-feature-settings: "calt", "kern", "liga", "cv02", "cv03", "cv04", "cv11", "tnum", "zero";
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow: hidden;
 }

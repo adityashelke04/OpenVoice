@@ -1,0 +1,200 @@
+/* apps/ui/src/ui/loading-dots.css
+ *
+ * Kinetic loading dots and ticking ellipsis components.
+ * Rules & reasoning from DESIGN.md:
+ * - GPU-accelerated: only transform and opacity animate, with will-change.
+ * - Staggered 3-dot harmonic wave/bounce with 0s, 0.16s, 0.32s delays.
+ * - Zero layout shifts; strict cubic-bezier easing.
+ * - Strict adherence to palette tokens without arbitrary colors or shadows.
+ */
+
+/* ----------------------------------------------------------- LoadingDots -- */
+
+.loading-dots {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--loading-dots-gap, 3px);
+  height: 100%;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.loading-dot {
+  display: inline-block;
+  width: var(--loading-dot-size, 4px);
+  height: var(--loading-dot-size, 4px);
+  border-radius: var(--r-full, 9999px);
+  background-color: currentColor;
+  flex: none;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+
+/* Sizes */
+.loading-dots[data-size="xs"] {
+  --loading-dot-size: 3px;
+  --loading-dots-gap: 2px;
+  --dot-lift: -2px;
+}
+.loading-dots[data-size="sm"] {
+  --loading-dot-size: 4px;
+  --loading-dots-gap: 3px;
+  --dot-lift: -3px;
+}
+.loading-dots[data-size="md"] {
+  --loading-dot-size: 5px;
+  --loading-dots-gap: 4px;
+  --dot-lift: -3.5px;
+}
+.loading-dots[data-size="lg"] {
+  --loading-dot-size: 6px;
+  --loading-dots-gap: 5px;
+  --dot-lift: -4px;
+}
+
+/* Tone bindings */
+.loading-dots[data-tone="neutral"] { color: var(--mute); }
+.loading-dots[data-tone="body"] { color: var(--body); }
+.loading-dots[data-tone="mute"] { color: var(--mute); }
+.loading-dots[data-tone="ink"] { color: var(--ink); }
+.loading-dots[data-tone="live"] { color: var(--live); }
+.loading-dots[data-tone="warn"] { color: var(--warn); }
+.loading-dots[data-tone="danger"] { color: var(--danger); }
+
+/* Harmonic wave / bounce animation */
+.loading-dots[data-variant="wave"] .loading-dot,
+.loading-dots[data-variant="bounce"] .loading-dot,
+.loading-dots:not([data-variant]) .loading-dot {
+  animation: loading-wave 1.1s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+}
+
+.loading-dots .loading-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+.loading-dots .loading-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.loading-dots .loading-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes loading-wave {
+  0%, 60%, 100% {
+    transform: translateY(0) scale(0.9);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(var(--dot-lift, -3px)) scale(1.15);
+    opacity: 1;
+  }
+}
+
+/* Pulse / Fade variant */
+.loading-dots[data-variant="pulse"] .loading-dot,
+.loading-dots[data-variant="fade"] .loading-dot {
+  animation: loading-fade 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.loading-dots[data-variant="pulse"] .loading-dot:nth-child(1),
+.loading-dots[data-variant="fade"] .loading-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+.loading-dots[data-variant="pulse"] .loading-dot:nth-child(2),
+.loading-dots[data-variant="fade"] .loading-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.loading-dots[data-variant="pulse"] .loading-dot:nth-child(3),
+.loading-dots[data-variant="fade"] .loading-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes loading-fade {
+  0%, 100% {
+    opacity: 0.25;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+/* ------------------------------------------------------- TickingEllipsis -- */
+
+.ticking-ellipsis {
+  display: inline-flex;
+  align-items: baseline;
+  white-space: nowrap;
+  font: inherit;
+  color: inherit;
+}
+
+.ticking-ellipsis[data-tone="neutral"] { color: var(--mute); }
+.ticking-ellipsis[data-tone="body"] { color: var(--body); }
+.ticking-ellipsis[data-tone="mute"] { color: var(--mute); }
+.ticking-ellipsis[data-tone="ink"] { color: var(--ink); }
+.ticking-ellipsis[data-tone="live"] { color: var(--live); }
+.ticking-ellipsis[data-tone="warn"] { color: var(--warn); }
+.ticking-ellipsis[data-tone="danger"] { color: var(--danger); }
+
+.ticking-text {
+  display: inline;
+}
+
+.ticking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  vertical-align: baseline;
+}
+
+.ticking-dot {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: var(--r-full, 9999px);
+  background-color: currentColor;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+  animation: ticking-bounce 1.2s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+}
+
+.ticking-dots .ticking-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+.ticking-dots .ticking-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.ticking-dots .ticking-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes ticking-bounce {
+  0%, 65%, 100% {
+    transform: translateY(0);
+    opacity: 0.25;
+  }
+  30% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+}
+
+.ticking-suffix {
+  display: inline;
+  margin-left: 1px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .loading-dots .loading-dot,
+  .ticking-dot {
+    animation: none !important;
+    opacity: 0.7 !important;
+    transform: none !important;
+  }
+}

@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { FlowBar } from "../ui";
+import { FlowBar, Kbd, LoadingDots, TickingEllipsis } from "../ui";
 // The right-click menu's styles live with the overlay window. Imported so the
 // edge-case section below can show the menu as it actually renders rather than
 // as an approximation of it.
@@ -145,8 +145,17 @@ export function FlowBarStates() {
             <Row label="Landed" width={173} freeze>
               <FlowBar live={false} confirm elapsed="0:00" onToggle={() => undefined} />
             </Row>
-            <Row label="Clipboard" width={248}>
-              <FlowBar live={false} elapsed="0:00" message="Copied to clipboard — press Ctrl+V" />
+            <Row label="Clipboard" width={276}>
+              <FlowBar
+                live={false}
+                elapsed="0:00"
+                message="Copied to clipboard"
+                action={
+                  <button type="button" className="flowbar-btn">
+                    Paste Now <Kbd>Ctrl+V</Kbd>
+                  </button>
+                }
+              />
             </Row>
             <Row label="Failed" width={248}>
               <FlowBar live={false} failed elapsed="0:00" message="No text was produced" />
@@ -178,6 +187,9 @@ export function FlowBarStates() {
             <Row label="Compact, live" width={78} height={22}>
               <FlowBar live mini levelRef={live} elapsed="0:04" />
             </Row>
+            <Row label="Compact, working" width={44} height={22}>
+              <FlowBar live={false} mini working elapsed="0:00" />
+            </Row>
             {/* Docked: Wispr Flow reorients at the left and right edges, because
                 a horizontal pill on a vertical edge either hangs off the screen
                 or bites into whatever is maximised behind it. */}
@@ -187,11 +199,48 @@ export function FlowBarStates() {
             <Row label="Docked, live" width={34} height={132}>
               <FlowBar live edge="left" levelRef={live} elapsed="0:04" />
             </Row>
+            <Row label="Docked, working" width={34} height={52}>
+              <FlowBar live={false} edge="left" working elapsed="0:00" />
+            </Row>
           </div>
         </section>
       ))}
 
       {/* ---------------------------------------------------------- motion -- */}
+      <section className="fbs-plate-section" id="fbs-kinetic">
+        <div className="fbs-plate-head">
+          <span className="fbs-plate-label">Kinetic loading & ticking ellipsis</span>
+          <span className="fbs-plate-hint">GPU-accelerated wave bounce (0s, 0.16s, 0.32s)</span>
+        </div>
+        <div className="fbs-plate" data-plate="canvas">
+          <Row label="LoadingDots (sm)" width={60} height={28}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+              <LoadingDots size="sm" tone="body" variant="wave" />
+            </div>
+          </Row>
+          <Row label="TickingEllipsis" width={170}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+              <TickingEllipsis text="Writing" tone="body" />
+            </div>
+          </Row>
+          <Row label="Full working" width={170}>
+            <FlowBar live={false} working elapsed="0:00" />
+          </Row>
+          <Row label="Starting engine" width={224}>
+            <FlowBar live={false} status="loading" elapsed="0:00" />
+          </Row>
+          <Row label="Downloading model" width={252}>
+            <FlowBar live={false} status="loading" progress={0.68} elapsed="0:00" />
+          </Row>
+          <Row label="Compact wave" width={44} height={22}>
+            <FlowBar live={false} mini working elapsed="0:00" />
+          </Row>
+          <Row label="Docked wave" width={34} height={52}>
+            <FlowBar live={false} edge="left" working elapsed="0:00" />
+          </Row>
+        </div>
+      </section>
+
       <section className="fbs-plate-section" id="fbs-landing">
         <div className="fbs-plate-head">
           <span className="fbs-plate-label">The landing, frame by frame</span>

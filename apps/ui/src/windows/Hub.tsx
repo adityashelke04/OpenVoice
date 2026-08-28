@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Badge, Button, Card, Empty, Input, Kbd, Notice, Stat, Waveform } from "../ui";
+import { Badge, Button, Card, Empty, Input, Kbd, Notice, Stat, Waveform, useCountUp, useLiveTimeAgo } from "../ui";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
 import type { Download } from "../engine/useLiveEngine";
 import {
@@ -139,6 +139,8 @@ export function Hub() {
   // the moment before the first response arrives.
   const stats = totals ? statsFromTotals(totals) : computeStats(rows);
   const saved = humanDuration(stats.savedMinutes);
+  const animatedWpm = useCountUp(stats.wpm);
+  const animatedWords = useCountUp(stats.words);
 
   // Empty sessions are already excluded by the query — a key brushed by accident
   // is not history. They stay in the database, where a run of them is the clearest
@@ -224,7 +226,12 @@ export function Hub() {
             {tab === "style" && <ProfilesScreen settings={settings} patch={patch} />}
             {tab === "models" && <ModelsScreen settings={settings} patch={patch} />}
             {tab === "settings" && (
-              <SettingsScreen settings={settings} patch={patch} error={settingsError} />
+              <SettingsScreen
+                settings={settings}
+                patch={patch}
+                error={settingsError}
+                levelRef={levelRef}
+              />
             )}
             {tab === "advanced" && <AdvancedScreen settings={settings} />}
           </>
@@ -236,7 +243,7 @@ export function Hub() {
           <div>
             <h1 className="t-display">
               {stats.words > 0
-                ? `${stats.words.toLocaleString()} words dictated`
+                ? `${(animatedWords ?? stats.words).toLocaleString()} words dictated`
                 : "Ready when you are"}
             </h1>
             <p className="t-body" style={{ marginTop: 6 }}>
@@ -265,7 +272,7 @@ export function Hub() {
           <div className="hero-main">
             <div className="t-label">Your speaking speed</div>
             <div className="hero-value">
-              <span className="hero-number">{stats.wpm ?? "—"}</span>
+              <span className="hero-number">{animatedWpm ?? "—"}</span>
               <span className="hero-unit">words per minute</span>
             </div>
             {stats.wpm && <div className="t-caption">{speedContext(stats.wpm)}</div>}
@@ -274,7 +281,7 @@ export function Hub() {
           {/* A rate means nothing without something to compare it against. */}
           <div className="hero-scale" aria-hidden="true">
             <ScaleBar label="Typing" value={TYPING_WPM} max={200} />
-            <ScaleBar label="You" value={stats.wpm ?? 0} max={200} highlight />
+            <ScaleBar label="You" value={animatedWpm ?? 0} max={200} highlight />
             <ScaleBar label="Average speech" value={SPEAKING_WPM} max={200} />
           </div>
         </div>
@@ -534,6 +541,7 @@ function HistoryRow({
   const failed = row.outcome !== "delivered";
   const [fixing, setFixing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const timeAgo = useLiveTimeAgo(row.created_at);
 
   // A copy that says nothing is indistinguishable from a copy that failed, and
   // the failure is silent: `navigator.clipboard` is undefined without a secure
@@ -563,7 +571,7 @@ function HistoryRow({
             )}
             <span className="t-caption">{row.target_app || "unknown app"}</span>
             <span className="t-caption">{Math.round(row.latency_ms)} ms</span>
-            <span className="t-caption">{when(row.created_at)}</span>
+            <span className="t-caption">{timeAgo}</span>
           </div>
         </div>
         <div className="row-actions">
@@ -583,18 +591,6 @@ function HistoryRow({
       {fixing && <FixRow row={row} patch={patch} onDone={() => setFixing(false)} />}
     </div>
   );
-}
-
-function when(ms: number): string {
-  // Floor, not round, at every step. Rounding twice made 55 minutes read "1h
-  // ago" and 20 hours read "1d ago" -- an elapsed time should never claim more
-  // time has passed than actually has.
-  const mins = Math.floor((Date.now() - ms) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const h = Math.floor(mins / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
 }
 
 export { elapsed };

@@ -13,10 +13,13 @@ import {
   FlowBar,
   Input,
   Kbd,
+  LoadingDots,
+  MicTestMeter,
   Notice,
   Select,
   Stat,
   Tabs,
+  TickingEllipsis,
   Toggle,
   Waveform,
 } from "../ui";
@@ -54,6 +57,7 @@ const TYPE: [string, string][] = [
   ["t-caption", "12 / 400 / 0"],
   ["t-label", "11 / 500 / +0.3px"],
   ["t-mono", "13 / 400 mono"],
+  ["t-mono-lg", "20 / 500 / −0.2px mono"],
 ];
 
 export function Sheet() {
@@ -196,6 +200,10 @@ export function Sheet() {
             style={{ width: 240 }}
           />
           <div className="field">
+            <span className="t-label">Mic test meter</span>
+            <MicTestMeter />
+          </div>
+          <div className="field">
             <span className="t-label">Launch at login</span>
             <Toggle on={on} onChange={setOn} label="Launch at login" />
           </div>
@@ -311,6 +319,75 @@ export function Sheet() {
             action={<Button variant="record"><span className="dot" /> Try it now</Button>}
           />
         </Card>
+      </Section>
+
+      <Section
+        title="Kinetic Loading"
+        note="GPU-accelerated 3-dot harmonic wave bounce and kinetic ticking ellipsis. Transforms and opacity only — zero layout reflows."
+      >
+        <div className="vstack" style={{ gap: 20 }}>
+          <div>
+            <div className="t-label" style={{ marginBottom: 8 }}>LoadingDots Sizes & Variants</div>
+            <div className="hstack" style={{ gap: 24, flexWrap: "wrap", alignItems: "center" }}>
+              <div className="hstack" style={{ gap: 8 }}>
+                <span className="t-caption">xs</span>
+                <LoadingDots size="xs" tone="body" variant="wave" />
+              </div>
+              <div className="hstack" style={{ gap: 8 }}>
+                <span className="t-caption">sm</span>
+                <LoadingDots size="sm" tone="body" variant="wave" />
+              </div>
+              <div className="hstack" style={{ gap: 8 }}>
+                <span className="t-caption">md</span>
+                <LoadingDots size="md" tone="live" variant="wave" />
+              </div>
+              <div className="hstack" style={{ gap: 8 }}>
+                <span className="t-caption">lg</span>
+                <LoadingDots size="lg" tone="warn" variant="wave" />
+              </div>
+              <div className="hstack" style={{ gap: 8 }}>
+                <span className="t-caption">pulse</span>
+                <LoadingDots size="md" tone="danger" variant="pulse" />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="t-label" style={{ marginBottom: 8 }}>Ticking Ellipsis</div>
+            <div className="vstack" style={{ gap: 10 }}>
+              <div className="t-body">
+                <TickingEllipsis text="Writing" tone="body" />
+              </div>
+              <div className="t-body">
+                <TickingEllipsis text="Starting the speech engine" tone="warn" />
+              </div>
+              <div className="t-body">
+                <TickingEllipsis text="Getting the speech model" suffix=" 43%" tone="warn" />
+              </div>
+              <div className="t-body">
+                <TickingEllipsis text="Transcribing audio" tone="live" />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="t-label" style={{ marginBottom: 8 }}>Flow Bar Loading States</div>
+            <div className="hstack" style={{ gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ width: 170, height: 40 }}>
+                <FlowBar live={false} working elapsed="0:00" />
+              </div>
+              <div style={{ width: 224, height: 40 }}>
+                <FlowBar live={false} status="loading" elapsed="0:00" />
+              </div>
+              <div style={{ width: 252, height: 40 }}>
+                <FlowBar live={false} status="loading" progress={0.68} elapsed="0:00" />
+              </div>
+              <div style={{ width: 44, height: 22 }}>
+                <FlowBar live={false} mini working elapsed="0:00" />
+              </div>
+            </div>
+          </div>
+        </div>
       </Section>
 
       <Section
