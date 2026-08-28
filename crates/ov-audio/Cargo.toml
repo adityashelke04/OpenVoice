@@ -10,7 +10,7 @@ repository.workspace = true
 [dependencies]
 ov-core.workspace = true
 tracing.workspace = true
-cpal = "0.15"
+cpal = "0.18"
 rubato = "0.15"
 
 [lints.rust]
