@@ -1,6 +1,6 @@
 /* The overlay window is transparent; only the pill and its menu paint. */
 
-/* The window is a fixed 404x248 and the pill sits at a fixed offset inside it.
+/* The window is a fixed 404x640 and the pill sits at a fixed offset inside it (PILL_TOP = 300px).
    See ADR 0007.
 
    Everything below used to be derived from `100vw`/`100vh`, and that is what the
@@ -15,18 +15,17 @@
 .overlay-root {
   height: 100vh;
   width: 100vw;
+  position: relative;
   display: flex;
   flex-direction: column;
-  /* Always `flex-start`, in every state including the menu. The pill's top edge
-     is a constant — `PILL_TOP` in Overlay.tsx and `overlay.rs` — and the padding
-     below puts it there. The menu then hangs beneath it in document order, which
-     is why this no longer needs a `data-menu` override.
+  /* Symmetrical vertical centring: the pill's top edge is at PILL_TOP (300px).
+     The menu hangs either above or below it based on available screen headroom.
 
      `overflow: visible` because the glow is painted by the pill and reaches into
      the margin around it, which the window's region leaves unclipped. */
   align-items: center;
   justify-content: flex-start;
-  padding-top: 44px;
+  padding-top: var(--pill-top, 300px);
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
@@ -40,6 +39,7 @@
      know which one is on screen. This value is what the component sheet and any
      other host outside the real window fall back to. */
   --pill-h: 40px;
+  --pill-top: 300px;
 }
 
 .overlay-hit {
@@ -95,6 +95,46 @@
   /* Same principled exception as the bar: this floats over content the design
      system does not control. */
   box-shadow: 0 2px 8px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 36%);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.overlay-menu--below {
+  margin-top: var(--s-2);
+  animation: menu-appear-below 140ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: top center;
+}
+
+.overlay-menu--above {
+  position: absolute;
+  margin-top: 0;
+  top: var(--pill-top, 300px);
+  left: 50%;
+  transform: translate(-50%, calc(-100% - var(--s-2)));
+  animation: menu-appear-above 140ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: bottom center;
+}
+
+@keyframes menu-appear-above {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% - var(--s-2) + 6px)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, calc(-100% - var(--s-2))) scale(1);
+  }
+}
+
+@keyframes menu-appear-below {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .overlay-menu button {

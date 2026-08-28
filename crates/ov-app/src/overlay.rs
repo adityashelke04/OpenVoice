@@ -41,19 +41,11 @@ const BOTTOM_GAP: f64 = 96.0;
 /// The window's width. The widest pill (the alert clamp, 360) plus the glow
 /// margin on both sides, so every state fits without the window ever changing.
 pub const OVERLAY_W: f64 = 404.0;
-/// The window's height: the glow margin above the pill, the pill, and the room
-/// the right-click menu needs below it.
-///
-/// Raised from 248 when the Flow Menu grew from four items to eight. Changing it
-/// is safe in a way it would not have been before ADR 0007: what is persisted is
-/// the pill's *anchor*, so the window's dimensions no longer appear in anything
-/// that survives a restart and nobody's saved bar moves because this number did.
-/// `shape_rect` is bounded by it, and the test below asserts every state fits.
-pub const OVERLAY_H: f64 = 360.0;
-/// The pill's top edge, measured from the window's top. Constant by construction:
-/// 22px Win32 caption exclusion buffer plus 22px glow margin above the pill,
-/// with the menu hanging below.
-pub const PILL_TOP: f64 = 44.0;
+/// The window's height: symmetrical headroom for the menu to open above or below.
+pub const OVERLAY_H: f64 = 640.0;
+/// The pill's top edge, measured from the window's top. Symmetrical vertical center:
+/// 300px headroom above for upward menu, 40px pill, and 300px room below for downward menu.
+pub const PILL_TOP: f64 = 300.0;
 /// The pill's height. Must equal `PILL_H` in `Overlay.tsx` and `--pill-h` in
 /// `overlay.css`; the three are one identity split across three languages.
 pub const PILL_H: f64 = 40.0;
@@ -288,12 +280,19 @@ type Rect = (f64, f64, f64, f64);
 const SHAPE_SETTLE_MS: u64 = 120;
 
 /// The pill's rectangle within the window, including the margin its glow paints
-/// into. Horizontally centred; the top edge is fixed by construction.
-fn shape_rect(pill_w: f64, pill_h: f64, margin: f64) -> Rect {
+/// into. Horizontally centred; the vertical position accommodates menu above/below.
+fn shape_rect(pill_w: f64, pill_h: f64, margin: f64, above: bool) -> Rect {
     let left = (OVERLAY_W - pill_w) / 2.0 - margin;
-    let top = PILL_TOP - margin;
     let right = left + pill_w + margin * 2.0;
-    let bottom = top + pill_h + margin * 2.0;
+    let (top, bottom) = if above {
+        let top = PILL_TOP - (pill_h - PILL_H).max(0.0) - margin;
+        let bottom = PILL_TOP + PILL_H + margin;
+        (top, bottom)
+    } else {
+        let top = PILL_TOP - margin;
+        let bottom = top + pill_h + margin * 2.0;
+        (top, bottom)
+    };
     // Clamped to the window, so a pill that somehow outgrew it produces a region
     // that is merely the whole window rather than one hanging off the edge. The
     // tests assert no real state gets near this.
@@ -411,8 +410,15 @@ impl Overlay {
     /// painted in the area being uncovered; shrinking early would clip a pill that
     /// is still painted at its previous, larger size. The delay is cancelled by
     /// any newer shape, so a burst of state changes settles once.
-    pub fn set_shape(&self, win: &WebviewWindow, pill_w: f64, pill_h: f64, margin: f64) {
-        let next = shape_rect(pill_w, pill_h, margin);
+    pub fn set_shape(
+        &self,
+        win: &WebviewWindow,
+        pill_w: f64,
+        pill_h: f64,
+        margin: f64,
+        above: bool,
+    ) {
+        let next = shape_rect(pill_w, pill_h, margin, above);
         let (now, is_shrink) = {
             let mut cur = self.shape.lock().expect("shape");
             let is_shrink = cur.is_some_and(|c| {
@@ -813,7 +819,7 @@ fn region_box((l, t, r, b): Rect, scale: f64) -> (i32, i32, i32, i32) {
 /// This is what makes a window permanently larger than its content acceptable. A
 /// transparent window still swallows OS-level clicks across its whole rectangle —
 /// `pointer-events: none` governs the webview, not the window — so without this
-/// the fixed 404x248 box would punch a dead zone into whatever is underneath.
+/// the fixed 404x640 box would punch a dead zone into whatever is underneath.
 ///
 /// `SetWindowRgn` was rejected once on the grounds that it clips painting. It
 /// does; that is only fatal if the region is the pill. The region here is the
@@ -1016,10 +1022,10 @@ mod tests {
     /// pill's position depends on its width.
     #[test]
     fn pill_top_is_constant_across_states() {
-        let idle = shape_rect(150.0, PILL_H, 0.0);
-        let listening = shape_rect(240.0, PILL_H, 22.0);
-        let working = shape_rect(170.0, PILL_H, 0.0);
-        let alert = shape_rect(360.0, PILL_H, 0.0);
+        let idle = shape_rect(150.0, PILL_H, 0.0, false);
+        let listening = shape_rect(240.0, PILL_H, 22.0, false);
+        let working = shape_rect(170.0, PILL_H, 0.0, false);
+        let alert = shape_rect(360.0, PILL_H, 0.0, false);
 
         assert_eq!(idle.1, PILL_TOP);
         assert_eq!(working.1, PILL_TOP);
@@ -1035,22 +1041,35 @@ mod tests {
         }
     }
 
-    /// Every state's rectangle fits inside the window. If one did not, the region
-    /// would clip the pill permanently rather than transiently.
+    /// Every state's rectangle fits inside the window, for both menu directions.
+    /// If one did not, the region would clip the pill permanently rather than transiently.
     #[test]
     fn every_state_fits_the_window() {
-        for (w, h, m) in [
-            (150.0, PILL_H, 0.0),
-            (240.0, PILL_H, 22.0),
-            (170.0, PILL_H, 0.0),
-            (360.0, PILL_H, 0.0),
-            (280.0, 302.0, 0.0),
+        for (w, h, m, above) in [
+            (150.0, PILL_H, 0.0, false),
+            (240.0, PILL_H, 22.0, false),
+            (170.0, PILL_H, 0.0, false),
+            (360.0, PILL_H, 0.0, false),
+            (280.0, 302.0, 0.0, false),
+            (280.0, 302.0, 0.0, true),
         ] {
-            let (l, t, r, b) = shape_rect(w, h, m);
-            assert!(l >= 0.0, "{w}x{h}+{m} overflows the left edge: {l}");
-            assert!(t >= 0.0, "{w}x{h}+{m} overflows the top edge: {t}");
-            assert!(r <= OVERLAY_W, "{w}x{h}+{m} overflows the right edge: {r}");
-            assert!(b <= OVERLAY_H, "{w}x{h}+{m} overflows the bottom edge: {b}");
+            let (l, t, r, b) = shape_rect(w, h, m, above);
+            assert!(
+                l >= 0.0,
+                "{w}x{h}+{m} (above={above}) overflows the left edge: {l}"
+            );
+            assert!(
+                t >= 0.0,
+                "{w}x{h}+{m} (above={above}) overflows the top edge: {t}"
+            );
+            assert!(
+                r <= OVERLAY_W,
+                "{w}x{h}+{m} (above={above}) overflows the right edge: {r}"
+            );
+            assert!(
+                b <= OVERLAY_H,
+                "{w}x{h}+{m} (above={above}) overflows the bottom edge: {b}"
+            );
         }
     }
 
@@ -1060,11 +1079,12 @@ mod tests {
     #[test]
     fn union_is_a_superset_both_ways() {
         let states = [
-            shape_rect(150.0, PILL_H, 0.0),
-            shape_rect(240.0, PILL_H, 22.0),
-            shape_rect(170.0, PILL_H, 0.0),
-            shape_rect(360.0, PILL_H, 0.0),
-            shape_rect(280.0, 302.0, 0.0),
+            shape_rect(150.0, PILL_H, 0.0, false),
+            shape_rect(240.0, PILL_H, 22.0, false),
+            shape_rect(170.0, PILL_H, 0.0, false),
+            shape_rect(360.0, PILL_H, 0.0, false),
+            shape_rect(280.0, 302.0, 0.0, false),
+            shape_rect(280.0, 302.0, 0.0, true),
         ];
         for a in states {
             for b in states {
@@ -1080,7 +1100,7 @@ mod tests {
     /// of the screen puts the *pill* on the edge, not the window.
     #[test]
     fn shape_rect_is_the_pill_plus_its_margin() {
-        let (l, t, r, b) = shape_rect(240.0, PILL_H, 22.0);
+        let (l, t, r, b) = shape_rect(240.0, PILL_H, 22.0, false);
         assert_eq!(r - l, 240.0 + 44.0);
         assert_eq!(b - t, PILL_H + 44.0);
     }
@@ -1126,7 +1146,7 @@ mod region_tests {
     fn stays_well_formed_at_every_scale() {
         for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
             for (w, m) in [(150.0, 0.0), (240.0, 22.0), (170.0, 0.0), (360.0, 0.0)] {
-                let (l, t, r, b) = region_box(shape_rect(w, PILL_H, m), scale);
+                let (l, t, r, b) = region_box(shape_rect(w, PILL_H, m, false), scale);
                 assert!(r > l && b > t, "inverted at {scale} for {w}+{m}");
             }
         }

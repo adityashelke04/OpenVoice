@@ -14,7 +14,7 @@ No cloud, no account, no telemetry.
 
 **[openvoice-dictation.vercel.app](https://openvoice-dictation.vercel.app)**
 
-**[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/v0.4.0/OpenVoice_0.4.0_x64-setup.exe)** — one `.exe`, speech engine included.
+**[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/v0.4.1/OpenVoice_0.4.1_x64-setup.exe)** — one `.exe`, speech engine included.
 [All releases →](https://github.com/adityashelke04/OpenVoice/releases) · [Docs](https://openvoice-dictation.vercel.app/docs) · [Changelog](https://openvoice-dictation.vercel.app/changelog)
 
 <img src="docs/images/flow-bar.png" width="420" alt="The Flow Bar: a small floating pill reading &quot;Hold Right Ctrl&quot;">
@@ -22,7 +22,7 @@ No cloud, no account, no telemetry.
 </div>
 
 > **Status: alpha.** It runs end to end — hotkey, capture, transcription,
-> formatting, injection, and history all work on Windows, and `v0.4.0` is
+> formatting, injection, and history all work on Windows, and `v0.4.1` is
 > published as a pre-release you can install today. What is not done is
 > distribution polish: nothing is code-signed, so Windows will warn you about an
 > unknown publisher, and the bundled speech engine is CPU-only.
@@ -295,7 +295,7 @@ relocated to another drive.
 
 ## Installing
 
-Download **[`OpenVoice_0.4.0_x64-setup.exe`](https://github.com/adityashelke04/OpenVoice/releases/download/v0.4.0/OpenVoice_0.4.0_x64-setup.exe)**
+Download **[`OpenVoice_0.4.1_x64-setup.exe`](https://github.com/adityashelke04/OpenVoice/releases/download/v0.4.1/OpenVoice_0.4.1_x64-setup.exe)**
 from the [releases page](https://github.com/adityashelke04/OpenVoice/releases) and run it.
 Nothing to configure, no Python to install — the speech engine is inside the
 installer. On first launch it downloads the `base.en` weights (~75 MB), with
@@ -313,7 +313,7 @@ Two things worth knowing before you install:
   tagged commit — so you can check that what you downloaded is what CI built:
 
   ```powershell
-  Get-FileHash .\OpenVoice_0.4.0_x64-setup.exe -Algorithm SHA256
+  Get-FileHash .\OpenVoice_0.4.1_x64-setup.exe -Algorithm SHA256
   ```
 
   Compare that against the hash in the release notes and the `.sha256` file

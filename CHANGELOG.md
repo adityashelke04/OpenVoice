@@ -22,6 +22,21 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-28
+
+This release fixes the Flow Bar context menu clipping into the taskbar or screen edge when the bar is positioned near the bottom of the display, introducing upward menu placement with zero-pixel pill displacement and precise native window region masking.
+
+### Fixed
+
+- **The Flow Bar right-click menu flips above the bar when parked near the bottom of the screen.**
+  When the bar was parked near the bottom edge of the display or just above the Windows taskbar, opening the 8-item context menu caused it to hang downwards past the display boundary and behind the taskbar, clipping options and swallowing clicks. The overlay now dynamically inspects available vertical screen headroom: if the bar is in the lower half of the screen (`top >= 340px`), the menu opens upwards above the pill so all actions remain visible and accessible.
+
+- **Desktop dead zones and menu clipping eliminated with symmetrical 640px window canvas and region masking.**
+  The transparent overlay window canvas is expanded to a symmetrical 404×640 canvas with the pill centered at `PILL_TOP = 300px` (providing 300px headroom above and below). Win32 interactive region masking (`SetWindowRgn`) and `overlay_set_shape` dynamically track the active bounding box whether the menu opens upwards or downwards, ensuring the larger canvas never creates invisible click-blocking dead zones over background applications.
+
+- **Smooth entrance micro-animations and zero-pixel pill displacement.**
+  Opening or closing the menu in either direction keeps the pill firmly anchored with zero pixel jitter or layout shifting. Menus enter with a snappy 140ms ease-out scale-and-fade micro-animation anchored to the respective top or bottom edge of the pill.
+
 ## [0.4.0] - 2026-08-27
 
 This release closes out the Flow Bar's geometry problems and its z-order
@@ -553,7 +568,9 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/adityashelke04/OpenVoice/compare/v0.1.0...v0.1.1

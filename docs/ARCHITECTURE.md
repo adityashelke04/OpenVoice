@@ -691,13 +691,15 @@ manager — the design system is hand-written CSS custom properties in
 deliberate consequence of the frontend discipline below: a UI that holds no
 business logic has very little state to manage.
 
-**The Flow Bar** (`overlay`) — a 280×52 frameless, transparent, always-on-top,
-**non-activating** pill. `WS_EX_NOACTIVATE` is applied on the Rust side after
-creation. If this window ever takes focus, the caret in the user's editor is lost
-and the dictated text goes nowhere — the whole product failing. The flag prevents
-*focus*, not *input*, which is the only reason an interactive always-on-top overlay
-is viable here: it can still be dragged and right-clicked while the editor keeps the
-caret. Its Tauri capability grant is deliberately narrower than the Hub's
+**The Flow Bar** (`overlay`) — a frameless, transparent, always-on-top,
+**non-activating** fixed-window (404×640) overlay clipped via `SetWindowRgn` to
+the active pill (40px height, 150–360px width) and its bidirectional menu.
+`WS_EX_NOACTIVATE` is applied on the Rust side after creation. If this window ever
+takes focus, the caret in the user's editor is lost and the dictated text goes
+nowhere — the whole product failing. The flag prevents *focus*, not *input*, which
+is the only reason an interactive always-on-top overlay is viable here: it can
+still be dragged and right-clicked while the editor keeps the caret. Its Tauri
+capability grant is deliberately narrower than the Hub's
 (`capabilities/overlay.json`), listing only the four window APIs `Overlay.tsx`
 actually calls — sharing the Hub's grant meant `core:window:allow-set-focus` was
 permitted on the one window that must never use it.
@@ -823,7 +825,7 @@ than rediscovered.
 | Activation — push-to-talk, toggle, or both? | Push-to-talk on Right Ctrl. Toggle deferred, and will be a *second* binding rather than a mode switch. | [ADR 0004](adr/0004-activation-and-license.md) |
 | License — Apache-2.0 or MIT? | Apache-2.0, for the explicit patent grant | [ADR 0004](adr/0004-activation-and-license.md) |
 | Flow Bar geometry — who owns the pill's size, React or the window? | The window, for its size: the pill's painted size was derived from the viewport in CSS so the two could not be stale relative to each other. | [ADR 0006](adr/0006-flow-bar-geometry.md) |
-| Flow Bar position — how is the bar held still while it changes size? | By not moving it. The window is a fixed 404x248 rectangle clipped to the pill with `SetWindowRgn`, so its position never depends on the bar's state and a late layout viewport cannot displace it. Supersedes 0006 on position. | [ADR 0007](adr/0007-flow-bar-fixed-window.md) |
+| Flow Bar position — how is the bar held still while it changes size? | By not moving it. The window is a fixed 404x640 rectangle (symmetrical 300px headroom above and below for bidirectional menu opening) clipped to the pill and menu with `SetWindowRgn`, so its position never depends on the bar's state and a late layout viewport cannot displace it. Supersedes 0006 on position. | [ADR 0007](adr/0007-flow-bar-fixed-window.md) |
 
 Two of those have since been amended by contact with reality, and the amendments
 are the interesting part: ADR 0003 carries the measured cost of bundling Python

@@ -1,6 +1,6 @@
 # ADR 0007 — The Flow Bar's window is a fixed rectangle
 
-- **Status:** Accepted
+- **Status:** Accepted (Amended 2026-08-28)
 - **Date:** 2026-08-23
 - **Supersedes:** the *position* decision in ADR 0006, and its two stated premises
 - **Closes:** #10
@@ -173,9 +173,30 @@ touches the overlay's own region because that path requires `resizable: true`.
   which is why "pill not centred" fired **zero** times across the entire life of
   the bug it was written to catch. It now checks horizontal centring and the
   pill's top edge against the constant Rust clips to.
-- The glow has 82px of room each side instead of 22, so DESIGN.md's specified
-  `0 0 48px 8px` becomes renderable for the first time. Not taken up here.
-- **Known and unchanged:** a bottom-snapped bar's right-click menu extends below
-  the screen. The window already grew downward to 226 for the menu, so this is not
-  a regression; the fix is to flip the menu above the pill, which is cheaper under
-  a fixed window and belongs in its own change.
+- **Resolved in amendment (2026-08-28):** a bottom-snapped bar's right-click menu
+  previously extended below the screen when opened downward. The fixed window has
+  been expanded symmetrically to 404×640 with `PILL_TOP = 300`, allowing the menu
+  to flip upward when docked near the bottom edge (`anchor.top >= 340`) and downward
+  when near the top, clipping accurately via directional `SetWindowRgn` calculations.
+
+## Amendment, 2026-08-28 — Bidirectional menu opening (upward flip) and transparency artifacts
+
+The initial fixed-window design provided a 404×248 envelope with `PILL_TOP = 22` (and later 404×360 with `PILL_TOP = 44`), which only budgeted space below the pill. When docked at the bottom of the screen or near the taskbar, opening the right-click menu caused rows to extend off-screen. Additionally, expanding the envelope exposed pill height collapse due to CSS percentage overrides during menu display, as well as white rectangular non-client borders rendered by Windows DWM over certain dark backgrounds.
+
+### Changes:
+
+1. **Symmetrical 404×640 fixed envelope (`PILL_TOP = 300`):**
+   The overlay window height is enlarged to 640px, placing the 40px pill vertically at `PILL_TOP = 300px` (`crates/ov-app/src/overlay.rs`, `crates/ov-app/tauri.conf.json`, `apps/ui/src/windows/Overlay.tsx`, `apps/ui/src/windows/overlay.css`). This provides a symmetrical 300px headroom above for an upward-flipping menu, and 300px headroom below for downward opening.
+
+2. **Upward flip placement logic:**
+   In `Overlay.tsx`, placement is derived from screen position: `menuAbove = (anchor.current?.top ?? 900) >= 340`. If the bar is near the top of the screen (`top < 340`), the menu opens below; otherwise, it flips upward above the pill.
+
+3. **Directional `SetWindowRgn` clipping (`above: bool`):**
+   `shape_rect` in `overlay.rs` receives the boolean `above` flag over IPC from `overlay_set_shape`. When opening upward (`above = true`), the clipping region spans `[PILL_TOP - (pill_h - PILL_H) - margin, PILL_TOP + PILL_H + margin]`, while downward opening spans `[PILL_TOP - margin, PILL_TOP + pill_h + margin * 2]`. This completely eliminates transparent click dead zones in both configurations while ensuring no painted menu elements or glows are clipped.
+
+4. **Pill height decoupling & CSS keyframes:**
+   The pill dimensions remain strictly 40px (`--pill-h: 40px`) during menu visibility rather than expanding to the envelope height. Dedicated CSS classes `.overlay-menu--above` (with bottom-center transform origin) and `.overlay-menu--below` (with top-center transform origin) handle positioning and appear animations.
+
+5. **DWM transparency artifact suppression:**
+   Windows 11 non-client frame borders and caption area rendering artifacts are suppressed in `crates/ov-app/src/main.rs` and `crates/ov-app/src/overlay.rs` using DWM window attributes (`DWMWA_BORDER_COLOR = 0xFFFFFFFE`, `DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`), and `SetWindowRgn` is applied with `bRedraw = false` for seamless region resizing without white flicker.
+

@@ -304,7 +304,7 @@ export function responses(now = Date.now()) {
       available: false,
       version: null,
       notes: null,
-      currentVersion: "0.3.0",
+      currentVersion: "0.4.1",
     },
     get_log_path: "C:\\Users\\you\\AppData\\Roaming\\OpenVoice\\openvoice.log",
   };

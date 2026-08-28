@@ -533,11 +533,15 @@ fn overlay_move(
 /// frontend has no business knowing where it is or how big it is — it says how
 /// big the *pill* is, and the shape follows.
 #[tauri::command]
-fn overlay_set_shape(app: AppHandle, pill_w: f64, pill_h: f64, margin: f64) {
+fn overlay_set_shape(app: AppHandle, pill_w: f64, pill_h: f64, margin: f64, above: Option<bool>) {
     if let Some(win) = overlay::window(&app) {
-        app.state::<AppState>()
-            .overlay
-            .set_shape(&win, pill_w, pill_h, margin);
+        app.state::<AppState>().overlay.set_shape(
+            &win,
+            pill_w,
+            pill_h,
+            margin,
+            above.unwrap_or(false),
+        );
     }
 }
 

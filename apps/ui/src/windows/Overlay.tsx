@@ -60,8 +60,8 @@ const GLOW_MARGIN = 22;
  * doing; that is the entire point.
  */
 const OVERLAY_W = 404;
-/** The pill's top edge, from the window's top. Constant in every state. */
-const PILL_TOP = 44;
+/** The pill's top edge, from the window's top. Symmetrical vertical center: 300px headroom above, 300px below. */
+const PILL_TOP = 300;
 
 /**
  * The pill's height, in every state but the menu.
@@ -283,8 +283,8 @@ const FAILED_OUTCOMES = new Set(["asr_failed", "capture_failed"]);
  * The anchor still moves when the user moves the bar, and only then.
  */
 type Anchor = { cx: number; top: number };
-/** The pill, not the window: its painted size and the margin its glow needs. */
-type Box = { w: number; h: number; m: number };
+/** The pill, not the window: its painted size, glow margin, and whether menu opens above. */
+type Box = { w: number; h: number; m: number; above?: boolean };
 
 /**
  * Where the pill is, given where its window is.
@@ -308,6 +308,7 @@ function useWindowShape(
   pillW: number,
   pillH: number,
   margin: number,
+  above: boolean,
   want: React.MutableRefObject<Box>,
   ready: boolean,
 ) {
@@ -355,7 +356,7 @@ function useWindowShape(
       for (;;) {
         const target = want.current;
         const s = sent.current;
-        if (s && s.w === target.w && s.h === target.h && s.m === target.m) return;
+        if (s && s.w === target.w && s.h === target.h && s.m === target.m && s.above === target.above) return;
 
         // No position and no anchor in this call, deliberately.
         //
@@ -363,14 +364,15 @@ function useWindowShape(
         // the anchor and the box — is what made the bar's position a function of
         // its state, and therefore of a value that could be stale. The window is
         // a constant now. All that crosses the boundary is how big the pill is.
-        mark("flush", { w: target.w, h: target.h, m: target.m });
+        mark("flush", { w: target.w, h: target.h, m: target.m, above: target.above });
         await call("overlay_set_shape", {
           pillW: target.w,
           pillH: target.h,
           margin: target.m,
+          above: target.above ?? false,
         });
         sent.current = target;
-        mark("flushed", { w: target.w, h: target.h, m: target.m });
+        mark("flushed", { w: target.w, h: target.h, m: target.m, above: target.above });
       }
     } finally {
       sending.current = false;
@@ -387,9 +389,9 @@ function useWindowShape(
   // calling it on a pass that has nothing to do costs one comparison.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    want.current = { w: pillW, h: pillH, m: margin };
+    want.current = { w: pillW, h: pillH, m: margin, above };
     void flush();
-  }, [pillW, pillH, margin, ready, flush, want]);
+  }, [pillW, pillH, margin, above, ready, flush, want]);
 
   // A resize that never lands is silent, and that is what made this expensive.
   //
@@ -404,7 +406,7 @@ function useWindowShape(
     const id = window.setInterval(() => {
       const s = sent.current;
       const w = want.current;
-      if (!s || (s.w === w.w && s.h === w.h && s.m === w.m)) return;
+      if (!s || (s.w === w.w && s.h === w.h && s.m === w.m && s.above === w.above)) return;
       reportStuckBox(s, w, sending.current);
     }, 500);
     return () => window.clearInterval(id);
@@ -956,6 +958,9 @@ export function Overlay() {
   });
   const pillWidth = geo.w;
   const pillHeight = geo.h;
+  // If the bar is near the top of the screen (top < 340), open menu below; otherwise open above.
+  const menuAbove = (anchor.current?.top ?? 900) >= 340;
+  const menuPlacement = menuAbove ? "above" : "below";
   const shapeHeight = menu ? menuHeight(rows) : pillHeight;
 
   // Never both: the menu already claims a much larger box for its own purposes,
@@ -964,7 +969,7 @@ export function Overlay() {
   const glowing = live && !menu;
   const margin = glowing ? GLOW_MARGIN : 0;
 
-  useWindowShape(pillWidth, shapeHeight, margin, box, geomReady);
+  useWindowShape(pillWidth, shapeHeight, margin, menu && menuAbove, box, geomReady);
 
   // Measure what was actually painted against the window it was painted in.
   //
@@ -1060,6 +1065,7 @@ export function Overlay() {
     <div
       className="overlay-root"
       data-menu={menu}
+      data-placement={menuPlacement}
       data-edge={edge}
       // On the root rather than on the pill, because the menu hangs *beside* the
       // pill in the DOM and a custom property only inherits downward — set on
@@ -1072,6 +1078,7 @@ export function Overlay() {
         {
           "--pill-w": `${pillWidth}px`,
           "--pill-h": `${pillHeight}px`,
+          "--pill-top": `${PILL_TOP}px`,
         } as React.CSSProperties
       }
     >
@@ -1081,6 +1088,20 @@ export function Overlay() {
       <span className="sr-only" role="status" aria-live={failed ? "assertive" : "polite"}>
         {spoken}
       </span>
+
+      {menu && menuPlacement === "above" && (
+        <div className="overlay-menu overlay-menu--above" role="menu">
+          {rows.map((r) => (
+            <div key={r.id}>
+              {r.sep && <div className="overlay-menu-sep" />}
+              <button role="menuitem" onClick={r.run}>
+                {r.label}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div
         className="overlay-hit"
         ref={hit}
@@ -1124,8 +1145,8 @@ export function Overlay() {
         />
       </div>
 
-      {menu && (
-        <div className="overlay-menu" role="menu">
+      {menu && menuPlacement === "below" && (
+        <div className="overlay-menu overlay-menu--below" role="menu">
           {rows.map((r) => (
             <div key={r.id}>
               {r.sep && <div className="overlay-menu-sep" />}
