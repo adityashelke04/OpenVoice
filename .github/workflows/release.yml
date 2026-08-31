@@ -23,12 +23,12 @@ jobs:
     name: Windows installer
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -38,11 +38,11 @@ jobs:
       # interpreter, and PyInstaller support for a Python version reliably lags
       # its release by months. A packaging break discovered at tag time is the
       # worst moment to discover it.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
 
       # ---------------------------------------------------------------- sidecar
       # Frozen first, because tauri.conf.json lists sidecar/dist/openvoice-asr/
@@ -168,7 +168,7 @@ jobs:
           "path=$out" | Out-File $env:GITHUB_OUTPUT -Append
           "sig=$($sig.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openvoice-windows-installer
           path: |
