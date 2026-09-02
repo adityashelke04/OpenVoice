@@ -17,7 +17,7 @@ serde_json.workspace = true
 # linking whatever SQLite the machine happens to have, which for a desktop app
 # shipped to strangers means a class of "works here, not there" failures that are
 # miserable to diagnose remotely. The build cost is paid once.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [lints.rust]
 missing_docs = "warn"
