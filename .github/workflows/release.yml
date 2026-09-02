@@ -263,6 +263,37 @@ jobs:
 
             SHA-256: `${{ steps.collect.outputs.sha256 }}`
 
+      # Prove the link works, rather than trusting that it does.
+      #
+      # This is the check whose absence caused the whole problem. The README
+      # advertised a download URL that had never resolved, and nothing anywhere
+      # would have said so -- not the release run, not CI, not a test. The
+      # link-lint in CI can only see that a URL is version-free; it cannot see
+      # whether GitHub will actually serve it. This can, because by this point in
+      # the job the release exists.
+      #
+      # A short retry loop, because asset availability lags the API response that
+      # created it by a second or two. A 404 after that is a real failure and
+      # fails the release, which is the correct outcome: a release that published
+      # a broken download button is worse than one that stopped and said so.
+      - name: Verify the permanent download link resolves
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          url="https://github.com/${{ github.repository }}/releases/download/download/OpenVoice-x64-setup.exe"
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -sSL -o /dev/null -w '%{http_code}' "$url" || echo 000)
+            if [[ "$code" == "200" ]]; then
+              echo "$url -> $code"
+              echo "Download link verified: $url" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt $attempt: $code, retrying in 5s"
+            sleep 5
+          done
+          echo "::error::the permanent download link did not resolve ($code): $url"
+          exit 1
+
       # Where the running app actually looks.
       #
       # Not `releases/latest/download/...`: that URL skips prereleases, and every
