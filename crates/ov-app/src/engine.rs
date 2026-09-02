@@ -152,8 +152,20 @@ pub struct Engine {
     /// `start` builds the engine, then the channel, then the threads. Set once,
     /// immediately, and never replaced.
     inputs: std::sync::OnceLock<std::sync::mpsc::Sender<Input>>,
+    /// The live keyboard hook, retained so the bound key can be changed while the
+    /// app is running.
+    ///
+    /// It used to be dropped at the end of `start`. Nothing broke -- the listener
+    /// is a handle onto process-wide state, so the hook survived -- but with no
+    /// owner there was nothing to call `rebind` on, and that is exactly why
+    /// changing the shortcut did nothing until the next launch.
+    hotkey: ov_input::WinHotkeyListener,
     /// How the user's chord is configured, so `toggle` can reproduce it.
-    activation: ov_core::config::ActivationMode,
+    ///
+    /// Behind a lock rather than a plain field because the Settings screen can
+    /// change it at any moment, and `toggle` must synthesise the press pattern the
+    /// *current* mode expects, not the one that was set at launch.
+    activation: Mutex<ov_core::config::ActivationMode>,
     /// Whether `toggle` currently believes it is holding the key down.
     ///
     /// The session machine is driven entirely by key transitions, and it
@@ -223,6 +235,48 @@ impl Engine {
     pub fn reload_language(&self, settings: &crate::settings::Settings) {
         *self.language.lock().expect("language mutex") = settings.config.language.clone();
         tracing::info!(language = ?settings.config.language, "transcription language changed");
+    }
+
+    /// Apply an edited shortcut and activation style to the running app.
+    ///
+    /// This is the counterpart to [`Engine::reload_rules`] and
+    /// [`Engine::reload_language`], and it was the one that was missing. Saving a
+    /// new shortcut wrote it to `settings.toml` and stopped there: the keyboard
+    /// hook went on matching whichever key it had been given at launch, so the new
+    /// key did nothing and the old one still worked -- with the Settings screen
+    /// showing the new one as if it were in force.
+    ///
+    /// Neither half needs a restart. The hook compares one atomic on every
+    /// keystroke, so rebinding is a store; the session machine owns its activation
+    /// mode, so it is told down the same channel its other inputs arrive on.
+    pub fn reload_hotkey(&self, settings: &crate::settings::Settings) -> Result<(), String> {
+        use ov_core::ports::HotkeyListener;
+
+        let chord = settings.config.chord;
+        self.hotkey.rebind(&chord).map_err(|e| e.to_string())?;
+
+        let activation = settings.config.activation;
+        *self.activation.lock().expect("activation mutex") = activation;
+        // Forget any half-finished click-to-talk. In push-to-talk the Flow Bar's
+        // hold spans two clicks, so a mode change landing between them would leave
+        // this set with no second click coming -- and the next click after that
+        // would be read as the release of a press that never happened.
+        self.synthetic_down
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        if let Some(tx) = self.inputs.get() {
+            let _ = tx.send(Input::ActivationChanged {
+                mode: activation,
+                at: self.now(),
+            });
+        }
+
+        tracing::info!(
+            key = %chord.key.label(),
+            exclusive = chord.exclusive,
+            ?activation,
+            "shortcut applied without restart"
+        );
+        Ok(())
     }
 
     /// The model cache this engine is really using, for the Models screen.
@@ -301,7 +355,8 @@ impl Engine {
             let _ = tx.send(Input::HotkeyPressed { at, app, profile });
         };
 
-        match self.activation {
+        let activation = *self.activation.lock().expect("activation mutex");
+        match activation {
             // One complete tap per click. The machine's own toggle handling then
             // does the starting and stopping.
             ActivationMode::Toggle => {
@@ -628,6 +683,10 @@ pub fn start(
         mic,
     };
 
+    // Built before the engine so it can be moved in and kept. The hook itself is
+    // not installed until `start` below.
+    let hotkey = ov_input::WinHotkeyListener::new(config.chord);
+
     let engine = Arc::new(Engine {
         audio,
         transcriber,
@@ -643,7 +702,8 @@ pub fn start(
         start: Instant::now(),
         shell,
         inputs: std::sync::OnceLock::new(),
-        activation: config.activation,
+        hotkey,
+        activation: Mutex::new(config.activation),
         synthetic_down: std::sync::atomic::AtomicBool::new(false),
     });
 
@@ -655,11 +715,11 @@ pub fn start(
     // Hotkey -> machine input. The foreground application is sampled on *press*:
     // by injection time the user may have switched windows, and the profile must
     // reflect where they were speaking.
-    let hotkey = ov_input::WinHotkeyListener::new(config.chord);
     {
         let tx = tx.clone();
         let e = engine.clone();
-        hotkey
+        engine
+            .hotkey
             .start(Arc::new(move |event| {
                 let at = e.now();
                 let input = match event {

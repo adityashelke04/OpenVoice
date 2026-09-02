@@ -23,6 +23,7 @@ import {
   type ModelSpec,
   openDataDir,
   restartApp,
+  restartReasons,
   retryEngine,
   saveSettings,
   type Settings as S,
@@ -53,6 +54,15 @@ const LANGUAGES: readonly [code: string, name: string][] = [
   ["pl", "Polish"],
   ["sv", "Swedish"],
 ];
+
+/** Join reasons the way a person would say them: "a, b and c".
+ *
+ *  The Rust side returns them as separate phrases rather than a pre-joined string
+ *  so this stays the only place the app decides what a list sounds like. */
+function sentence(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
 
 /** Options for a preset picker, guaranteeing the current value is among them.
  *
@@ -230,6 +240,15 @@ export function SettingsScreen({
     listMicrophones().then((m) => m && setMics(m));
   }, []);
 
+  // What is saved but cannot reach the running engine. Re-asked after every save,
+  // because that is the only moment it can change -- and asked of the Rust side
+  // rather than worked out here, so a setting that reloads in place never shows up
+  // as a reason to restart.
+  const [pending, setPending] = useState<string[]>([]);
+  useEffect(() => {
+    restartReasons().then((r) => r && setPending(r));
+  }, [settings]);
+
   const c = settings.config;
 
   return (
@@ -240,14 +259,33 @@ export function SettingsScreen({
 
       {error && <Notice tone="danger">{error}</Notice>}
 
+      {pending.length > 0 && (
+        <Notice
+          tone="warn"
+          action={
+            <Button variant="primary" onClick={() => restartApp()}>
+              Restart now
+            </Button>
+          }
+        >
+          {pending.length === 1 ? "Your change to " : "Your changes to "}
+          <strong>{sentence(pending)}</strong>
+          {pending.length === 1
+            ? " is saved, but it only takes"
+            : " are saved, but they only take"}{" "}
+          effect once OpenVoice restarts. Everything else — your shortcut
+          included — is already working.
+        </Notice>
+      )}
+
       <Card title="Dictation">
         <div className="srows">
           <Row
             label="Shortcut"
             hint={
               c.activation === "toggle"
-                ? "Press this key to start, and press it again to stop. Takes effect after a restart."
-                : "Hold this key while you speak, then let go. Takes effect after a restart."
+                ? "Press this key to start, and press it again to stop. The new key works the moment you pick it."
+                : "Hold this key while you speak, then let go. The new key works the moment you pick it."
             }
           >
             <Select
@@ -264,7 +302,7 @@ export function SettingsScreen({
           </Row>
           <Row
             label="How it starts"
-            hint="Hold to talk keeps the microphone open only while the key is down, so it cannot be left listening by accident. Press to start and stop is easier on your hand for anything long. Takes effect after a restart."
+            hint="Hold to talk keeps the microphone open only while the key is down, so it cannot be left listening by accident. Press to start and stop is easier on your hand for anything long. Applies to your next dictation."
           >
             <Select
               options={["Hold to talk", "Press to start and stop"]}

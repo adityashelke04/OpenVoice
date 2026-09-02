@@ -123,6 +123,18 @@ pub enum Input {
         /// Current time.
         at: Millis,
     },
+    /// The user changed how dictation is activated, from the Settings screen.
+    ///
+    /// Delivered as an input rather than written through a shared cell because the
+    /// machine is owned outright by the loop thread. Routing the change down the
+    /// same channel as every other transition keeps that ownership intact and
+    /// means the new mode is picked up between inputs, never in the middle of one.
+    ActivationChanged {
+        /// The style to use from the next press onwards.
+        mode: ActivationMode,
+        /// When it happened.
+        at: Millis,
+    },
 }
 
 impl Input {
@@ -140,6 +152,7 @@ impl Input {
             | Self::Formatted { at, .. }
             | Self::Injected { at, .. }
             | Self::InjectionFailed { at, .. }
+            | Self::ActivationChanged { at, .. }
             | Self::Tick { at } => *at,
         }
     }
@@ -406,8 +419,21 @@ impl SessionMachine {
                 );
             }
             Input::Tick { at } => self.on_tick(at, &mut fx),
+            Input::ActivationChanged { mode, .. } => self.set_activation(mode),
         }
         fx
+    }
+
+    /// Adopt a new activation style without disturbing anything in flight.
+    ///
+    /// `key_down` is deliberately left alone. Both modes maintain it identically
+    /// -- `on_pressed` sets it, `on_released` clears it -- so a switch made while
+    /// the key happens to be held still sees a matching release. Clearing it here
+    /// would be the bug: the release would then look like a stray one, and in
+    /// toggle mode the next genuine press would be read as auto-repeat and
+    /// silently dropped.
+    fn set_activation(&mut self, mode: ActivationMode) {
+        self.activation = mode;
     }
 
     fn on_pressed(
@@ -1549,5 +1575,73 @@ mod tests {
             at: Millis(1_100),
         });
         assert!(fx.is_empty(), "out-of-phase input must be ignored");
+    }
+
+    /// The Settings screen used to write a new activation style to disk and
+    /// nothing more: the machine kept the mode it was constructed with, so
+    /// switching to "press to start and stop" still behaved as hold-to-talk until
+    /// the app was relaunched.
+    #[test]
+    fn activation_change_applies_without_rebuilding_the_machine() {
+        // Starts in push-to-talk, where a complete tap records nothing at all.
+        let mut m = machine();
+
+        let fx = m.handle(Input::ActivationChanged {
+            mode: ActivationMode::Toggle,
+            at: Millis(0),
+        });
+        assert!(fx.is_empty(), "a mode change is not itself an event");
+
+        let first = press(&mut m, 10);
+        assert_eq!(starts(&first), 1, "first press must start capturing");
+        release(&mut m, 20);
+        assert_eq!(
+            stops(&first),
+            0,
+            "a release must not stop it in toggle mode"
+        );
+
+        let second = press(&mut m, 30);
+        assert_eq!(stops(&second), 1, "the second press must stop it");
+    }
+
+    /// Switching back must be just as live, and must not leave the machine
+    /// half-way between the two readings of a press.
+    #[test]
+    fn activation_change_back_to_push_to_talk_applies_immediately() {
+        let mut m = toggle_machine();
+
+        m.handle(Input::ActivationChanged {
+            mode: ActivationMode::PushToTalk,
+            at: Millis(0),
+        });
+
+        let down = press(&mut m, 10);
+        assert_eq!(starts(&down), 1);
+        let up = release(&mut m, 500);
+        assert_eq!(stops(&up), 1, "push-to-talk must stop on the release");
+    }
+
+    /// A mode change landing while the key is physically held must not strand the
+    /// machine. `key_down` is shared bookkeeping, so clearing it on a switch would
+    /// make the coming release look stray and swallow the next genuine press.
+    #[test]
+    fn activation_change_mid_hold_still_sees_the_release() {
+        let mut m = machine();
+
+        let down = press(&mut m, 0);
+        assert_eq!(starts(&down), 1);
+
+        m.handle(Input::ActivationChanged {
+            mode: ActivationMode::Toggle,
+            at: Millis(100),
+        });
+
+        // Toggle mode reads this release as "still holding the first press", so it
+        // does not stop -- but it must clear `key_down`, or the next press is
+        // mistaken for auto-repeat.
+        release(&mut m, 200);
+        let next = press(&mut m, 300);
+        assert_eq!(stops(&next), 1, "the next press must still be honoured");
     }
 }

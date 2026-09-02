@@ -239,3 +239,78 @@ fn send(event: HotkeyEvent) {
         let _ = tx.send(event);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ov_core::config::Key;
+
+    /// The bug this guards: `rebind` existed, worked, and had no callers, so a new
+    /// shortcut reached `settings.toml` and never reached the hook. The hook went
+    /// on matching the key it was given at launch.
+    ///
+    /// Asserted against the atomics the callback actually reads, because that -- not
+    /// the value on disk -- is what decides whether a keystroke is the chord.
+    #[test]
+    fn rebind_changes_the_key_the_callback_matches() {
+        let listener = WinHotkeyListener::new(Chord {
+            key: Key::RightCtrl,
+            exclusive: false,
+        });
+        assert_eq!(BOUND_VK.load(Ordering::Relaxed), vk_for(Key::RightCtrl));
+
+        listener
+            .rebind(&Chord {
+                key: Key::RightAlt,
+                exclusive: true,
+            })
+            .expect("rebind is infallible");
+
+        assert_eq!(
+            BOUND_VK.load(Ordering::Relaxed),
+            vk_for(Key::RightAlt),
+            "the callback must match the newly bound key"
+        );
+        assert!(
+            EXCLUSIVE.load(Ordering::Relaxed),
+            "exclusivity must follow too"
+        );
+
+        // Put the globals back: they are process-wide, and a later test in this
+        // binary would otherwise inherit Right Alt.
+        listener
+            .rebind(&Chord {
+                key: Key::RightCtrl,
+                exclusive: false,
+            })
+            .expect("rebind is infallible");
+    }
+
+    /// A rebind while the old key is held must clear the held flag, or the hook
+    /// believes the chord is still down and swallows the next press as auto-repeat
+    /// -- leaving the new key dead until something released the old one.
+    #[test]
+    fn rebind_clears_a_stale_held_flag() {
+        let listener = WinHotkeyListener::new(Chord {
+            key: Key::F13,
+            exclusive: false,
+        });
+        CHORD_DOWN.store(true, Ordering::Relaxed);
+
+        listener
+            .rebind(&Chord {
+                key: Key::F14,
+                exclusive: false,
+            })
+            .expect("rebind is infallible");
+
+        assert!(!CHORD_DOWN.load(Ordering::Relaxed));
+
+        listener
+            .rebind(&Chord {
+                key: Key::RightCtrl,
+                exclusive: false,
+            })
+            .expect("rebind is infallible");
+    }
+}

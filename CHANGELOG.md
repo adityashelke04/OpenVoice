@@ -22,6 +22,42 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-02
+
+Changing your dictation shortcut now works the moment you change it, and the
+settings that genuinely cannot be applied to a running app finally say so
+instead of leaving you to guess.
+
+### Fixed
+
+- **Changing the shortcut takes effect immediately, instead of doing nothing
+  until the next launch.** Picking a new key wrote it to `settings.toml` and
+  stopped there. The keyboard hook went on matching whichever key it had been
+  handed at startup, so the new key did nothing at all and the *old* one kept
+  working — while the Settings screen showed the new one as if it were already
+  bound. The machinery to rebind a live hook had been written and was simply
+  never called from anywhere. It is now called on save, and the Hub's
+  instructions and the Flow Bar's idle pill update to name the new key at the
+  same moment, so nothing on screen can point at a key that no longer works.
+
+- **"Hold to talk" and "Press to start and stop" switch without a restart
+  too.** The activation style was read once, when the session loop started, so
+  changing it wrote a setting that nothing went back to read. Both settings used
+  to carry the words "Takes effect after a restart" as a hint; neither offered a
+  way to restart, and neither warned you when you closed the window.
+
+### Added
+
+- **Settings tells you when a change really does need a restart, and offers to
+  do it.** The speech model, the microphone, the maximum recording length and
+  whether recordings are kept are all decided when the engine starts, and until
+  now changing one from the Settings screen was silent — it was saved, it was
+  not in force, and nothing said so. A banner now names exactly what is waiting
+  and carries a **Restart now** button. It is computed by comparing what the
+  running engine actually started with against what is on disk, so a setting
+  that reloads in place — your shortcut, language, dictionary and profiles — can
+  never appear there and train you to restart for no reason.
+
 ## [0.4.3] - 2026-09-02
 
 The release that actually reaches people. 0.4.1 and 0.4.2 were built and never
@@ -650,7 +686,9 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.3.0...v0.4.0

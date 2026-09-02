@@ -234,6 +234,13 @@ struct AppState {
     /// Set while weights are being fetched, on a first run or from the Models
     /// screen.
     download: Mutex<Option<engine::DownloadProgress>>,
+    /// The settings the running engine was actually built from.
+    ///
+    /// Kept so "does this need a restart?" can be *answered* rather than
+    /// hardcoded: the question is only ever whether the live engine differs from
+    /// what is now on disk, and a snapshot of what it booted with is the one
+    /// source that cannot drift as settings are added.
+    booted: Mutex<Option<settings::Settings>>,
     overlay: overlay::Overlay,
     settings: settings::Store,
     store: Arc<ov_store::SqliteStore>,
@@ -249,6 +256,7 @@ impl Default for AppState {
             // The launch attempt begins immediately, so this starts true.
             starting: AtomicBool::new(true),
             download: Mutex::new(None),
+            booted: Mutex::new(None),
             overlay: overlay::Overlay::new(),
             store: open_history(&settings),
             settings,
@@ -313,27 +321,102 @@ fn get_settings(state: tauri::State<'_, AppState>) -> settings::Settings {
 /// machinery, and the store validates before it writes.
 #[tauri::command]
 fn save_settings(
+    app: AppHandle,
     state: tauri::State<'_, AppState>,
     settings: settings::Settings,
 ) -> Result<settings::Settings, String> {
-    let restart_needed = {
-        let current = state.settings.get();
-        current.model != settings.model
-    };
+    let before = state.settings.get();
     let saved = state.settings.update(|s| *s = settings)?;
 
     // Push the edited dictionary into the running engine so corrections take effect
     // on the very next utterance. Without this the Dictionary screen would quietly
     // require a restart, and the interface says otherwise.
+    //
+    // The shortcut is here for exactly the same reason, and was the one thing this
+    // function persisted without ever applying: the keyboard hook kept the key it
+    // was handed at launch, so a rebind took effect only on the next start while
+    // the Settings screen showed it as already in force.
     if let Some(e) = state.engine.lock().expect("engine").as_ref() {
         e.reload_rules(&saved);
         e.reload_language(&saved);
+
+        if before.config.chord != saved.config.chord
+            || before.config.activation != saved.config.activation
+        {
+            if let Err(err) = e.reload_hotkey(&saved) {
+                // Not fatal to the save -- the setting is on disk and will hold
+                // from the next launch -- but the user must be told, because the
+                // failure is invisible: they would press the new key and get
+                // nothing, with the screen insisting it is bound.
+                tracing::error!(error = %err, "shortcut could not be applied live");
+                return Err(format!(
+                    "Saved, but the new shortcut could not be applied while it is running ({err}). Restart OpenVoice to start using it."
+                ));
+            }
+            publish_shortcut(&app, &state, &saved);
+        }
     }
 
-    if restart_needed {
-        tracing::info!(model = %saved.model, "model changed; restart required");
-    }
     Ok(saved)
+}
+
+/// Tell the rest of the app which key is bound now.
+///
+/// The Hub's instructions and the Flow Bar's idle pill both name the shortcut, and
+/// both read it from the one-shot `Ready` payload built at launch. Rebinding
+/// without republishing would leave every on-screen mention of the key pointing at
+/// the old one -- which is worse than the original bug, because the app would then
+/// be telling the user to press a key that genuinely no longer works.
+fn publish_shortcut(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+    saved: &settings::Settings,
+) {
+    let mut guard = state.ready.lock().expect("ready");
+    let Some(ready) = guard.as_mut() else { return };
+    ready.shortcut = saved.config.chord.key.label().into();
+    let updated = ready.clone();
+    drop(guard);
+    let _ = app.emit("ov://ready", updated);
+}
+
+/// What is saved but not yet in force, in the user's words.
+///
+/// Answered by diffing the live engine's boot settings against what is on disk,
+/// and listing only the fields that genuinely cannot be applied to a running
+/// engine. The shortcut, activation style, language, dictionary and profiles are
+/// deliberately absent: they reload in place, and naming them here would train the
+/// user to restart for changes that already took effect.
+#[tauri::command]
+fn restart_reasons(app: AppHandle, state: tauri::State<'_, AppState>) -> Vec<String> {
+    let Some(booted) = state.booted.lock().expect("booted").clone() else {
+        return Vec::new();
+    };
+    // Through `effective_settings`, not the store, so the comparison is against
+    // what a restart would *actually* load. With `OPENVOICE_MODEL` set the two
+    // differ permanently, and reading the store here would pin the banner open on
+    // a model change that restarting could never deliver.
+    let now = effective_settings(&app);
+    let mut reasons = Vec::new();
+
+    // Weights are loaded into the sidecar once, at warm-up.
+    if booted.model != now.model {
+        reasons.push("the speech model".to_string());
+    }
+    // The capture device is opened when the audio source is built.
+    if booted.config.input_device != now.config.input_device {
+        reasons.push("the microphone".to_string());
+    }
+    // Limits are moved into the session machine when its thread is spawned.
+    if booted.config.limits != now.config.limits {
+        reasons.push("the maximum recording length".to_string());
+    }
+    // Decided once, when the recording store is opened.
+    if booted.config.privacy.retain_audio != now.config.privacy.retain_audio {
+        reasons.push("keeping recordings".to_string());
+    }
+
+    reasons
 }
 
 /// Ask whether a newer version exists, right now.
@@ -453,6 +536,10 @@ fn spawn_engine(app: AppHandle) {
                 *state.engine.lock().expect("engine") = Some(engine);
                 *state.ready.lock().expect("ready") = Some(ready.clone());
                 *state.error.lock().expect("error") = None;
+                // Snapshot what this engine was actually built from, so
+                // `restart_reasons` compares against reality rather than against
+                // whatever happens to be on disk later.
+                *state.booted.lock().expect("booted") = Some(settings.clone());
                 let _ = app.emit("ov://ready", ready);
                 tracing::info!("engine ready");
             }
@@ -859,6 +946,7 @@ fn main() {
             show_hub_cmd,
             get_settings,
             save_settings,
+            restart_reasons,
             list_microphones,
             list_models,
             download_model,

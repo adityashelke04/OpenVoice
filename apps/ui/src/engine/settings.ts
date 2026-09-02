@@ -129,6 +129,15 @@ export const openDataDir = () => call<void>("open_data_dir");
 export const getLogPath = () => call<string>("get_log_path");
 export const restartApp = () => call<void>("restart_app");
 
+/** What has been saved but cannot reach the running engine, in the user's words.
+ *
+ *  Answered by the Rust side, which diffs what the live engine booted with against
+ *  what is on disk. Deliberately not computed here: the UI has no way of knowing
+ *  which fields the engine can adopt in place, and a hardcoded list in the front
+ *  end is exactly how a screen ends up telling people to restart for a setting
+ *  that already took effect. */
+export const restartReasons = () => call<string[]>("restart_reasons");
+
 /** Keys that can be bound, and how to name them on screen.
  *
  *  Mirrors `ov_core::config::Key::ALL` and `Key::label()`. The serde name is the
