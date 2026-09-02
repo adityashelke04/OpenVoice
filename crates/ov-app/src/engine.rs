@@ -485,22 +485,23 @@ fn locate_sidecar(
     })
 }
 
-/// Build every adapter, start the hotkey hook, and run the event loop on a
-/// background thread. Returns once the model is warm.
+/// Everything needed to launch the sidecar, resolved from settings and the
+/// install layout.
 ///
-/// `resource_dir` is Tauri's resource directory, or `None` when the caller has
-/// none. It is passed in rather than resolved here so this module stays free of
-/// Tauri types and testable on its own.
-pub fn start(
-    shell: Arc<dyn Shell>,
+/// Split out of [`start`] because fetching weights and running the engine are now
+/// separate operations. They used to be the same one, and that was the defect:
+/// the Models screen's Download button went through the live engine, and the
+/// engine only existed once a first-run download had already succeeded. A user
+/// whose first download failed — a dropped connection, a rate-limited request —
+/// was told "The speech engine is still starting. Try again in a moment." by the
+/// one screen that could have fixed it, forever, on every subsequent launch.
+/// [`fetch_model`] uses this to fetch weights with no engine at all.
+fn configure(
     settings: &crate::settings::Settings,
-    history: Arc<dyn HistoryStore>,
     resource_dir: Option<&Path>,
-) -> Result<(Arc<Engine>, Ready), String> {
+) -> Result<ov_asr::SidecarConfig, String> {
     let config = settings.config.clone();
-    let model = settings.model.as_str();
-
-    let mut cfg = locate_sidecar(resource_dir, model)?;
+    let mut cfg = locate_sidecar(resource_dir, settings.model.as_str())?;
     let data = crate::history::data_dir();
     // Weights and CUDA libraries live under the app's own data directory, so that
     // uninstalling reclaims the several gigabytes they occupy. A developer's
@@ -522,6 +523,58 @@ pub fn start(
         tracing::warn!(dir = %dir.display(), "keeping recordings on disk; this is off by default");
     }
     cfg.allow_download = std::env::var("OPENVOICE_ALLOW_DOWNLOAD").is_ok();
+    Ok(cfg)
+}
+
+/// Fetch a model's weights without a running engine.
+///
+/// Spawns a sidecar, downloads, and lets it exit. That is more expensive than
+/// asking a live engine — a process start and a Python import, a second or two —
+/// and it buys the thing that matters: the Models screen works when the engine is
+/// down, which is precisely when a user needs it. A first run that failed to fetch
+/// its weights is now recoverable from inside the app instead of being terminal.
+///
+/// Downloading is safe to do beside a *running* sidecar too: it writes to the
+/// shared cache and disturbs nothing already resident.
+pub fn fetch_model(
+    shell: Arc<dyn Shell>,
+    settings: &crate::settings::Settings,
+    resource_dir: Option<&Path>,
+    model: &str,
+) -> Result<bool, String> {
+    let cfg = configure(settings, resource_dir)?;
+    let transcriber = ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())?;
+    let name = model.to_string();
+    let reporter = shell.clone();
+    let result = transcriber.ensure_model_named(model, |p| {
+        reporter.set_download_progress(Some(DownloadProgress {
+            model: name.clone(),
+            done: p.done,
+            total: p.total,
+        }));
+    });
+    // Cleared on both paths: a failed download that left the progress bar up would
+    // strand the UI on a transfer that is not happening.
+    shell.set_download_progress(None);
+    result.map_err(|e| format!("Could not download {model}: {e}"))
+}
+
+/// Build every adapter, start the hotkey hook, and run the event loop on a
+/// background thread. Returns once the model is warm.
+///
+/// `resource_dir` is Tauri's resource directory, or `None` when the caller has
+/// none. It is passed in rather than resolved here so this module stays free of
+/// Tauri types and testable on its own.
+pub fn start(
+    shell: Arc<dyn Shell>,
+    settings: &crate::settings::Settings,
+    history: Arc<dyn HistoryStore>,
+    resource_dir: Option<&Path>,
+) -> Result<(Arc<Engine>, Ready), String> {
+    let config = settings.config.clone();
+    let model = settings.model.as_str();
+
+    let cfg = configure(settings, resource_dir)?;
     let transcriber = ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())?;
 
     // Fetch the weights before warming. `warm` on a model that is not present

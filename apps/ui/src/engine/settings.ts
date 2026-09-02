@@ -191,8 +191,25 @@ export interface ModelSpec {
 }
 
 /** Fetch a model's weights now, without switching to it or restarting.
- *  Resolves true if it actually transferred, false if it was already there. */
+ *  Resolves true if it actually transferred, false if it was already there.
+ *
+ *  Works whether or not the engine is running. That is the point of it: the
+ *  engine only comes up after a first-run download has succeeded, so a failed
+ *  first run used to leave this — the one screen that could have fixed it —
+ *  answering "the speech engine is still starting" on every launch. */
 export const downloadModel = (id: string) => call<boolean>("download_model", { id });
+
+/** Bytes fetched so far by whatever download is running, or null if none is.
+ *
+ *  Separate from `getStatus` because that answers "can I dictate", and answers
+ *  `ready` in preference to everything else — so a download started once the
+ *  engine was already up reported no progress at all. */
+export const getDownload = () =>
+  call<{ model: string; done: number; total: number } | null>("get_download");
+
+/** Try starting the engine again after a failure, without relaunching the app.
+ *  Resolves false when an attempt is already running. */
+export const retryEngine = () => call<boolean>("retry_engine");
 
 /** Delete a model's weights. Refuses to remove the one in use. */
 export const deleteModel = (id: string) => call<void>("delete_model", { id });

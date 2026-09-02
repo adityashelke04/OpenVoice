@@ -22,6 +22,68 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-02
+
+The release that actually reaches people. 0.4.1 and 0.4.2 were built and never
+published, so every download since 27 August served 0.4.0 — this fixes the
+distribution path that caused that, and the first-run failures that made a fresh
+install unusable when its model download did not complete.
+
+### Fixed
+
+- **The download button on the README now always serves the current build.**
+  It was a hand-written URL naming `v0.4.2` — a version that had never been
+  tagged and never been built, so the link 404'd. The site's button, separately,
+  named `v0.4.0`. Anyone downloading OpenVoice got a build from before two
+  releases' worth of Flow Bar fixes, or nothing at all. Every release now also
+  publishes the installer to a fixed `download` tag under a fixed filename, and
+  documentation links there; CI fails if a version-pinned installer URL reappears
+  in the docs.
+
+- **Releases are published rather than left as drafts.**
+  `release.yml` marked every release a draft, to be un-drafted by hand once the
+  installer had been checked. Two releases were built and neither was ever
+  un-drafted, so neither reached a single user, while the updater went on
+  offering a months-old build. A release nobody can download is the same thing as
+  a release that was never made.
+
+- **A failed first-run model download is no longer permanent.**
+  The engine fetched its weights at startup and refused to start without them,
+  and the Models screen's Download button required a running engine — so a first
+  run interrupted by a dropped connection or a rate-limited request left the app
+  answering "The speech engine is still starting. Try again in a moment." from
+  the one screen that could have fixed it, on every subsequent launch, forever.
+  Downloading no longer needs the engine, the startup error offers **Try again**,
+  and a model fetched by hand starts the engine when it lands.
+
+- **Download progress is visible again.**
+  Every progress message was written from inside the `guard_stdout` block that
+  keeps a library's stray `print` out of the protocol stream — so the host
+  received none of them, and the ticks were dumped to stderr afterwards as
+  "suppressed stdout during load". A first run showed "Starting the speech
+  engine" for the whole of a ~150 MB transfer with nothing moving. The Models
+  screen shows a percentage on the button too, which it previously could not:
+  progress was reported through the same channel as engine readiness, and
+  readiness outranked it.
+
+- **A dropped connection during a model download is retried.**
+  Three attempts with exponential backoff. The host deliberately does not retry a
+  request that already reported progress, so nothing else in the system would
+  have — and the Hub now explains a network failure in those terms rather than
+  pointing at the log file.
+
+- **Advertised model sizes were about half the truth.**
+  `base.en` was listed at 75 MB and transfers 148; `small.en` at 250 MB and
+  transfers 486. Measured against the live repositories.
+
+### Changed
+
+- **The frozen sidecar now bundles `hf_xet`.**
+  huggingface_hub imports it from inside the function that decides whether to use
+  it, so PyInstaller's static analysis never saw it and every installed copy fell
+  back to plain HTTP downloads — slower, and far less able to resume, on exactly
+  the transfer a fresh install cannot afford to lose.
+
 ## [0.4.2] - 2026-08-28
 
 This release completely overhauls the design system typography with bundled modern font packages (Geist Sans, Geist Mono, Inter, JetBrains Mono), introduces GPU-accelerated harmonic kinetic wave loading animations and ticking ellipsis, adds live UI reactivity (smooth WPM count-ups, auto-refreshing timestamps, real-time LED microphone VU meter), eliminates the Flow Bar rectangular window clipping artifact, and removes clutter from the idle Flow Bar.

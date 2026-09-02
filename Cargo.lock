@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "ov-app"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "ov-asr",
  "ov-audio",
@@ -2908,7 +2908,7 @@ dependencies = [
 
 [[package]]
 name = "ov-asr"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "filetime",
  "hound",
@@ -2921,7 +2921,7 @@ dependencies = [
 
 [[package]]
 name = "ov-audio"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "cpal",
  "ov-core",
@@ -2931,7 +2931,7 @@ dependencies = [
 
 [[package]]
 name = "ov-cli"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "clap",
  "hound",
@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "ov-core"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "pretty_assertions",
  "regex",
@@ -2961,7 +2961,7 @@ dependencies = [
 
 [[package]]
 name = "ov-format"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -2969,7 +2969,7 @@ dependencies = [
 
 [[package]]
 name = "ov-input"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "ov-core",
  "tracing",
@@ -2978,7 +2978,7 @@ dependencies = [
 
 [[package]]
 name = "ov-store"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "ov-core",
  "rusqlite",

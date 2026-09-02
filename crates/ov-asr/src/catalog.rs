@@ -53,8 +53,16 @@ pub struct ModelSpec {
     ///
     /// Static rather than queried, because the size has to be shown *before* the
     /// user agrees to the download, and asking Hugging Face for it would mean a
-    /// network call to render a settings screen. Verified against the published
-    /// repositories; see the test below for the sanity bounds.
+    /// network call to render a settings screen. See the test below for the
+    /// sanity bounds.
+    ///
+    /// These are the totals for the files actually fetched (`MODEL_FILES` in the
+    /// sidecar), measured against the live repositories -- not the repository's
+    /// full size, and not an estimate. Two of the three were previously about
+    /// half the truth: `base.en` was listed at 75 MB and transfers 148, `small.en`
+    /// at 250 and transfers 486. Understating the one number a user weighs before
+    /// agreeing to a wait makes the wait look like a hang, which is the state in
+    /// which people kill the app and leave a part-fetched model behind.
     pub size_mb: u32,
     /// Approximate VRAM required, in megabytes. Zero means it runs comfortably on
     /// the CPU.
@@ -81,7 +89,7 @@ pub const CATALOG: &[ModelSpec] = &[
         repo: "deepdml/faster-whisper-large-v3-turbo-ct2",
         compute_type: "float16",
         fallback_compute: Some("int8_float16"),
-        size_mb: 1600,
+        size_mb: 1620,
         vram_mb: 1600,
         english_only: false,
     },
@@ -90,7 +98,7 @@ pub const CATALOG: &[ModelSpec] = &[
         repo: "Systran/faster-whisper-small.en",
         compute_type: "float16",
         fallback_compute: Some("int8_float16"),
-        size_mb: 250,
+        size_mb: 486,
         vram_mb: 600,
         english_only: true,
     },
@@ -101,7 +109,7 @@ pub const CATALOG: &[ModelSpec] = &[
         // is the model that has to work on a machine with no GPU at all.
         compute_type: "int8",
         fallback_compute: None,
-        size_mb: 75,
+        size_mb: 148,
         vram_mb: 0,
         english_only: true,
     },
@@ -111,7 +119,7 @@ pub const CATALOG: &[ModelSpec] = &[
 ///
 /// `base.en`, not the most accurate one: the installed engine is CPU-only (ADR
 /// 0003), and `large-v3-turbo` on a CPU is the slowest model on the slowest path —
-/// a 1.6 GB download for an experience worse than the 75 MB alternative.
+/// a 1.6 GB download for an experience worse than the 148 MB alternative.
 pub const DEFAULT_MODEL: &str = "base.en";
 
 /// Look a model up by id.

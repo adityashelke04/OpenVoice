@@ -23,6 +23,7 @@ import {
 } from "../engine/stats";
 import {
   addDictionaryTerm,
+  retryEngine,
   type Settings as SettingsDoc,
 } from "../engine/settings";
 import { DictionaryScreen } from "../screens/Dictionary";
@@ -416,16 +417,44 @@ function FirstRun({ download }: { download: Download }) {
 function StartupError({ error }: { error: string }) {
   const memory = /malloc|out of memory|allocat|cuda error|cublas/i.test(error);
   const missing = /sidecar|python|faster-whisper|not found/i.test(error);
+  // A download that did not finish is the most common first-run failure and the
+  // only one with an obvious next step, so it gets its own explanation rather
+  // than being folded into the generic "see the log" case.
+  const network =
+    /download|connect|network|timed? ?out|resolve|429|rate limit|LocalEntryNotFound|offline/i.test(
+      error,
+    );
+
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await retryEngine();
+    } finally {
+      // The button stays disabled until the poller sees the outcome; releasing it
+      // here would let someone queue a second attempt behind the first.
+      setTimeout(() => setRetrying(false), 4000);
+    }
+  };
 
   return (
-    <Notice tone="danger">
+    <Notice
+      tone="danger"
+      action={
+        <Button variant="primary" onClick={retry} disabled={retrying}>
+          {retrying ? "Trying again…" : "Try again"}
+        </Button>
+      }
+    >
       <div>
         <div className="t-body-strong" style={{ color: "var(--ink)" }}>
           {memory
             ? "Not enough memory to load the speech model"
-            : missing
-              ? "The speech engine could not be found"
-              : "The speech engine could not start"}
+            : network
+              ? "The speech model could not be downloaded"
+              : missing
+                ? "The speech engine could not be found"
+                : "The speech engine could not start"}
         </div>
         <div className="t-caption" style={{ marginTop: 4, maxWidth: "70ch" }}>
           {memory ? (
@@ -433,6 +462,13 @@ function StartupError({ error }: { error: string }) {
               Close anything using the graphics card — a game, a video call, or
               another AI tool — and reopen OpenVoice. On a 4 GB card the model needs
               roughly 1.6 GB to itself. A smaller model is available in Models.
+            </>
+          ) : network ? (
+            <>
+              OpenVoice needs the internet once, to fetch the speech model —
+              everything after that runs offline. Check your connection and press
+              Try again. If you are on a work network that blocks huggingface.co,
+              the download will not get through from here.
             </>
           ) : missing ? (
             <>Reinstall, or set OPENVOICE_ROOT to the OpenVoice folder.</>

@@ -14,6 +14,7 @@ during model loading as a belt-and-braces measure.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 from collections.abc import Iterator
@@ -93,6 +94,41 @@ def progress(request_id: int, **fields: Any) -> dict[str, Any]:
     return {"id": request_id, "event": "progress", **fields}
 
 
+# Where protocol traffic goes while stdout is redirected away from a noisy
+# library. `None` outside such a block, which is the normal case.
+_direct: Any = None
+
+
+@contextlib.contextmanager
+def direct_stdout(stream: Any) -> Iterator[None]:
+    """Route :func:`write` to `stream` even while ``sys.stdout`` is redirected.
+
+    :func:`openvoice_asr.engine.guard_stdout` redirects stdout so that a stray
+    ``print`` inside huggingface_hub or ctranslate2 cannot corrupt this protocol.
+    That is right for *other people's* output and exactly wrong for our own:
+    :func:`write` resolves ``sys.stdout`` at call time, so every message sent from
+    inside the guard landed in the guard's buffer instead of reaching the host.
+
+    The concrete casualty was download progress. ``download_model`` reports its
+    ticks from inside the guard, so a first run sent none of them: the app sat on
+    "Starting the speech engine" for the whole of a ~150 MB transfer with nothing
+    moving, and the ticks were dumped to stderr afterwards as "suppressed stdout
+    during load" -- the one place nobody is looking. Killing an installer that
+    appears hung is the most reasonable thing a user can do at that point, and it
+    leaves a half-fetched model behind.
+
+    Nested guards restore the previous stream rather than clearing it, so an inner
+    guard cannot promote our output back into an outer guard's buffer.
+    """
+    global _direct
+    previous = _direct
+    _direct = stream
+    try:
+        yield
+    finally:
+        _direct = previous
+
+
 def write(obj: dict[str, Any]) -> None:
     """Emit one protocol message and flush.
 
@@ -100,8 +136,9 @@ def write(obj: dict[str, Any]) -> None:
     that is sitting in a buffer, and the resulting hang looks exactly like a model
     that is merely slow.
     """
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    stream = _direct if _direct is not None else sys.stdout
+    stream.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    stream.flush()
 
 
 def read_requests(stream: Any = None) -> Iterator[Request | BadRequest]:

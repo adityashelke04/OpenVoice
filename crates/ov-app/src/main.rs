@@ -19,6 +19,7 @@
 #![warn(clippy::all)]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ov_core::event::Event;
@@ -227,7 +228,11 @@ struct AppState {
     engine: Mutex<Option<Arc<engine::Engine>>>,
     ready: Mutex<Option<engine::Ready>>,
     error: Mutex<Option<String>>,
-    /// Set only while first-run weights are being fetched.
+    /// Whether a start attempt is in flight, so a retry cannot begin a second one
+    /// beside it. Two live engines would mean two sidecars and two hotkey hooks.
+    starting: AtomicBool,
+    /// Set while weights are being fetched, on a first run or from the Models
+    /// screen.
     download: Mutex<Option<engine::DownloadProgress>>,
     overlay: overlay::Overlay,
     settings: settings::Store,
@@ -241,6 +246,8 @@ impl Default for AppState {
             engine: Mutex::new(None),
             ready: Mutex::new(None),
             error: Mutex::new(None),
+            // The launch attempt begins immediately, so this starts true.
+            starting: AtomicBool::new(true),
             download: Mutex::new(None),
             overlay: overlay::Overlay::new(),
             store: open_history(&settings),
@@ -415,6 +422,95 @@ struct ModelRow {
     in_use: bool,
 }
 
+/// The settings the engine should start with, environment overrides applied.
+fn effective_settings(app: &AppHandle) -> settings::Settings {
+    let mut settings = app.state::<AppState>().settings.get();
+    // The environment variable still wins, so a stuck configuration can always be
+    // overridden from a shortcut without editing a file.
+    if let Ok(m) = std::env::var("OPENVOICE_MODEL") {
+        settings.model = m;
+    }
+    settings
+}
+
+/// Start the engine on a background thread, recording the outcome in state.
+///
+/// Called at launch and again by [`retry_engine`]. It is one function rather than
+/// two because a retry that differed from the original start in any way would be
+/// a second code path that only ever runs on the machines least able to report
+/// what it did.
+fn spawn_engine(app: AppHandle) {
+    std::thread::spawn(move || {
+        let shell = Arc::new(TauriShell { app: app.clone() });
+        let settings = effective_settings(&app);
+        let store = app.state::<AppState>().store.clone();
+        // Where the frozen speech engine lives in an installed copy. `Err` simply
+        // means this is not one, and the engine falls back to a repository checkout.
+        let resources = app.path().resource_dir().ok();
+        match engine::start(shell, &settings, store, resources.as_deref()) {
+            Ok((engine, ready)) => {
+                let state = app.state::<AppState>();
+                *state.engine.lock().expect("engine") = Some(engine);
+                *state.ready.lock().expect("ready") = Some(ready.clone());
+                *state.error.lock().expect("error") = None;
+                let _ = app.emit("ov://ready", ready);
+                tracing::info!("engine ready");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "engine failed to start");
+                // Recorded in state as well as emitted: the event can be missed,
+                // the state cannot.
+                *app.state::<AppState>().error.lock().expect("error") = Some(e.clone());
+                let _ = app.emit("ov://error", e);
+            }
+        }
+        app.state::<AppState>()
+            .starting
+            .store(false, Ordering::SeqCst);
+    });
+}
+
+/// Try starting the engine again after a failure.
+///
+/// The startup path fetches weights and then loads them, and either half can fail
+/// for reasons that have nothing to do with this machine — a dropped connection,
+/// a rate-limited request to a public model host. Until now that failure was
+/// permanent in the only sense that matters to a user: the app recorded the error
+/// and offered nothing to do about it, and relaunching simply reproduced it.
+///
+/// Returns whether a fresh attempt was started. `false` means one is already
+/// running, which is not an error — it is the answer to someone pressing the
+/// button twice.
+#[tauri::command]
+fn retry_engine(app: AppHandle, state: tauri::State<'_, AppState>) -> bool {
+    if state.engine.lock().expect("engine").is_some() {
+        return false;
+    }
+    // `swap` rather than load-then-store: two clicks landing together must not
+    // both start an engine, and each would hold a sidecar and a hotkey hook.
+    if state.starting.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    *state.error.lock().expect("error") = None;
+    tracing::info!("retrying engine start");
+    spawn_engine(app);
+    true
+}
+
+/// How a download that is running right now is getting on.
+///
+/// Polled separately from [`get_status`] rather than folded into it. `get_status`
+/// answers "can I dictate", and it answers `Ready` in preference to anything else
+/// — correctly, because the Flow Bar must not claim the engine is down while it is
+/// serving. But that also meant a download started from the Models screen *after*
+/// the engine was up reported no progress at all: the only progress channel was
+/// outranked by the readiness it had nothing to do with. Two questions, two
+/// commands.
+#[tauri::command]
+fn get_download(state: tauri::State<'_, AppState>) -> Option<engine::DownloadProgress> {
+    state.download.lock().expect("download").clone()
+}
+
 /// Fetch a model's weights now, without switching to it.
 ///
 /// Separate from choosing a model on purpose. Downloading a gigabyte and
@@ -422,20 +518,37 @@ struct ModelRow {
 /// the only way to get the weights was to select the model and restart — which
 /// meant discovering the download only after you had already switched.
 ///
-/// Requires the engine to be running, because the sidecar does the fetching. On a
-/// first run that is not yet true, and the answer says so rather than failing
-/// with something about a broken pipe.
+/// Works whether or not the engine is running. It used to require it, and that
+/// was the trap: the engine only comes up *after* a successful first-run
+/// download, so the screen offering to fetch a model was unavailable in the one
+/// situation where it was the fix. A user whose first download failed got "The
+/// speech engine is still starting. Try again in a moment." on every launch,
+/// indefinitely, with no way forward from inside the app.
 #[tauri::command]
-async fn download_model(state: tauri::State<'_, AppState>, id: String) -> Result<bool, String> {
-    let engine = state.engine.lock().expect("engine").as_ref().cloned();
-    let Some(engine) = engine else {
-        return Err("The speech engine is still starting. Try again in a moment.".into());
-    };
+async fn download_model(app: AppHandle, id: String) -> Result<bool, String> {
     // On a blocking pool: this transfers up to 1.6 GB and would otherwise hold
     // the async runtime for the whole download.
-    tauri::async_runtime::spawn_blocking(move || engine.download_model(&id))
-        .await
-        .map_err(|e| format!("download task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = app
+            .state::<AppState>()
+            .engine
+            .lock()
+            .expect("engine")
+            .as_ref()
+            .cloned();
+        match engine {
+            // Cheaper when it is available: no second process, no second import.
+            Some(engine) => engine.download_model(&id),
+            None => {
+                let shell = Arc::new(TauriShell { app: app.clone() });
+                let settings = effective_settings(&app);
+                let resources = app.path().resource_dir().ok();
+                engine::fetch_model(shell, &settings, resources.as_deref(), &id)
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("download task failed: {e}"))?
 }
 
 /// Delete a model's weights.
@@ -750,6 +863,8 @@ fn main() {
             list_models,
             download_model,
             delete_model,
+            retry_engine,
+            get_download,
             preview_format,
             check_for_update,
             install_update,
@@ -796,39 +911,7 @@ fn main() {
             // Starting the engine loads ~1.6 GB of weights, so it happens off the
             // UI thread. The window paints immediately and reports progress rather
             // than showing a frozen frame for several seconds.
-            let bg = handle.clone();
-            std::thread::spawn(move || {
-                let shell = Arc::new(TauriShell { app: bg.clone() });
-
-                let mut settings = bg.state::<AppState>().settings.get();
-                // The environment variable still wins, so a stuck configuration can
-                // always be overridden from a shortcut without editing a file.
-                if let Ok(m) = std::env::var("OPENVOICE_MODEL") {
-                    settings.model = m;
-                }
-
-                let store = bg.state::<AppState>().store.clone();
-                // Where the frozen speech engine lives in an installed copy. `Err`
-                // simply means this is not one, and the engine falls back to a
-                // repository checkout.
-                let resources = bg.path().resource_dir().ok();
-                match engine::start(shell, &settings, store, resources.as_deref()) {
-                    Ok((engine, ready)) => {
-                        let state = bg.state::<AppState>();
-                        *state.engine.lock().expect("engine") = Some(engine);
-                        *state.ready.lock().expect("ready") = Some(ready.clone());
-                        let _ = bg.emit("ov://ready", ready);
-                        tracing::info!("engine ready");
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "engine failed to start");
-                        // Recorded in state as well as emitted: the event can be
-                        // missed, the state cannot.
-                        *bg.state::<AppState>().error.lock().expect("error") = Some(e.clone());
-                        let _ = bg.emit("ov://error", e);
-                    }
-                }
-            });
+            spawn_engine(handle.clone());
 
             Ok(())
         })

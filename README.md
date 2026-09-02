@@ -14,7 +14,7 @@ No cloud, no account, no telemetry.
 
 **[openvoice-dictation.vercel.app](https://openvoice-dictation.vercel.app)**
 
-**[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/v0.4.2/OpenVoice_0.4.2_x64-setup.exe)** — one `.exe`, speech engine included.
+**[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/download/OpenVoice-x64-setup.exe)** — one `.exe`, speech engine included.
 [All releases →](https://github.com/adityashelke04/OpenVoice/releases) · [Docs](https://openvoice-dictation.vercel.app/docs) · [Changelog](https://openvoice-dictation.vercel.app/changelog)
 
 <img src="docs/images/flow-bar.png" width="420" alt="The Flow Bar: a small floating pill reading &quot;Hold Right Ctrl&quot;">
@@ -284,7 +284,7 @@ you hit them elsewhere:
 
 - Windows 10/11 (macOS and Linux planned for v0.5)
 - ~250 MB disk for the app — most of it the bundled speech engine — plus the model
-  you choose (75 MB to 1.6 GB)
+  you choose (148 MB to 1.6 GB)
 - An NVIDIA GPU with ≥2 GB VRAM is optional but makes the large model practical.
   See the note under [Installing](#installing) about what the installer ships.
 
@@ -295,11 +295,18 @@ relocated to another drive.
 
 ## Installing
 
-Download **[`OpenVoice_0.4.2_x64-setup.exe`](https://github.com/adityashelke04/OpenVoice/releases/download/v0.4.2/OpenVoice_0.4.2_x64-setup.exe)**
-from the [releases page](https://github.com/adityashelke04/OpenVoice/releases) and run it.
+Download **[`OpenVoice-x64-setup.exe`](https://github.com/adityashelke04/OpenVoice/releases/download/download/OpenVoice-x64-setup.exe)** and run it. That link always
+serves the newest build — it is deliberately not tied to a version number, because
+a hand-written one goes stale the moment a release ships without someone
+remembering to edit it. The [releases page](https://github.com/adityashelke04/OpenVoice/releases)
+has the version history.
+
 Nothing to configure, no Python to install — the speech engine is inside the
-installer. On first launch it downloads the `base.en` weights (~75 MB), with
-progress shown in the app; everything after that works offline.
+installer. On first launch it downloads the `base.en` weights (~150 MB), with
+progress shown in the app; everything after that works offline. If that first
+download fails — a dropped connection, a network that blocks `huggingface.co` —
+the app says so and offers **Try again**, and the Models screen can fetch the
+weights whether or not the engine came up.
 
 Then hold **Right Ctrl**, speak, and release.
 
@@ -313,7 +320,7 @@ Two things worth knowing before you install:
   tagged commit — so you can check that what you downloaded is what CI built:
 
   ```powershell
-  Get-FileHash .\OpenVoice_0.4.2_x64-setup.exe -Algorithm SHA256
+  Get-FileHash .\OpenVoice-x64-setup.exe -Algorithm SHA256
   ```
 
   Compare that against the hash in the release notes and the `.sha256` file
@@ -353,7 +360,7 @@ cd crates/ov-app
 node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js dev
 ```
 
-The first run downloads the `base.en` weights (~75 MB) before the window becomes
+The first run downloads the `base.en` weights (~150 MB) before the window becomes
 usable; the progress is shown in the app.
 
 That sequence builds the full Windows app. You do not need any of it to work on

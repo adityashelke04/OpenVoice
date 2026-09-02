@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from .protocol import log
+from .protocol import direct_stdout, log
 
 # Names ctranslate2 needs at decode time. If these cannot be loaded, CUDA is not
 # actually usable no matter what the device count says.
@@ -136,6 +136,21 @@ _OFFLINE = enforce_offline_by_default()
 # A load slower than this means something is wrong -- almost always the network.
 # Warn rather than fail: a slow load is still a working app.
 SLOW_LOAD_WARN_MS = 15_000
+
+# How many times a model download is attempted before the failure is reported.
+#
+# The host will not retry this for us: `request_with_progress` deliberately
+# refuses to retry a request that already reported progress, because restarting a
+# part-finished 1.6 GB transfer costs more than it saves. So this is the only
+# retry in the system, and without it a single dropped connection on a first run
+# leaves the app permanently unable to start -- there is no model, and the screen
+# that would let you fetch one needs a running engine.
+#
+# Three attempts with exponential backoff covers the two failures that actually
+# happen: a dropped connection, and a 429 from the Hub, which rate-limits the
+# anonymous requests every first run necessarily makes.
+DOWNLOAD_ATTEMPTS = int(os.environ.get("OPENVOICE_DOWNLOAD_ATTEMPTS", "3"))
+DOWNLOAD_BACKOFF_S = float(os.environ.get("OPENVOICE_DOWNLOAD_BACKOFF_S", "2"))
 
 # Decoding beam width. Overridable with OPENVOICE_BEAM_SIZE for experiments.
 BEAM_SIZE = int(os.environ.get("OPENVOICE_BEAM_SIZE", "5"))
@@ -297,7 +312,6 @@ def download_model(repo: str, on_progress: Any = None) -> str:
     each file's increments into one running total, because a per-file bar that
     restarts five times tells the user nothing about how long they are waiting.
     """
-    from huggingface_hub import snapshot_download
     from tqdm.auto import tqdm as _tqdm
 
     total = model_download_size(repo)
@@ -311,20 +325,60 @@ def download_model(repo: str, on_progress: Any = None) -> str:
             return super().update(n)
 
     log(f"downloading {repo} ({total / 1e6:.0f} MB)" if total else f"downloading {repo}")
-    # Downloads write to stdout under some terminal configurations, which would
-    # corrupt the protocol stream mid-transfer.
-    with online(), guard_stdout():
-        path = snapshot_download(
-            repo,
-            allow_patterns=list(MODEL_FILES),
-            tqdm_class=ProgressTqdm,
-        )
+    # Open the bar before the first byte arrives. Connection setup, DNS, and
+    # metadata resolution happen before huggingface_hub emits any increment, and on
+    # a slow link that silence is the part that looks most like a hang.
+    if on_progress is not None:
+        on_progress(0, total)
+
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        # Each attempt restarts the byte counter, because a resumed transfer
+        # re-reports only what it fetches this time. Rewinding is honest: the bar
+        # would otherwise run past 100% on the second attempt.
+        state["done"] = 0
+        try:
+            # Downloads write to stdout under some terminal configurations, which
+            # would corrupt the protocol stream mid-transfer.
+            with online(), guard_stdout():
+                path = _snapshot_download(
+                    repo,
+                    allow_patterns=list(MODEL_FILES),
+                    tqdm_class=ProgressTqdm,
+                )
+            break
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if attempt == DOWNLOAD_ATTEMPTS:
+                log(f"download of {repo} failed after {attempt} attempts: {exc}")
+                raise
+            # Anonymous callers are rate-limited by the Hub, and a first run is
+            # always anonymous, so backing off is not merely polite -- it is the
+            # difference between a slow start and an app that cannot start at all.
+            delay = DOWNLOAD_BACKOFF_S * (2 ** (attempt - 1))
+            log(f"download of {repo} failed ({str(exc)[:160]}); retrying in {delay:.0f}s")
+            time.sleep(delay)
+    else:  # pragma: no cover - the loop either breaks or raises
+        raise last or RuntimeError("download failed")
+
     # A resumed transfer never reports the bytes it skipped, so the final tick has
     # to be sent explicitly or the bar stops short of full and looks stuck.
     if on_progress is not None and total:
         on_progress(total, total)
     log(f"downloaded {repo} to {path}")
     return path
+
+
+def _snapshot_download(repo: str, **kwargs: Any) -> str:
+    """Indirection over ``snapshot_download`` so retries are testable.
+
+    Imported late for the same reason everything else here is: pulling in
+    huggingface_hub eagerly would add its import cost to every launch, including
+    the overwhelming majority that never download anything.
+    """
+    from huggingface_hub import snapshot_download
+
+    return str(snapshot_download(repo, **kwargs))
 
 
 @contextlib.contextmanager
@@ -334,9 +388,15 @@ def guard_stdout() -> Iterator[None]:
     Model loading pulls in libraries that occasionally print progress to stdout.
     On this protocol that is not a cosmetic problem: it corrupts the stream and
     produces a JSON parse error in the host that points nowhere near the cause.
+
+    Our *own* protocol messages are exempt: :func:`~openvoice_asr.protocol.write`
+    is pinned to the real stream for the duration, so progress reported from
+    inside a guarded download still reaches the host. See
+    :func:`~openvoice_asr.protocol.direct_stdout` for what that cost before.
     """
+    real = sys.stdout
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
+    with contextlib.redirect_stdout(buf), direct_stdout(real):
         yield
     captured = buf.getvalue().strip()
     if captured:

@@ -125,9 +125,21 @@ jobs:
           "$sum  $($nsis.Name)" | Out-File $sumFile -Encoding ascii -NoNewline
           Write-Host "sha256 $sum"
 
+          # A second copy under a name that never changes. The download button on
+          # the README and the website points at this one, so the link cannot rot
+          # the way a hand-typed version number does -- which is exactly how a
+          # release went out with the README advertising an installer that had
+          # never been built, and every visitor falling back to the newest one
+          # they could find by hand, months old.
+          $stable = Join-Path (Split-Path $nsis.FullName) 'OpenVoice-x64-setup.exe'
+          Copy-Item $nsis.FullName $stable -Force
+          "$sum  OpenVoice-x64-setup.exe" | Out-File "$stable.sha256" -Encoding ascii -NoNewline
+
           "path=$($nsis.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
           "sha256=$sum" | Out-File $env:GITHUB_OUTPUT -Append
           "sumfile=$sumFile" | Out-File $env:GITHUB_OUTPUT -Append
+          "stable=$stable" | Out-File $env:GITHUB_OUTPUT -Append
+          "stablesum=$stable.sha256" | Out-File $env:GITHUB_OUTPUT -Append
 
       # The manifest the running app fetches. `latest.json` is what
       # `plugins.updater.endpoints` points at, and its `signature` is the minisign
@@ -187,10 +199,14 @@ jobs:
             ${{ steps.collect.outputs.sumfile }}
             ${{ steps.manifest.outputs.sig }}
             ${{ steps.manifest.outputs.path }}
-          # Published as a draft so the attached installer can be checked before
-          # anyone can download it; flipped to public with
-          # `gh release edit <tag> --draft=false` once it has been.
-          draft: true
+          # Not a draft. It used to be one, on the reasoning that the installer
+          # should be checked before anyone could download it. What actually
+          # happened is that two releases were built, never un-drafted, and never
+          # reached a single user -- while the README advertised them and the
+          # updater went on offering a months-old build. A release nobody can
+          # download is indistinguishable from a release that was never made, and
+          # the check it was protecting is better done before the tag than after.
+          draft: false
           # Alpha, and unsigned. "Pre-release" is the honest label until there is
           # a signing certificate and a tested upgrade path.
           prerelease: true
@@ -211,6 +227,42 @@ jobs:
 
             Expected: `${{ steps.collect.outputs.sha256 }}`
 
+      # Where a *person* downloading the app is sent.
+      #
+      # A fixed tag holding a fixed filename, for the same reason the updater has
+      # one: `releases/latest/download/...` skips prereleases, and every release
+      # here is a prerelease, so that URL 404s for as long as OpenVoice is in
+      # alpha. The README and the website point here and never need editing again.
+      #
+      # This is the fix for the failure that prompted it. The README carried a
+      # hand-written `.../download/v0.4.2/OpenVoice_0.4.2_x64-setup.exe`, for a
+      # version that was never tagged and never built. The link 404'd, and people
+      # who wanted the app fell back to the newest release they could find by
+      # hand -- which was v0.4.0, months old, carrying every bug the two unshipped
+      # releases had fixed. A version number written by hand into a link is a
+      # promise that nothing enforces.
+      - name: Publish the permanent download link
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.collect.outputs.stable }}
+            ${{ steps.collect.outputs.stablesum }}
+          tag_name: download
+          name: Latest download
+          draft: false
+          prerelease: false
+          body: |
+            The current OpenVoice installer, at a URL that never changes:
+
+            <https://github.com/${{ github.repository }}/releases/download/download/OpenVoice-x64-setup.exe>
+
+            This is **${{ github.ref_name }}**. See the
+            [releases page](https://github.com/${{ github.repository }}/releases)
+            for version history and notes.
+
+            SHA-256: `${{ steps.collect.outputs.sha256 }}`
+
       # Where the running app actually looks.
       #
       # Not `releases/latest/download/...`: that URL skips prereleases, and every
@@ -219,11 +271,11 @@ jobs:
       # regardless of which version is newest.
       #
       # ORDERING, and it matters: this manifest points at the versioned release's
-      # installer, and a draft release's assets are not downloadable. Publishing
-      # the manifest before un-drafting the release would offer every user an
-      # update that 404s. So this step runs, and the release notes say it: the
-      # update goes live the moment you run
-      # `gh release edit <tag> --draft=false`, not before.
+      # installer, so that release has to exist and be downloadable first. It is
+      # published by the step above and is no longer a draft, so by the time this
+      # runs the URL below resolves. When the release *was* a draft, this manifest
+      # offered every user an update that 404'd until someone remembered to
+      # un-draft it by hand.
       - name: Publish the update manifest
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

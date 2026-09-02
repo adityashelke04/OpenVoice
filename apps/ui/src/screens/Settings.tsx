@@ -13,6 +13,7 @@ import {
   downloadModel,
   formatBytes,
   formatSize,
+  getDownload,
   HOTKEYS,
   installUpdate,
   listMicrophones,
@@ -22,6 +23,7 @@ import {
   type ModelSpec,
   openDataDir,
   restartApp,
+  retryEngine,
   saveSettings,
   type Settings as S,
   type UpdateStatus,
@@ -426,6 +428,20 @@ export function SettingsScreen({
   );
 }
 
+/** What the Download button says while a transfer is running.
+ *
+ * A percentage where one is knowable, a byte count where it is not. `total` is 0
+ * when the size lookup failed, and inventing "0%" for that case would read as a
+ * stall rather than as the unknown it is.
+ */
+function downloadLabel(progress: { done: number; total: number } | null): string {
+  if (!progress) return "Downloading…";
+  if (progress.total > 0) {
+    return `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%`;
+  }
+  return progress.done > 0 ? formatBytes(progress.done) : "Downloading…";
+}
+
 export function ModelsScreen({
   settings,
   patch,
@@ -443,6 +459,24 @@ export function ModelsScreen({
   useEffect(refresh, []);
 
   const [busy, setBusy] = useState<string | null>(null);
+  // Bytes so far for the transfer in flight. A download can take minutes on a
+  // slow link, and a button that only says "Downloading…" for that long is
+  // indistinguishable from one that has hung -- which is when people kill the
+  // app and leave a half-fetched model behind.
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
+  useEffect(() => {
+    if (busy === null) {
+      setProgress(null);
+      return;
+    }
+    const tick = () => {
+      getDownload().then((p) => setProgress(p && p.model === busy ? p : null));
+    };
+    tick();
+    const timer = setInterval(tick, 400);
+    return () => clearInterval(timer);
+  }, [busy]);
 
   const remove = async (id: string) => {
     setError(null);
@@ -460,6 +494,12 @@ export function ModelsScreen({
     try {
       await downloadModel(id);
       refresh();
+      // If the engine never came up -- which is the usual reason someone is on
+      // this screen fetching the model by hand -- the weights it was missing are
+      // now on disk, so start it. `retryEngine` is a no-op when one is already
+      // running, so this costs nothing in the ordinary case and saves the user
+      // from having to work out that a restart is what comes next.
+      await retryEngine().catch(() => undefined);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -560,7 +600,7 @@ export function ModelsScreen({
                   onClick={() => download(m.id)}
                   disabled={busy !== null}
                 >
-                  {busy === m.id ? "Downloading…" : "Download"}
+                  {busy === m.id ? downloadLabel(progress) : "Download"}
                 </Button>
               )}
               {m.installed && !m.inUse && (

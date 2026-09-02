@@ -40,6 +40,14 @@ for pkg in (
     "onnxruntime",     # runs the VAD
     "tokenizers",
     "huggingface_hub",
+    # The Xet download backend. huggingface_hub imports it lazily, from inside the
+    # function that decides whether to use it, so static analysis never sees it and
+    # a frozen build silently lacked it -- the sidecar logged "Xet Storage is
+    # enabled for this repo, but the 'hf_xet' package is not installed. Falling
+    # back to regular HTTP download" on every first run. The fallback works, but it
+    # is slower and it resumes far less well, which matters most on exactly the
+    # transfer this app cannot afford to lose: the first one.
+    "hf_xet",
 ):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     datas += pkg_datas

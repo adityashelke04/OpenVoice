@@ -391,3 +391,104 @@ class TestStdioEncoding:
         )
         assert proc.returncode != 0
         assert b"UnicodeEncodeError" in proc.stderr
+
+
+class TestProgressSurvivesStdoutGuarding:
+    """`guard_stdout` must not swallow the protocol messages sent from inside it.
+
+    `download_model` runs `snapshot_download` inside `guard_stdout()` so that a
+    library's stray `print` cannot corrupt the stream. But the progress callback
+    fires from inside that same block, and `write()` resolves `sys.stdout` at call
+    time -- so every progress tick was being captured into the guard's buffer and
+    dumped to stderr at the end as "suppressed stdout during load".
+
+    The visible effect was a first run that sat on "Starting the speech engine"
+    with no progress at all for the whole of a multi-minute download, which is the
+    single most common reason a user kills an installer half way through.
+    """
+
+    def test_write_reaches_the_real_stdout_from_inside_the_guard(self, capsys):
+        from openvoice_asr.engine import guard_stdout
+        from openvoice_asr.protocol import write
+
+        with guard_stdout():
+            print("a library's stray progress bar")
+            write(progress(1, downloaded=10, total=100))
+
+        out = capsys.readouterr().out
+        lines = [json.loads(line) for line in out.splitlines() if line.strip()]
+        assert lines == [{"id": 1, "event": "progress", "downloaded": 10, "total": 100}], (
+            f"protocol messages written inside guard_stdout must still reach stdout; got {out!r}"
+        )
+
+    def test_the_guard_still_swallows_ordinary_prints(self, capsys):
+        from openvoice_asr.engine import guard_stdout
+
+        with guard_stdout():
+            print("Reconstructing: 42%")
+
+        assert "Reconstructing" not in capsys.readouterr().out
+
+
+class TestDownloadResilience:
+    """A first-run download must survive a dropped connection.
+
+    Every transfer here happens on a fresh install, over whatever network the user
+    happens to have, against an endpoint that rate-limits anonymous callers. The
+    host deliberately does *not* retry a request that already reported progress --
+    restarting a part-done 1.6 GB transfer is worse than failing -- so if the
+    sidecar does not retry, nothing does, and a single dropped packet leaves the
+    app permanently unable to start.
+    """
+
+    def test_a_transient_failure_is_retried_and_resumed(self, monkeypatch):
+        from openvoice_asr import engine as eng
+
+        monkeypatch.setattr(eng, "model_download_size", lambda repo: 100)
+        monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+        attempts = []
+
+        def flaky(repo, allow_patterns=None, tqdm_class=None, **kw):
+            attempts.append(repo)
+            if len(attempts) < 3:
+                raise OSError("connection reset by peer")
+            return "/snapshot"
+
+        monkeypatch.setattr(eng, "_snapshot_download", flaky)
+
+        assert eng.download_model("org/name") == "/snapshot"
+        assert len(attempts) == 3, "a dropped connection should be retried, not surfaced"
+
+    def test_a_permanent_failure_still_raises(self, monkeypatch):
+        from openvoice_asr import engine as eng
+
+        monkeypatch.setattr(eng, "model_download_size", lambda repo: 100)
+        monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+        def always_fails(repo, allow_patterns=None, tqdm_class=None, **kw):
+            raise OSError("no route to host")
+
+        monkeypatch.setattr(eng, "_snapshot_download", always_fails)
+
+        with pytest.raises(OSError):
+            eng.download_model("org/name")
+
+    def test_progress_starts_at_zero_before_any_bytes_arrive(self, monkeypatch):
+        """The bar has to appear when the download starts, not when it ends.
+
+        Without an opening tick the host has nothing to report until huggingface_hub
+        produces its first chunk, so the UI stays on "Starting the speech engine"
+        through connection setup and metadata resolution -- which on a slow link is
+        the part that looks most like a hang.
+        """
+        from openvoice_asr import engine as eng
+
+        monkeypatch.setattr(eng, "model_download_size", lambda repo: 4096)
+        monkeypatch.setattr(eng, "_snapshot_download", lambda repo, **kw: "/snapshot")
+
+        seen: list[tuple[int, int]] = []
+        eng.download_model("org/name", lambda done, total: seen.append((done, total)))
+
+        assert seen[0] == (0, 4096), f"first tick should open the bar, got {seen[:1]}"
+        assert seen[-1] == (4096, 4096), f"last tick should fill it, got {seen[-1:]}"
