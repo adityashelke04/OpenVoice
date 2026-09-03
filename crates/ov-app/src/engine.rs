@@ -670,7 +670,22 @@ pub fn start(
         // wait — which is the entire point of bundling them.
         let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
         tracing::info!(dir = %dir.display(), "loading Parakeet");
-        let t = ov_asr::parakeet::ParakeetTranscriber::new(dir).map_err(|e| e.to_string())?;
+
+        // Retention has to be passed explicitly now. With the sidecar it fell
+        // out of how audio crossed the process boundary — a WAV was written
+        // either way, and "keep recordings" merely spared it from deletion.
+        // In-process nothing is written unless it is asked for, so forgetting
+        // this would silently turn the setting off rather than silently on.
+        let retain = config
+            .privacy
+            .retain_audio
+            .then(|| crate::history::data_dir().join("audio"));
+        if let Some(dir) = &retain {
+            tracing::warn!(dir = %dir.display(), "keeping recordings on disk; this is off by default");
+        }
+
+        let t = ov_asr::parakeet::ParakeetTranscriber::with_retention(dir, retain)
+            .map_err(|e| e.to_string())?;
         (Arc::new(t), None)
     } else {
         let cfg = configure(settings, resource_dir)?;

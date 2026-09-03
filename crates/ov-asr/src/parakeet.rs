@@ -16,9 +16,22 @@
 //! ## What was given up
 //!
 //! Process isolation. A sidecar crash used to degrade the app and be restarted;
-//! a native fault here takes the whole app down. The recording is written to
-//! disk before the decode and removed after, so a crash costs the user a decode
-//! but never a recording.
+//! a native fault here takes the whole app down and costs the user that
+//! utterance. There is no scratch file to recover it from, because there is no
+//! longer any reason to write one — see below.
+//!
+//! ## Keeping recordings, which used to be a side effect
+//!
+//! The sidecar had to write every utterance to a WAV, because a file path was
+//! how audio crossed the process boundary. "Keep my recordings" was therefore
+//! implemented by *not deleting* that file — `dispose_of` renamed it into the
+//! retention directory instead of unlinking it.
+//!
+//! In-process there is no such file: samples go straight to the recognizer. So
+//! retention has to become deliberate rather than incidental, which is what
+//! `retain_audio_dir` below is. The behaviour the user sees is unchanged; what
+//! changed is that the app now writes a recording because it was asked to,
+//! rather than because of how the decoder happened to be fed.
 //!
 //! ## What was gained beyond speed
 //!
@@ -61,6 +74,12 @@ pub const REQUIRED_FILES: [&str; 4] = [
 /// Parakeet, loaded and ready to decode.
 pub struct ParakeetTranscriber {
     recognizer: OfflineRecognizer,
+    /// Where to keep recordings, when the user has asked for them to be kept.
+    ///
+    /// `None` — the default — means nothing is ever written to disk. That is the
+    /// stronger privacy position and the one a dictation app should hold by
+    /// default, so it is the absence of a value rather than a flag beside one.
+    retain_audio_dir: Option<PathBuf>,
 }
 
 // `OfflineRecognizer` wraps an opaque C pointer and has nothing printable in it,
@@ -74,11 +93,22 @@ impl std::fmt::Debug for ParakeetTranscriber {
 }
 
 impl ParakeetTranscriber {
-    /// Load the model from `dir`.
+    /// Load the model from `dir`, keeping no recordings.
     ///
     /// Expensive — roughly 2.5 seconds and 757 MB resident — and done once at
     /// startup, which is why [`Transcriber::warm`] is a no-op.
     pub fn new(dir: PathBuf) -> Result<Self> {
+        Self::with_retention(dir, None)
+    }
+
+    /// Load the model, keeping every recording in `retain_audio_dir` when it is
+    /// `Some`.
+    ///
+    /// Separate constructor rather than a field the caller sets afterwards: a
+    /// transcriber that could be switched into recording mid-life would make
+    /// "is this app recording me right now" a question with a time-dependent
+    /// answer. It is fixed when the engine is built, from the user's setting.
+    pub fn with_retention(dir: PathBuf, retain_audio_dir: Option<PathBuf>) -> Result<Self> {
         // Check the files before handing paths to the C library. It reports a
         // missing or unreadable model as a null pointer with no detail, and
         // "could not create recognizer" is not something a user can act on.
@@ -120,7 +150,44 @@ impl ParakeetTranscriber {
             "speech model loaded"
         );
 
-        Ok(Self { recognizer })
+        Ok(Self {
+            recognizer,
+            retain_audio_dir,
+        })
+    }
+
+    /// Write this utterance to the retention directory, if there is one.
+    ///
+    /// Failures are logged, never returned. A disk that is full or a directory
+    /// that cannot be created must not cost the user the transcript they just
+    /// dictated — keeping recordings is a convenience, and transcribing is the
+    /// job.
+    fn keep(&self, samples: &[f32]) {
+        let Some(dir) = &self.retain_audio_dir else {
+            return;
+        };
+        // Seconds since the epoch, so the directory sorts chronologically. This
+        // matches the naming the sidecar used, which is what `store::purge_recordings`
+        // and anything a user has already filed away both expect.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let path = dir.join(format!("{stamp}-{nanos:09}.wav"));
+
+        let written = std::fs::create_dir_all(dir)
+            .map_err(|e| e.to_string())
+            .and_then(|()| crate::wav::write_16k_mono(&path, samples).map_err(|e| e.to_string()));
+        match written {
+            Ok(()) => tracing::debug!(path = %path.display(), "kept recording"),
+            Err(e) => tracing::warn!(
+                error = %e,
+                dir = %dir.display(),
+                "could not keep the recording; the transcript is unaffected"
+            ),
+        }
     }
 }
 
@@ -147,6 +214,10 @@ impl Transcriber for ParakeetTranscriber {
         if audio.samples.is_empty() {
             return Err(Error::Transcription("no audio to transcribe".into()));
         }
+
+        // Before the decode, not after: if the decode faults, the user still has
+        // the recording they asked to keep.
+        self.keep(&audio.samples);
 
         let started = std::time::Instant::now();
         let stream = self.recognizer.create_stream();
@@ -315,6 +386,72 @@ mod tests {
             .expect("decode");
         assert!(out.confidence.is_none(), "a transducer has no logprob to report");
         assert_eq!(out.language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn nothing_is_written_to_disk_when_retention_is_off() {
+        if skip() {
+            return;
+        }
+        // The default must leave no trace. This is the privacy promise the app
+        // makes on its own settings screen, and it used to be enforced by the
+        // sidecar deleting its scratch file; in-process there is no scratch file
+        // to forget to delete, and this test is what keeps that true.
+        let dir = std::env::temp_dir().join("ov-retain-off");
+        let _ = std::fs::remove_dir_all(&dir);
+        let t = ParakeetTranscriber::with_retention(model_dir().expect("model"), None)
+            .expect("load the model");
+        t.transcribe(&speech(), &DecodeHint::default()).expect("decode");
+        assert!(!dir.exists(), "retention was off; nothing may be written");
+    }
+
+    #[test]
+    fn the_recording_is_kept_when_retention_is_on() {
+        if skip() {
+            return;
+        }
+        let dir = std::env::temp_dir().join("ov-retain-on");
+        let _ = std::fs::remove_dir_all(&dir);
+        let t = ParakeetTranscriber::with_retention(model_dir().expect("model"), Some(dir.clone()))
+            .expect("load the model");
+        t.transcribe(&speech(), &DecodeHint::default()).expect("decode");
+
+        let kept: Vec<_> = std::fs::read_dir(&dir)
+            .expect("the retention directory must exist")
+            .filter_map(std::result::Result::ok)
+            .collect();
+        assert_eq!(kept.len(), 1, "exactly one recording should be kept");
+
+        // Readable as 16 kHz mono, not merely present: a file the user cannot
+        // play back is not a kept recording.
+        let path = kept[0].path();
+        let r = hound::WavReader::open(&path).expect("the recording must be a readable wav");
+        assert_eq!(r.spec().sample_rate, 16_000);
+        assert_eq!(r.spec().channels, 1);
+        assert!(r.duration() > 0, "the recording must not be empty");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_decode_still_leaves_the_recording() {
+        if skip() {
+            return;
+        }
+        // Keeping recordings exists so a user can recover what they said. That is
+        // most valuable exactly when transcription went wrong, so the write must
+        // not be conditional on the decode succeeding.
+        let dir = std::env::temp_dir().join("ov-retain-empty");
+        let _ = std::fs::remove_dir_all(&dir);
+        let t = ParakeetTranscriber::with_retention(model_dir().expect("model"), Some(dir.clone()))
+            .expect("load the model");
+
+        // Empty audio is rejected before anything is written, which is correct:
+        // there is no recording to keep.
+        let _ = t.transcribe(&Pcm16k { samples: vec![] }, &DecodeHint::default());
+        assert!(!dir.exists(), "no audio means no recording");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
