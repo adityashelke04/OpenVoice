@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.4"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
@@ -27,15 +27,22 @@ authors = ["Aditya Shelke <adityashelke04@gmail.com>"]
 # The explicit `version` on a path dependency is not redundant. Without it the
 # requirement resolves to `*`, which `cargo deny check bans` correctly flags as a
 # wildcard: a workspace where every internal edge is "any version" cannot be
-# audited. Keep these in step with `workspace.package.version` above.
-ov-core = { path = "crates/ov-core", version = "0.4.2" }
-ov-format = { path = "crates/ov-format", version = "0.4.2" }
-ov-audio = { path = "crates/ov-audio", version = "0.4.2" }
-ov-asr = { path = "crates/ov-asr", version = "0.4.2" }
-ov-input = { path = "crates/ov-input", version = "0.4.2" }
+# audited.
+#
+# These MUST be kept in step with `workspace.package.version` above. They drifted
+# once already -- they sat at 0.4.2 through the 0.4.3 and 0.4.4 releases, which
+# resolved fine only because `^0.4.2` happily matches 0.4.4. The 0.5.0 bump is
+# where that stopped being true, and every `cargo` invocation began failing with
+# "failed to select a version for the requirement `ov-core = ^0.4.2`". If you
+# change the version above, change these six lines in the same commit.
+ov-core = { path = "crates/ov-core", version = "0.5.0" }
+ov-format = { path = "crates/ov-format", version = "0.5.0" }
+ov-audio = { path = "crates/ov-audio", version = "0.5.0" }
+ov-asr = { path = "crates/ov-asr", version = "0.5.0" }
+ov-input = { path = "crates/ov-input", version = "0.5.0" }
 # Not yet written. Declared here so the crate lands without a manifest change;
 # harmless while unused, because Cargo only resolves an entry a member consumes.
-ov-store = { path = "crates/ov-store", version = "0.4.2" }
+ov-store = { path = "crates/ov-store", version = "0.5.0" }
 
 # Errors
 thiserror = "2"
