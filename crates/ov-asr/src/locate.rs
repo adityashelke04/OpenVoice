@@ -6,7 +6,7 @@
 //! — two `stat` calls at startup is a cheap way to not care, and it means a
 //! build packaged either way still runs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ov_core::error::{Error, Result};
 
@@ -49,13 +49,13 @@ fn candidates() -> Vec<PathBuf> {
             out.push(dir.join("resources").join("models").join(MODEL_DIR_NAME));
         }
     }
-    // A checkout, for `cargo run` and the tests.
-    out.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("models")
-            .join(MODEL_DIR_NAME),
-    );
+    // A checkout, for `cargo run` and the tests. Walked up rather than joined
+    // with "../..", because this path is printed in logs and in the error a user
+    // sees when the model is missing, and `crates\ov-asr\../..\models` is not a
+    // path anyone should be asked to read.
+    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2) {
+        out.push(root.join("models").join(MODEL_DIR_NAME));
+    }
     out
 }
 

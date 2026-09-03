@@ -166,73 +166,6 @@ fn pick_profile(name: &str) -> Profile {
         .unwrap_or_else(Profile::editor)
 }
 
-/// Locate the directory containing the `sidecar/` package.
-///
-/// Ordered from most to least explicit, and every candidate is *verified* rather
-/// than assumed. An earlier version walked up three levels from the executable and
-/// fell back to `"."`, which fails the moment the build directory is not inside the
-/// repository — as it is not here, because `CARGO_TARGET_DIR` points at another
-/// drive. The fallback then resolved against whatever the working directory
-/// happened to be, so the app worked when launched from the repo and died with
-/// "The directory name is invalid (os error 267)" when launched from a shortcut.
-///
-/// The compile-time manifest path is the entry that makes development reliable: it
-/// is baked in at build time and does not care where the binary or the working
-/// directory end up.
-fn find_root() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Some(p) = std::env::var_os("OPENVOICE_ROOT") {
-        candidates.push(PathBuf::from(p));
-    }
-
-    // Installed layout: sidecar ships beside the executable.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.to_path_buf());
-        }
-    }
-
-    // Development: crates/ov-cli -> repository root. Known at compile time.
-    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2) {
-        candidates.push(root.to_path_buf());
-    }
-
-    // Last resort: anywhere at or above the working directory.
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.extend(cwd.ancestors().map(Path::to_path_buf));
-    }
-
-    candidates
-        .into_iter()
-        .find(|p| p.join("sidecar").join("openvoice_asr").is_dir())
-}
-
-/// Like [`find_root`], but reports what it tried instead of silently guessing.
-fn repo_root() -> Result<PathBuf, String> {
-    find_root().ok_or_else(|| {
-        format!(
-            "could not find the OpenVoice `sidecar` directory.\n  \
-             looked beside the executable ({}),\n  \
-             at the build-time repo root ({}),\n  \
-             and above the working directory ({}).\n  \
-             Set OPENVOICE_ROOT to the repository path to fix this.",
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(Path::to_path_buf))
-                .unwrap_or_default()
-                .display(),
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .ancestors()
-                .nth(2)
-                .unwrap_or(Path::new("?"))
-                .display(),
-            std::env::current_dir().unwrap_or_default().display(),
-        )
-    })
-}
-
-
 fn build_transcriber(_cli: &Cli) -> Result<ov_asr::parakeet::ParakeetTranscriber, String> {
     let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
     ov_asr::parakeet::ParakeetTranscriber::new(dir).map_err(|e| e.to_string())
@@ -290,13 +223,6 @@ fn resolve_mic(want: Option<&String>) -> Result<Option<String>, String> {
 fn cmd_doctor(cli: &Cli) -> Result<(), String> {
     // Doctor must report problems, never abort on them: the whole point is to run
     // when something is broken.
-    match repo_root() {
-        Ok(r) => {
-            println!("repo root     ok  {}", r.display());
-        }
-        Err(e) => println!("repo root     FAILED\n{e}"),
-    }
-
     // Python and a model preset were the two things most likely to be wrong
     // here. Neither exists any more: the model ships with the app, so the one
     // remaining failure is that it is not where it should be.
