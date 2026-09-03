@@ -1,59 +1,28 @@
-/** Settings and Models.
+/** Settings.
  *
- * Copy is written for someone who has never opened a terminal — "Accurate" and
- * "Light" rather than `large-v3-turbo` and `small.en`, with the model id shown as
- * secondary detail for people who want it. The audience is anyone who types.
+ * Copy is written for someone who has never opened a terminal. There used to be a
+ * Models screen beside this one, where the reader had to weigh graphics memory
+ * against accuracy against download size before they could dictate well. There is
+ * one model now and it ships with the app, so the screen is gone and the choice
+ * with it — removing the decision is the feature, not a simplification of it.
  */
 
 import { useEffect, useState } from "react";
 import { Badge, Button, Card, MicTestMeter, Notice, Select, Toggle } from "../ui";
 import {
   checkForUpdate,
-  deleteModel,
-  downloadModel,
-  formatBytes,
-  formatSize,
-  getDownload,
   HOTKEYS,
   installUpdate,
   listMicrophones,
-  listModels,
   loadSettings,
-  MODEL_COPY,
-  type ModelSpec,
   openDataDir,
   restartApp,
   restartReasons,
-  retryEngine,
   saveSettings,
   type Settings as S,
   type UpdateStatus,
 } from "../engine/settings";
 import "./screens.css";
-
-/** Whisper's most commonly dictated languages, curated rather than exhaustive —
- *  faster-whisper actually accepts ~99 ISO 639-1 codes, but a 99-item dropdown
- *  is not a feature, it's a search problem. "Auto-detect" maps to `null`
- *  (`Config.language: None`), which trades a little accuracy for not asking
- *  the user to pick anything at all. */
-const LANGUAGES: readonly [code: string, name: string][] = [
-  ["en", "English"],
-  ["es", "Spanish"],
-  ["fr", "French"],
-  ["de", "German"],
-  ["it", "Italian"],
-  ["pt", "Portuguese"],
-  ["nl", "Dutch"],
-  ["ru", "Russian"],
-  ["zh", "Chinese"],
-  ["ja", "Japanese"],
-  ["ko", "Korean"],
-  ["hi", "Hindi"],
-  ["ar", "Arabic"],
-  ["tr", "Turkish"],
-  ["pl", "Polish"],
-  ["sv", "Swedish"],
-];
 
 /** Join reasons the way a person would say them: "a, b and c".
  *
@@ -334,22 +303,6 @@ export function SettingsScreen({
             <MicTestMeter levelRef={levelRef} />
           </Row>
           <Row
-            label="Language"
-            hint="Telling OpenVoice the language beats auto-detect for a single short utterance — that's the whole reason this isn't 'Auto-detect' by default. Change it if you dictate in something other than English."
-          >
-            <Select
-              options={["Auto-detect", ...LANGUAGES.map(([, name]) => name)]}
-              value={LANGUAGES.find(([code]) => code === c.language)?.[1] ?? "Auto-detect"}
-              onChange={(e) =>
-                patch((s) => {
-                  const found = LANGUAGES.find(([, name]) => name === e.target.value);
-                  s.config.language = found ? found[0] : null;
-                })
-              }
-              style={{ width: 200 }}
-            />
-          </Row>
-          <Row
             label="Sound feedback"
             hint="A short tone when you start dictating, and another when it finishes and lands."
           >
@@ -451,10 +404,24 @@ export function SettingsScreen({
           </Row>
           <Row
             label="Sends nothing anywhere"
-            hint="There is no analytics, no crash reporting and no account. This is not a setting because there is nothing to turn off — the code has no way to reach the internet except to download a speech model you ask for."
+            hint="There is no analytics, no crash reporting and no account. This is not a setting because there is nothing to turn off — dictation has no network path at all. The speech model is installed with the app, so nothing is ever fetched."
           >
             <Badge dot tone="live">
               Local only
+            </Badge>
+          </Row>
+          {/* Deliberately has no Download, Delete or "In use" control. There is
+              one model, it arrived with the app, and it cannot be changed or
+              removed -- so this states a fact rather than offering a choice. No
+              accuracy figure appears here on purpose: the measured one came from
+              audio that is in-domain for this model, and a number on screen would
+              outlive that caveat. */}
+          <Row
+            label="Speech engine"
+            hint="Parakeet TDT 0.6B v2, from NVIDIA. English. It runs entirely on this computer and is installed with the app, so there is nothing to choose and nothing to download."
+          >
+            <Badge dot tone="live">
+              Typically ~0.5 s
             </Badge>
           </Row>
           <Row label="Your data" hint="Transcripts and settings live in a plain folder you can open, copy or delete.">
@@ -462,207 +429,6 @@ export function SettingsScreen({
           </Row>
         </div>
       </Card>
-    </div>
-  );
-}
-
-/** What the Download button says while a transfer is running.
- *
- * A percentage where one is knowable, a byte count where it is not. `total` is 0
- * when the size lookup failed, and inventing "0%" for that case would read as a
- * stall rather than as the unknown it is.
- */
-function downloadLabel(progress: { done: number; total: number } | null): string {
-  if (!progress) return "Downloading…";
-  if (progress.total > 0) {
-    return `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%`;
-  }
-  return progress.done > 0 ? formatBytes(progress.done) : "Downloading…";
-}
-
-export function ModelsScreen({
-  settings,
-  patch,
-}: {
-  settings: S;
-  patch: (fn: (s: S) => void) => void;
-}) {
-  const [pending, setPending] = useState<string | null>(null);
-  const [models, setModels] = useState<ModelSpec[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = () => {
-    listModels().then((m) => m && setModels(m));
-  };
-  useEffect(refresh, []);
-
-  const [busy, setBusy] = useState<string | null>(null);
-  // Bytes so far for the transfer in flight. A download can take minutes on a
-  // slow link, and a button that only says "Downloading…" for that long is
-  // indistinguishable from one that has hung -- which is when people kill the
-  // app and leave a half-fetched model behind.
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-
-  useEffect(() => {
-    if (busy === null) {
-      setProgress(null);
-      return;
-    }
-    const tick = () => {
-      getDownload().then((p) => setProgress(p && p.model === busy ? p : null));
-    };
-    tick();
-    const timer = setInterval(tick, 400);
-    return () => clearInterval(timer);
-  }, [busy]);
-
-  const remove = async (id: string) => {
-    setError(null);
-    try {
-      await deleteModel(id);
-      refresh();
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  const download = async (id: string) => {
-    setError(null);
-    setBusy(id);
-    try {
-      await downloadModel(id);
-      refresh();
-      // If the engine never came up -- which is the usual reason someone is on
-      // this screen fetching the model by hand -- the weights it was missing are
-      // now on disk, so start it. `retryEngine` is a no-op when one is already
-      // running, so this costs nothing in the ordinary case and saves the user
-      // from having to work out that a restart is what comes next.
-      await retryEngine().catch(() => undefined);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const onDisk = (models ?? []).reduce((n, m) => n + m.installedBytes, 0);
-
-  return (
-    <div className="screen">
-      <header className="screen-head">
-        <h1 className="t-title">Speech model</h1>
-        <p className="t-body screen-lead">
-          Bigger models understand more, but need more of your graphics card.
-          Everything runs on this machine either way.
-        </p>
-      </header>
-
-      {pending && (
-        <Notice
-          tone="warn"
-          action={
-            <Button variant="primary" onClick={() => restartApp()}>
-              Restart now
-            </Button>
-          }
-        >
-          Restart to start using <strong>{pending}</strong>. If it's already on
-          this machine, that takes about ten seconds. If not, you'll see it
-          download first — OpenVoice never fetches a model you haven't chosen.
-        </Notice>
-      )}
-
-      <div className="model-list">
-        {(models ?? []).map((m) => {
-          const active = settings.model === m.id;
-          // A model with no copy still renders: its id is the label and its real
-          // size is shown. That is what keeps adding one a single-file change.
-          const copy = MODEL_COPY[m.id];
-          const name = copy?.name ?? m.id;
-          const detail =
-            copy?.detail ??
-            (m.vramMb > 0
-              ? `Needs about ${formatSize(m.vramMb)} of graphics memory.`
-              : "Works without a graphics card.");
-          return (
-            // A container rather than one big button: the row needs its own
-            // Delete control, and an interactive element cannot legally live
-            // inside another one.
-            <div key={m.id} className="model" data-active={active}>
-              <button
-                className="model-select"
-                aria-pressed={active}
-                onClick={() => {
-                  if (active) return;
-                  patch((s) => (s.model = m.id));
-                  setPending(name);
-                }}
-              >
-                <div className="model-main">
-                <div className="hstack">
-                  <span className="t-subheading">{name}</span>
-                  {/* "In use" only when it is both chosen *and* present. A model
-                      you have selected but not downloaded is Selected, not in
-                      use — claiming otherwise next to a Download button was
-                      simply contradictory. */}
-                  {active && m.installed && (
-                    <Badge dot tone="live">
-                      In use
-                    </Badge>
-                  )}
-                  {active && !m.installed && <Badge>Selected — not downloaded</Badge>}
-                  {m.englishOnly && <Badge>English only</Badge>}
-                  {m.installed && !active && <Badge>On this computer</Badge>}
-                </div>
-                <div className="t-caption model-detail">{detail}</div>
-                <div className="t-mono model-id">{m.id}</div>
-              </div>
-              <div className="model-numbers">
-                <div>
-                  <div className="t-label">{m.installed ? "On disk" : "Download"}</div>
-                  <div className="t-mono">
-                    {m.installed ? formatBytes(m.installedBytes) : formatSize(m.sizeMb)}
-                  </div>
-                </div>
-                {copy?.speed && (
-                  <div>
-                    <div className="t-label">Typical</div>
-                    <div className="t-mono">{copy.speed}</div>
-                  </div>
-                )}
-                </div>
-              </button>
-              {!m.installed && (
-                <Button
-                  size="sm"
-                  onClick={() => download(m.id)}
-                  disabled={busy !== null}
-                >
-                  {busy === m.id ? downloadLabel(progress) : "Download"}
-                </Button>
-              )}
-              {m.installed && !m.inUse && (
-                <Button size="sm" variant="ghost" onClick={() => remove(m.id)}>
-                  Delete
-                </Button>
-              )}
-            </div>
-          );
-        })}
-        {models === null && (
-          <p className="t-caption">Reading the model list…</p>
-        )}
-      </div>
-
-      {error && <Notice tone="danger">{error}</Notice>}
-
-      <p className="t-caption screen-foot">
-        Speech models are using {formatBytes(onDisk)} on this computer. Deleting one
-        frees that space; you can download it again later. Measured timings are from
-        an RTX 3050 with 4 GB — if a game or video call is using the graphics card,
-        choose <strong>Light</strong>, because the accurate model needs the card
-        mostly to itself.
-      </p>
     </div>
   );
 }

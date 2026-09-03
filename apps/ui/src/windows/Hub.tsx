@@ -9,7 +9,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, Empty, Input, Kbd, Notice, Stat, Waveform, useCountUp, useLiveTimeAgo } from "../ui";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
-import type { Download } from "../engine/useLiveEngine";
 import {
   computeStats,
   humanDuration,
@@ -28,14 +27,13 @@ import {
 } from "../engine/settings";
 import { DictionaryScreen } from "../screens/Dictionary";
 import { AdvancedScreen, ProfilesScreen } from "../screens/Profiles";
-import { ModelsScreen, SettingsScreen, useSettings } from "../screens/Settings";
+import { SettingsScreen, useSettings } from "../screens/Settings";
 import "./hub.css";
 
 const NAV = [
   { id: "home", label: "Home", ready: true },
   { id: "dictionary", label: "Dictionary", ready: true },
   { id: "style", label: "Writing style", ready: true },
-  { id: "models", label: "Speech model", ready: true },
   { id: "settings", label: "Settings", ready: true },
   { id: "advanced", label: "Advanced", ready: true },
 ];
@@ -195,7 +193,6 @@ export function Hub() {
             On a first run there is no history, no statistics and nothing to
             configure that will survive the model changing — showing empty states
             behind a download makes the app look broken at the worst moment. */}
-        {!view.error && view.download && <FirstRun download={view.download} />}
 
         {view.notice && (
           <Notice
@@ -213,7 +210,7 @@ export function Hub() {
         {/* Settings arrive asynchronously. Rendering nothing until they do left
             every screen but Home blank for a beat, which reads as a broken app
             rather than a loading one. */}
-        {!view.download && tab !== "home" && !settings && (
+        {tab !== "home" && !settings && (
           <div className="screen">
             <div className="skeleton skeleton-title" />
             <div className="skeleton skeleton-card" />
@@ -221,11 +218,10 @@ export function Hub() {
           </div>
         )}
 
-        {!view.download && tab !== "home" && settings && (
+        {tab !== "home" && settings && (
           <>
             {tab === "dictionary" && <DictionaryScreen settings={settings} patch={patch} />}
             {tab === "style" && <ProfilesScreen settings={settings} patch={patch} />}
-            {tab === "models" && <ModelsScreen settings={settings} patch={patch} />}
             {tab === "settings" && (
               <SettingsScreen
                 settings={settings}
@@ -238,7 +234,7 @@ export function Hub() {
           </>
         )}
 
-        {!view.download && tab === "home" && (
+        {tab === "home" && (
         <>
         <header className="hub-head">
           <div>
@@ -343,72 +339,6 @@ export function Hub() {
   );
 }
 
-/** Bytes as a person reads them. Two significant figures is enough at every size
- *  and stops the number changing width several times a second. */
-function mb(bytes: number): string {
-  // The threshold is 995 MB, not 1 GB, because the megabyte branch *rounds*:
-  // 999,999,999 bytes rendered as "1000 MB" while the total beside it rendered
-  // as "1.0 GB", so the progress line read "1000 MB of 1.0 GB". Switching units
-  // at the point where rounding would first produce a four-digit number keeps
-  // the two halves of that sentence in the same units.
-  if (bytes >= 995e6) return `${(bytes / 1e9).toFixed(1)} GB`;
-  return `${Math.round(bytes / 1e6)} MB`;
-}
-
-/** First run: the speech model is being fetched.
- *
- * This is the only moment OpenVoice uses the network, and it is the first thing a
- * new user ever sees — so it says plainly what is being downloaded, how far along
- * it is, and that it happens once. A silent multi-minute wait on first launch is
- * the single most likely reason someone deletes the app before using it.
- *
- * No spinner: a real byte count is both more honest and more reassuring than an
- * animation that conveys nothing.
- */
-function FirstRun({ download }: { download: Download }) {
-  const { done, total, model } = download;
-  // `total` is 0 when the size lookup failed. Showing "NaN%" or a bar stuck at
-  // zero would read as a hang, so fall back to counting up the bytes we do know.
-  const known = total > 0;
-  const pct = known ? Math.min(100, Math.round((done / total) * 100)) : 0;
-
-  return (
-    <div className="first-run">
-      <h1 className="t-title">Setting up OpenVoice</h1>
-      <p className="t-body first-run-lede">
-        Downloading the <strong>{model}</strong> speech model. This happens once —
-        afterwards OpenVoice works offline, and your voice never leaves this
-        machine.
-      </p>
-
-      <div
-        className="first-run-track"
-        role="progressbar"
-        aria-label={`Downloading the ${model} speech model`}
-        aria-valuenow={known ? pct : undefined}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuetext={known ? `${pct} percent` : `${mb(done)} downloaded`}
-      >
-        <div
-          className={known ? "first-run-fill" : "first-run-fill is-unknown"}
-          style={known ? { width: `${pct}%` } : undefined}
-        />
-      </div>
-
-      <div className="first-run-figures t-mono">
-        <span>{known ? `${mb(done)} of ${mb(total)}` : mb(done)}</span>
-        {known && <span>{pct}%</span>}
-      </div>
-
-      <p className="t-caption first-run-note">
-        Leave this window open. You can carry on working — OpenVoice will be ready
-        when the download finishes.
-      </p>
-    </div>
-  );
-}
-
 /** Turns an engine failure into something a person can act on.
  *
  * The raw text is kept — it is what you would search for — but the common causes
@@ -416,15 +346,7 @@ function FirstRun({ download }: { download: Download }) {
  * failing C function tells the user nothing they can do. */
 function StartupError({ error }: { error: string }) {
   const memory = /malloc|out of memory|allocat|cuda error|cublas/i.test(error);
-  const missing = /sidecar|python|faster-whisper|not found/i.test(error);
-  // A download that did not finish is the most common first-run failure and the
-  // only one with an obvious next step, so it gets its own explanation rather
-  // than being folded into the generic "see the log" case.
-  const network =
-    /download|connect|network|timed? ?out|resolve|429|rate limit|LocalEntryNotFound|offline/i.test(
-      error,
-    );
-
+  const missing = /speech model|no speech model|not found|incomplete/i.test(error);
   const [retrying, setRetrying] = useState(false);
   const retry = async () => {
     setRetrying(true);
@@ -450,28 +372,23 @@ function StartupError({ error }: { error: string }) {
         <div className="t-body-strong" style={{ color: "var(--ink)" }}>
           {memory
             ? "Not enough memory to load the speech model"
-            : network
-              ? "The speech model could not be downloaded"
-              : missing
-                ? "The speech engine could not be found"
-                : "The speech engine could not start"}
+            : missing
+              ? "The speech model could not be found"
+              : "The speech engine could not start"}
         </div>
         <div className="t-caption" style={{ marginTop: 4, maxWidth: "70ch" }}>
           {memory ? (
             <>
-              Close anything using the graphics card — a game, a video call, or
-              another AI tool — and reopen OpenVoice. On a 4 GB card the model needs
-              roughly 1.6 GB to itself. A smaller model is available in Models.
-            </>
-          ) : network ? (
-            <>
-              OpenVoice needs the internet once, to fetch the speech model —
-              everything after that runs offline. Check your connection and press
-              Try again. If you are on a work network that blocks huggingface.co,
-              the download will not get through from here.
+              The speech model needs about 750 MB of memory. Close something
+              large — a game, a browser with many tabs, another AI tool — and
+              reopen OpenVoice.
             </>
           ) : missing ? (
-            <>Reinstall, or set OPENVOICE_ROOT to the OpenVoice folder.</>
+            <>
+              The speech model is missing from the installation. Reinstalling
+              OpenVoice will restore it; it ships inside the installer, so this
+              needs no download.
+            </>
           ) : (
             <>The full details are in the log file.</>
           )}

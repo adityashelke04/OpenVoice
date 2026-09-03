@@ -129,6 +129,10 @@ export const openDataDir = () => call<void>("open_data_dir");
 export const getLogPath = () => call<string>("get_log_path");
 export const restartApp = () => call<void>("restart_app");
 
+/** Try starting the engine again after a failure, without relaunching the app.
+ *  Resolves false when an attempt is already running. */
+export const retryEngine = () => call<boolean>("retry_engine");
+
 /** What has been saved but cannot reach the running engine, in the user's words.
  *
  *  Answered by the Rust side, which diffs what the live engine booted with against
@@ -180,92 +184,3 @@ export const checkForUpdate = () => call<UpdateStatus>("check_for_update");
  *  nothing is downloaded as a side effect of checking. */
 export const installUpdate = () => call<void>("install_update");
 
-/** One model: the catalogue entry, plus what this machine knows about it.
- *  Mirrors `ov_app::ModelRow`, which flattens `ov_asr::catalog::ModelSpec`. */
-export interface ModelSpec {
-  id: string;
-  repo: string;
-  computeType: string;
-  fallbackCompute: string | null;
-  sizeMb: number;
-  vramMb: number;
-  englishOnly: boolean;
-  /** Whether any of its files are on disk. */
-  installed: boolean;
-  /** How much room they take. Zero when not installed — and also when a transfer
-   *  failed before writing anything, which `installed` distinguishes. */
-  installedBytes: number;
-  /** Whether this is the model the app is set to load. */
-  inUse: boolean;
-}
-
-/** Fetch a model's weights now, without switching to it or restarting.
- *  Resolves true if it actually transferred, false if it was already there.
- *
- *  Works whether or not the engine is running. That is the point of it: the
- *  engine only comes up after a first-run download has succeeded, so a failed
- *  first run used to leave this — the one screen that could have fixed it —
- *  answering "the speech engine is still starting" on every launch. */
-export const downloadModel = (id: string) => call<boolean>("download_model", { id });
-
-/** Bytes fetched so far by whatever download is running, or null if none is.
- *
- *  Separate from `getStatus` because that answers "can I dictate", and answers
- *  `ready` in preference to everything else — so a download started once the
- *  engine was already up reported no progress at all. */
-export const getDownload = () =>
-  call<{ model: string; done: number; total: number } | null>("get_download");
-
-/** Try starting the engine again after a failure, without relaunching the app.
- *  Resolves false when an attempt is already running. */
-export const retryEngine = () => call<boolean>("retry_engine");
-
-/** Delete a model's weights. Refuses to remove the one in use. */
-export const deleteModel = (id: string) => call<void>("delete_model", { id });
-
-/** Bytes as a person would write them. */
-export function formatBytes(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
-  if (bytes > 0) return "under 1 MB";
-  return "nothing";
-}
-
-/** The models this build can load.
- *
- *  Comes from `ov_asr::catalog`, which is the single source of truth. This file
- *  used to carry its own copy — ids, sizes and all — alongside the sidecar's, and
- *  the two could disagree without either being wrong on its own terms.
- */
-export const listModels = () => call<ModelSpec[]>("list_models");
-
-/** How a model is described to someone who has never heard of Whisper.
- *
- *  Deliberately *not* in the Rust catalogue. "Accurate" is copy, and "~650 ms" is
- *  a measurement taken on one particular laptop — neither is a property of the
- *  model. A model with no entry here still renders, labelled with its id and its
- *  real size, which is the behaviour that makes adding one a one-file change.
- */
-export const MODEL_COPY: Record<string, { name: string; detail: string; speed: string }> = {
-  "large-v3-turbo": {
-    name: "Accurate",
-    detail: "Best quality. Needs about 1.6 GB of graphics memory.",
-    speed: "~650 ms",
-  },
-  "small.en": {
-    name: "Light",
-    detail: "Good quality, English only. Runs alongside a game.",
-    speed: "~300 ms",
-  },
-  "base.en": {
-    name: "Fastest",
-    detail: "Lowest quality. Works without a graphics card.",
-    speed: "~190 ms",
-  },
-};
-
-/** Human-readable download size. Built from the catalogue's megabytes so the
- *  number shown and the number downloaded cannot disagree. */
-export function formatSize(mb: number): string {
-  return mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`;
-}

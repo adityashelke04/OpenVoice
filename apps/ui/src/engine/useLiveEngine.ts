@@ -20,7 +20,8 @@ export interface Ready {
   mic: string;
 }
 
-/** First-run weight download. `total` is 0 when the size is not yet known. */
+/** @deprecated Nothing downloads any more; the model ships in the installer.
+ *  Kept only until the Flow Bar's loading states stop referencing the shape. */
 export interface Download {
   model: string;
   done: number;
@@ -121,7 +122,6 @@ export function useLiveEngine() {
         try {
           const s = await invoke<
             | { state: "starting" }
-            | ({ state: "downloading" } & Download)
             | ({ state: "ready" } & Ready)
             | { state: "failed"; error: string }
           >("get_status");
@@ -140,14 +140,6 @@ export function useLiveEngine() {
             setView((v) => ({ ...v, error: s.error, download: null }));
             return true;
           }
-          if (s.state === "downloading") {
-            const { state: _s, ...download } = s;
-            setView((v) => ({ ...v, download: download as Download }));
-            return false;
-          }
-          // "starting" — clear any download left from a previous poll, so the bar
-          // does not linger at 100% through the model load that follows.
-          setView((v) => (v.download ? { ...v, download: null } : v));
         } catch {
           /* command not registered yet */
         }
