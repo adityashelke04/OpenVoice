@@ -321,7 +321,7 @@ hole, and this time the claim will be backed by code.
 | Silence rejection | VAD + 3 gates | model returns `""` | **Better**, less code |
 | Profiles / formatting | `ov-format` | unchanged | Equal |
 | Dictionary — post-hoc fix | `ov-format` | unchanged | Equal |
-| **Dictionary — decode biasing** | `initial_prompt` | **lost initially** | **Regression** — see §8.1 |
+| **Proper-noun decode hint** ("Claude" not "cloud") | `Entry.hint` → `initial_prompt` | **lost initially** | **Regression** — narrow but real, see §8.1 |
 | History, retention, redaction | `ov-store` | unchanged | Equal |
 | Confidence in history | `avg_logprob` | none | Lost — cosmetic |
 | Language selection | Whisper multilingual | English only | Lost — accepted |
@@ -329,25 +329,47 @@ hole, and this time the claim will be backed by code.
 | Crash isolation | separate process | in-process | **Regression** — see §10 |
 | Offline first run | 148 MB download | none | **Better** |
 
-### 8.1 The dictionary regression, and how it is repaid
+### 8.1 The proper-noun hint, precisely
 
-`engine.py` argues correctly that biasing at decode time beats repairing output
-afterwards, because the decoder still has acoustic evidence that
-post-processing has thrown away. `build_hint()` packs the dictionary into
-Whisper's `initial_prompt`; Parakeet has no equivalent input.
+An earlier draft of this spec called this "the dictionary regression" and
+overstated it. Reading `ov-core/src/ports.rs:106-122`,
+`ov-format/src/dictionary.rs` and `ov-app/src/engine.rs:867-880` corrects the
+picture, and the corrected version is both narrower and sharper.
 
-`OfflineRecognizer::create_stream_with_hotwords(&str)` exists in the Rust API
-and is the intended replacement. It was **not** validated in the spike — the
-Python equivalent needed `modified_beam_search` plus a `bpe.model` file the
-sherpa-onnx release does not ship, and passing `modeling_unit` without it
-**segfaulted the process**. The Rust signature takes a plain string and may not
-share that constraint, but this is unproven.
+**Stuffing the decoder with the dictionary was already measured harmful and is
+already off.** The `DecodeHint` docs record the A/B: a prompt full of camelCase
+identifiers teaches Whisper to *write* camelCase, welding ordinary spoken words
+together — including the command words the formatter needs to see. So there is
+no general "decode-time dictionary biasing" to lose.
 
-Decision: **ship v0.5.0 without decode-time biasing.** The dictionary still
-works via `ov-format`, and Parakeet's far lower base error rate means fewer
-words need correcting in the first place. Hotword support is a follow-up with
-its own spike, gated on a crash-safety test — a segfault in-process now takes
-the whole app down (§10), so this must not be enabled casually.
+**What is actually sent is a curated subset**: `Entry.hint` is a per-entry flag,
+true only for proper nouns, and `hint_terms()` collects just those. The comment
+at `engine.rs:869` states the case exactly: *"Claude is indistinguishable from
+cloud once the audio is gone, so the decoder has to be told it is a candidate
+while it still has it."*
+
+That is the real loss, and it is genuinely irreparable downstream. `ov-format`
+cannot repair `cloud` → `Claude`, because both are ordinary English words and
+the acoustic evidence that distinguished them is gone. Narrow, but not cosmetic.
+
+**Verified in Rust (2026-09-03), correcting the spike's Python finding:**
+`create_stream_with_hotwords()` **does not segfault.** With an unencodable
+hotword it logs `Cannot find ID for token`, skips the hotwords, and returns a
+normal transcript. Degradation is graceful, so the §10 concern about a native
+fault on this path is withdrawn. What blocks it is narrower: encoding a hotword
+into the model's BPE tokens needs a `bpe.model` file that the sherpa-onnx
+release asset does not ship.
+
+Decision, unchanged but for better reasons: **ship v0.5.0 without hotwords.**
+The follow-up is now a small, well-defined errand — obtain or export
+`bpe.model` for `nvidia/parakeet-tdt-0.6b-v2`, set `modeling_unit = "bpe"`,
+switch `decoding_method` to `modified_beam_search` (measured cost: 543 ms vs
+494 ms median) — rather than an open-ended spike gated on crash safety.
+
+Until then, proper nouns in the user's dictionary that collide phonetically
+with common words will be transcribed as the common word. This is the one
+capability v0.5.0 is strictly worse at, and it should be said plainly in the
+changelog rather than buried.
 
 ## 9. Testing
 
@@ -381,7 +403,7 @@ proof that bundling worked.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| **Loss of process isolation** — a native crash in ONNX now kills the app, where a sidecar crash only degraded it | High | Do not enable hotwords (the one path with an observed segfault) without a spike. Keep the audio file on disk so a crash never loses a recording. Watch for panics at the `transcribe` boundary. |
+| **Loss of process isolation** — a native crash in ONNX now kills the app, where a sidecar crash only degraded it | Medium | Downgraded from High: the one path with an observed segfault (hotwords) degrades gracefully in Rust — verified, §8.1 — and is not shipping in v0.5.0 regardless. Keep the audio on disk across the decode so a crash never costs a recording. |
 | Real-voice accuracy below the LibriSpeech figure | Medium | §11 gate before release. §2.1 forbids quoting 1.9% in UI copy. |
 | 757 MB resident RAM breaks the "runs alongside a game" promise | Medium | Measure on the 4 GB reference laptop under load; revise copy if needed. |
 | 550 MB installer deters users | Medium | Product owner's explicit call; §7.2 keeps updates small. |
