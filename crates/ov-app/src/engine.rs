@@ -641,13 +641,12 @@ pub fn fetch_model(
 
 /// Which speech backend to construct.
 ///
-/// Parakeet is opt-in for exactly one commit. It becomes the default next, once
-/// it has been used for real dictation inside the app rather than only in
-/// `ov-asr`'s tests. Until then this is what makes an A/B comparison a restart
-/// instead of a rebuild — and afterwards it is what makes the flip revertible on
-/// its own.
+/// Parakeet unless explicitly overridden. `OPENVOICE_ENGINE=whisper` still
+/// reaches the sidecar; that escape hatch survives exactly until the sidecar is
+/// deleted in the next commit, and exists so this flip can be reverted alone if
+/// real dictation turns out worse than the benchmarks promised.
 fn use_parakeet() -> bool {
-    std::env::var("OPENVOICE_ENGINE").is_ok_and(|v| v.eq_ignore_ascii_case("parakeet"))
+    !std::env::var("OPENVOICE_ENGINE").is_ok_and(|v| v.eq_ignore_ascii_case("whisper"))
 }
 
 /// Build every adapter, start the hotkey hook, and run the event loop on a
