@@ -111,9 +111,15 @@ pub trait Transcriber: Send + Sync {
 
 ADR 0003 predicted this: "a different implementation can land later and be
 selected by config with no change to `ov-core`, `ov-format`, or the UI." That
-prediction is being cashed in. `ov-core`, `ov-format`, `ov-audio`, `ov-input`
-and `ov-store` see **no changes at all**. The hexagonal boundary from ADR 0001
-is what makes a swap this large a contained one.
+prediction is being cashed in.
+
+**The `Transcriber` port itself does not change, and no crate behind it changes
+shape.** `ov-format`, `ov-audio`, `ov-input` and `ov-store` are untouched.
+`ov-core` keeps every public type exactly as it is — including
+`DecodeHint.language` and `Transcript.confidence`, which become unused rather
+than deleted (§4). Persisted and versioned types are not worth a migration to
+tidy. The hexagonal boundary from ADR 0001 is what makes a swap this large a
+contained one, and honouring it means resisting the urge to renovate behind it.
 
 ## 4. What gets deleted
 
@@ -132,8 +138,16 @@ Deletion is the majority of this work and the majority of its value.
 | PyInstaller + `uv` steps in `release.yml` | ~30 lines | No Python in CI |
 | Models screen (`Settings.tsx`) | ~170 lines | Nothing to choose |
 | `MODEL_COPY`, `formatSize`, download IPC | ~60 lines | Nothing to download |
-| `config.language` | field + UI | Parakeet v2 is English-only |
-| `Transcript.confidence` | field + column | Transducers emit no logprob |
+| `config.language` **UI only** | picker + copy | Parakeet v2 is English-only |
+| `Transcript.confidence` **display only** | history column | Transducers emit no logprob |
+
+**The last two rows are deliberately not deleted from `ov-core`.** `Config` is
+versioned and `Transcript` is persisted, so removing either field would force a
+settings migration and a history-schema migration on live user data — a
+destructive change bought for nothing, since an unused field costs a few bytes.
+`config.language` stays in the struct and is ignored; `Transcript.confidence`
+stays and is always `None`. Both disappear from the UI. If they are ever needed
+again — Parakeet v3 is multilingual (§10) — they are still there.
 
 **Net effect: the application gets smaller and structurally simpler.** That is
 the headline, not the model swap.
@@ -272,8 +286,18 @@ sane update channel — at the cost of one NSIS hook and a CI step. The model is
 fixed, versioned asset that never changes between app releases, so excluding it
 from the app's update channel is correct in principle, not just convenient.
 
-**This is the one open decision in this spec.** Implementation starts on
-everything else; §12 Phase 4 is blocked on the answer.
+**Decided (2026-09-03): option B.** Concretely:
+
+- The model installs to `<install dir>/models/parakeet-tdt-0.6b-v2/` via an NSIS
+  `installerHooks` script, not via `bundle.resources`.
+- The hook skips writing the model when a directory of the same version is
+  already present, so a re-install or repair does not rewrite 631 MB.
+- The uninstall hook removes it, so uninstalling does not strand 631 MB.
+- CI publishes two artifacts: the full installer (download page) and a slim
+  app-only installer wired to `latest.json` (updater channel).
+- `latest.json` must therefore point at the **slim** artifact. Pointing it at the
+  full installer silently reintroduces option A's cost, so §9 gains a release
+  check asserting the updater artifact is under 100 MB.
 
 ### 7.3 CI
 
