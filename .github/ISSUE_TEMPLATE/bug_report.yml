@@ -69,7 +69,7 @@ body:
     attributes:
       label: Model
       description: Which Whisper model was selected, and whether it was running on CUDA or CPU.
-      placeholder: "base.en on CUDA"
+      placeholder: "parakeet-tdt-0.6b-v2"
     validations:
       required: true
 

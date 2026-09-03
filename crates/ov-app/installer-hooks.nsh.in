@@ -1,8 +1,12 @@
 ; Installer hooks — where the speech model goes, and why it is not a resource.
 ;
-; This is a TEMPLATE. `crates/ov-app/build.rs` substitutes @MODEL_FILES@ and
-; writes the real `installer-hooks.nsh` beside it, which tauri.conf.json points
-; at. Do not edit the generated file; edit this one.
+; This is a TEMPLATE. `crates/ov-app/build.rs` fills in the placeholder in
+; NSIS_HOOK_POSTINSTALL below and writes the real `installer-hooks.nsh` beside
+; it, which tauri.conf.json points at. Do not edit the generated file; edit this
+; one. (The placeholder token is deliberately not repeated in this comment: it
+; is substituted by plain string replacement, and an earlier version of this
+; file named it here — so the first substitution landed in the comment and NSIS
+; met an IfFileExists at top level.)
 ;
 ; ---------------------------------------------------------------------------
 ; Why the model is installed here rather than bundled as a Tauri resource

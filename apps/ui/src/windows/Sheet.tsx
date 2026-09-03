@@ -232,7 +232,7 @@ export function Sheet() {
         </div>
         <div className="vstack" style={{ marginTop: 16 }}>
           <Notice action={<Button size="sm" variant="ghost">Dismiss</Button>}>
-            Model <code className="t-mono">large-v3-turbo</code> loaded on CUDA in 1.4 s.
+            Model <code className="t-mono">parakeet-tdt-0.6b-v2</code> loaded in 2.8 s.
           </Notice>
           <Notice tone="warn" action={<Button size="sm" variant="ghost">Paste</Button>}>
             Copied to clipboard — press <Kbd>Ctrl</Kbd> <Kbd>V</Kbd>

@@ -531,7 +531,7 @@ mod tests {
         // updates and finds their dictionary gone would be right to be angry.
         let v1 = r#"
             version = 1
-            model = "small.en"
+            model = "parakeet-tdt-0.6b-v2"
             language = "en"
             paste_threshold_chars = 60
             sound_enabled = true

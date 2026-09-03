@@ -127,16 +127,6 @@ of rules, and OpenVoice picks one from whichever app has focus — a chat messag
 gets a capital letter and a full stop, a terminal command gets neither.</sub>
 </div>
 
-<br>
-
-<div align="center">
-<img src="docs/images/hub-speech-model.png" width="880" alt="The Speech model screen listing three models: Accurate (large-v3-turbo, 1.6 GB, about 650 ms), Light (small.en, 249 MB, about 300 ms) and Fastest (base.en, 75 MB, about 190 ms), the last marked as in use">
-<br>
-<sub>Described by what they cost you, not by their identifiers. The catalogue is
-<a href="crates/ov-asr/src/catalog.rs"><code>ov-asr/src/catalog.rs</code></a>, the
-one place those sizes exist; the timings are measured on the reference machine
-named in the paragraph underneath them.</sub>
-</div>
 
 <br>
 

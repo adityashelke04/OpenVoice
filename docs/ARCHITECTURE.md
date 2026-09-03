@@ -79,7 +79,8 @@ This is not architecture astronautics. It buys three concrete things:
 
 - The formatter and state machine are testable in milliseconds with no audio device,
   no GPU, and no window manager. That is what makes daily iteration cheap.
-- Swapping ASR runtimes (whisper.cpp → faster-whisper → Parakeet → a future model)
+- Swapping ASR runtimes (faster-whisper → Parakeet → a future model) — done once
+  in earnest at v0.5.0, and it touched nothing behind the port
   is a new impl of one trait, not a refactor.
 - macOS/Linux support later becomes "write three adapters", not "rewrite the app".
 
@@ -100,7 +101,7 @@ flowchart LR
 
     subgraph driven["Driven adapters"]
         direction TB
-        ASR["faster-whisper sidecar<br/>ov-asr"]
+        ASR["Parakeet, in-process<br/>ov-asr"]
         APP["Foreground app<br/>ov-input"]
         SINK["SendInput / clipboard<br/>ov-input"]
         DB["SQLite + FTS5<br/>ov-store"]
@@ -182,14 +183,14 @@ openvoice/
 │   ├── ov-core/        # domain: FSM, events, config types, ports. NO os/io deps.
 │   ├── ov-format/      # formatting pipeline + dictionary + voice commands (pure)
 │   ├── ov-audio/       # cpal/WASAPI capture, downmix, resample to 16 kHz mono
-│   ├── ov-asr/         # supervises the speech sidecar; owns its process lifetime
+│   ├── ov-asr/         # Parakeet speech recognition, decoded in this process
 │   ├── ov-input/       # low-level keyboard hook + text injection + foreground app
 │   ├── ov-store/       # SQLite (rusqlite, bundled) history + FTS5 + migrations
 │   ├── ov-cli/         # `ov`: the same pipeline, headless. Integration harness.
 │   └── ov-app/         # `openvoice`: Tauri binary, composition root, IPC
 ├── apps/ui/            # React + TS + Vite: the hub window and the Flow Bar overlay
-├── sidecar/            # the Python speech engine (faster-whisper) and its protocol
-├── scripts/            # freeze the sidecar, the no-network check, screenshots
+├── models/             # the speech model, fetched by scripts/fetch-model.ps1
+├── scripts/            # fetch the model, the no-network check, screenshots
 ├── docs/
 │   ├── ARCHITECTURE.md # this file
 │   └── adr/            # 0001-...md  immutable decision records
@@ -264,11 +265,11 @@ averages. The sub-700 ms p50 they add up to is a v0.3 goal.
 | Stage | Budget | Notes |
 |---|---:|---|
 | Hotkey release → capture stop | 10 ms | hook thread does nothing but post a message |
-| Finalize + VAD trim | 25 ms | already 16 kHz mono; trim leading/trailing silence |
-| ASR decode (`large-v3-turbo`, CUDA) | 600 ms | ~15–25× realtime on this GPU |
+| Finalize | 5 ms | already 16 kHz mono; no VAD trim needed any more |
+| ASR decode (Parakeet TDT 0.6B v2, CPU) | 500 ms | median over dictation-length clips, 4 threads |
 | Format pipeline | 5 ms | pure string work, no allocation storms |
 | Injection (clipboard path) | 120 ms | dominated by target app's paste handler |
-| **Total (p50)** | **~700 ms** | perceived as "instant enough" |
+| **Total (p50)** | **~640 ms** | perceived as "instant enough" |
 
 Every stage already emits an `Event::Timing` carrying its measured duration, so the
 data is on the wire today. **Planned:** the debug panel that renders the last 50
@@ -298,11 +299,13 @@ into a shipped app never happens.
   the operating system's indicator becomes an *independent* confirmation of the
   guarantee. `SessionLimits::preroll_ms` is a leftover of that design and is
   currently unread.
-- **VAD:** performed inside the speech engine, not here. faster-whisper's built-in
-  Silero VAD filter (`vad_filter=True`) trims silence before decode and reports
-  `duration_after_vad`, which the sidecar uses to reject an utterance that turned
-  out to be nothing but room tone. There is no VAD in `ov-audio`, and hands-free
-  auto-stop (which would need one) is not implemented.
+- **VAD:** none, anywhere, and none needed. Whisper invented words out of room
+  tone, so the sidecar ran a Silero VAD filter before decode and rejected
+  utterances whose `duration_after_vad` was near zero. Parakeet returns empty text
+  for silence, room tone and hiss — pinned by `silence_yields_empty_text` — so the
+  whole defensive layer was deleted rather than ported. There is no VAD in
+  `ov-audio` either, and hands-free auto-stop (which would need one) is still not
+  implemented.
 - **Level meter:** RMS + peak per callback, sent to the overlay at roughly 30 Hz for
   the waveform. The overall RMS of a finished capture also drives the "your mic is
   muted / nothing was heard" warning, which is otherwise a baffling failure mode.
@@ -311,33 +314,31 @@ into a shipped app never happens.
 
 ## 5. ASR layer
 
-### 5.1 Model selection for 4 GB VRAM
+### 5.1 The model
 
-Three presets ship, defined in `sidecar/openvoice_asr/engine.py::MODEL_PRESETS`.
-Adding a fourth is a dict entry, not a code change.
+One model, and it is not selectable: **Parakeet TDT 0.6B v2**, int8, decoded
+in-process by `ov-asr` through k2-fsa's `sherpa-onnx` bindings. It ships inside
+the installer rather than being downloaded.
 
-| Preset | Compute type | Size on disk | VRAM | Role |
-|---|---|---:|---:|---|
-| `base.en` | `int8` | ~75 MB | CPU-ok | **Installed default.** Mediocre accuracy, but instant on any machine. |
-| `small.en` | `float16` → `int8_float16` | ~250 MB | ~0.6 GB | Low-VRAM / battery profile |
-| `large-v3-turbo` | `float16` → `int8_float16` | ~1.6 GB | ~1.6 GB | Best accuracy, opt-in upgrade |
+| | |
+|---|---|
+| Size on disk | 631 MB (482 MB compressed in the installer) |
+| Memory while loaded | ~750 MB |
+| Load time | 2.5–3.4 s, once, at startup |
+| Decode, dictation-length utterance | ~500 ms median, ~1.2 s p90 |
+| Languages | English only |
 
-The arrow is a fallback: `float16` is tried first and `int8_float16` is used only
-if the larger weights will not fit, because a 4 GB laptop GPU also has a desktop
-compositor and a browser on it. `float16` is preferred despite being bigger
-because it measured *faster* here — a median 623 ms decode against
-`int8_float16`'s 661 ms, and half the load time (3.7 s vs 7.2 s), with
-byte-identical transcripts. Int8 weights have to be dequantized on every forward
-pass, and on a GPU that costs more than the memory bandwidth it saves.
+Three Whisper presets used to live here — `base.en`, `small.en` and
+`large-v3-turbo` — with a picker, a downloader, a VRAM column and a compute-type
+fallback. All of it is gone, because Parakeet is faster than the fastest of them
+*and* more accurate than the most accurate, so there is no trade left to expose.
+[ADR 0008](adr/0008-parakeet-in-process.md) has the measurements and the costs,
+including what was given up: other languages, the confidence score, and process
+isolation.
 
-> **Corrected on 2026-08-02.** This originally shipped `large-v3-turbo` as the
-> default with a plan to prompt an upgrade *from* `base.en` in the background —
-> that upgrade prompt was never built, and the plain default landed as
-> `large-v3-turbo` instead. Distribution turned out CPU-only (see ADR 0003's
-> outcome note), which makes `large-v3-turbo` the heaviest model on the slowest
-> path: a 1.6 GB download for worse-than-necessary latency. `base.en` is now the
-> actual default in `crates/ov-app/src/settings.rs`; upgrading is a Models-screen
-> action, not a background surprise.
+Decode runs on four threads rather than all of them. Measured on a 12-thread
+machine, twelve threads buy about 110 ms and cost the responsiveness of whatever
+the user is dictating into.
 
 ### 5.2 Decode hints — tried, measured, and turned off
 
@@ -371,36 +372,35 @@ must be re-measured before it is ever made default again.
 survived review and was written into three files before anyone ran it. It took one
 A/B test to overturn. Prefer the experiment to the argument.
 
-### 5.3 Model manager
+### 5.3 How the model gets onto the machine
 
-This is the app's one network surface, so it is worth describing exactly rather
-than approximately.
+There is no model manager, and no network surface, because there is nothing to
+fetch at run time. The weights ship inside the installer and
+[`installer-hooks.nsh`](../crates/ov-app/installer-hooks.nsh.in) writes them to
+`<install dir>\models\parakeet-tdt-0.6b-v2\`. `ov_asr::locate` finds them there,
+or under `OPENVOICE_MODEL_DIR`, or in `models/` in a checkout; if none of those
+resolve it fails with an error naming every path it tried, rather than hanging.
 
-Weights are fetched from Hugging Face by `huggingface_hub`, inside the sidecar —
-the Rust side never opens a socket, which is what lets every Rust crate stay
-*sealed* under `scripts/check-no-network.sh` (§9.2). The host asks over the
-protocol (`ensure_model`), the sidecar reports byte progress as interim messages,
-and the download resumes from where it stopped if the connection drops. Integrity
-is whatever `huggingface_hub` enforces on its own transfers; **there is no
-SHA-256 manifest committed to this repository, and no independent hash check
-before load.** An earlier draft of this document promised one. Adding it is worth
-doing and is not done.
+This deleted a genuinely awkward subsystem. Previously the weights came from
+Hugging Face over the network on first run, which meant a download manager, byte
+progress plumbed through the IPC protocol into the UI, resumable transfers, a
+first-run progress screen, per-model disk accounting, a delete button, and an
+offline-mode workaround for `huggingface_hub` revalidating a cached model over
+the network on every load — **171 seconds** per load before falling back to the
+cache it already had. None of that exists now.
 
-Only the files a CTranslate2 Whisper repository actually needs are fetched
-(`config.json`, `preprocessor_config.json`, `model.bin`, `tokenizer.json`,
-`vocabulary.*`). Downloading the whole repository would also pull PyTorch weights
-this engine never reads, roughly doubling the transfer.
+It also retires a documented lie. ADR 0003 and an earlier draft of this file both
+claimed downloads were "SHA-256 verified against a manifest committed to the
+repo"; no manifest was ever written. `scripts/fetch-model.ps1` now pins the
+archive's SHA-256 and treats a mismatch as a hard failure — the claim is finally
+true, and it is enforced in CI before the bytes reach an installer.
 
-An installed copy stores weights under `%APPDATA%\OpenVoice\models`, so
-uninstalling reclaims the space. A development checkout leaves the shared Hugging
-Face cache alone.
+The model is installed *beside* the app rather than as a Tauri bundle resource,
+which is not a detail: Tauri's NSIS updater downloads the whole installer on
+every update, so a bundled model would make every patch release a ~550 MB
+download. CI fails if the updater artifact exceeds 100 MB.
 
-**Offline is the default, and this matters more than it sounds.**
-`huggingface_hub` revalidates a cached model over the network on every load,
-which measured at **171 seconds** per load before falling back to the cache it
-already had. `enforce_offline_by_default()` sets `HF_HUB_OFFLINE` at import time,
-and the `online()` context manager lifts it only for the duration of a download
-the user asked for.
+Uninstalling removes the model with the app.
 
 ---
 
@@ -595,7 +595,7 @@ Everything lives under `%APPDATA%\OpenVoice\`:
 |---|---|
 | `settings.toml` | Config, dictionary and profiles in one document. Versioned; migrated and validated on load. Written atomically (temp file, then rename) because the dictionary represents real accumulated effort. |
 | `history.db` | SQLite via `rusqlite` with `bundled` SQLite compiled in, FTS5 for search, migrations in-tree keyed off `PRAGMA user_version`. |
-| `models/` | Weights, for an installed copy. A development checkout uses the shared Hugging Face cache instead. |
+| `models/` | Not under `%APPDATA%` any more: the weights are installed beside the executable and removed by the uninstaller. A checkout uses `models/` in the repo. |
 | `openvoice.log` | Single appending log file. **Planned:** rotation; today it grows without bound. |
 
 An unreadable `settings.toml` is copied aside as `settings.toml.broken` rather than
@@ -651,10 +651,12 @@ needs on a transcript of "hello".
   `cargo tree --edges normal,build --target all` and enforces two distinct
   guarantees, kept separate because they are not equally strong:
   - **SEALED** — `ov-core`, `ov-format`, `ov-audio`, `ov-input`, `ov-store`,
-    `ov-cli`, `ov-asr` have no path to an HTTP client, TLS stack or socket library
-    anywhere in their transitive graph, build scripts included. Nothing in them can
-    phone home, because nothing in them can open a socket. This is why the model
-    download lives in the Python sidecar: it keeps every Rust crate sealed.
+    `ov-cli`, `ov-asr` link no HTTP client, TLS stack or socket library into the
+    shipped binary. Nothing in them can phone home at run time, because nothing in
+    them can open a socket. Build time is checked separately and allows exactly one
+    entry: `sherpa-onnx-sys` fetches prebuilt static libraries while compiling. That
+    is a real supply-chain fact, so it is named in an allow-list rather than
+    ignored — see ADR 0008.
   - **NO_DIRECT** — `ov-app` links `reqwest` transitively, because Tauri depends on
     it unconditionally. The script cannot honestly claim otherwise, so it enforces
     the weaker, still-useful property instead: no OpenVoice crate names a network
@@ -738,8 +740,8 @@ manager involved, is the forcing function that keeps this honest.
 | `ov-format` | per-rule tests plus end-to-end formatting per profile | `rules.rs` / `lib.rs`, CI |
 | `ov-input` | pure decision functions (`should_restore`, `mode_for`) unit-tested; the Win32 itself is not | `inject.rs`, CI |
 | `ov-store` | schema, migration, search and purge against a temp database | `lib.rs`, CI |
-| Sidecar protocol | request parsing, error shapes, progress framing, WAV reading, and a real piped subprocess for the UTF-8 stdio fix | `sidecar/tests/`, CI |
-| Frozen binary | `build-sidecar.ps1` drives a real `probe` request over the protocol and fails if the reply is missing or reports a broken import | packaging |
+| Speech engine | real decodes of real audio through the real model: a known transcript, silence returning empty, retention on and off, a missing model naming its path | `ov-asr`, CI |
+| Installer payload | `release.yml` asserts the model exists before packaging, and fails if the updater artifact exceeds 100 MB | packaging |
 | End-to-end, by hand | `ov transcribe file.wav`, `ov mictest`, `ov type`, `ov keytest` | manual |
 
 **Nothing in CI loads a model.** Downloading 1.6 GB of weights on every push would
@@ -770,12 +772,13 @@ Discord, Notion, IntelliJ, Obsidian) is re-run by hand before each release, per
 - **CI** (`ci.yml`), seven jobs, all required: the full workspace on Windows (fmt,
   clippy, test, `cargo doc` with `-D warnings`); the platform-independent crates on
   Linux; the `wasm32` purity check; `scripts/check-no-network.sh`; `cargo deny check
-  bans licenses advisories sources`; the sidecar's ruff and pytest; and the
+  bans licenses advisories sources`; and the
   frontend's oxlint, `tsc --noEmit` and build. `RUSTFLAGS: -D warnings` applies to
   workspace crates only — Cargo passes `--cap-lints allow` to registry
   dependencies, so someone else's warning cannot fail this build.
-- **Release** (`release.yml`): tag → freeze the sidecar with PyInstaller → assert
-  the frozen binary exists → Tauri NSIS bundle → SHA-256 → draft GitHub Release.
+- **Release** (`release.yml`): tag → fetch and checksum the model → assert it
+  exists → Tauri NSIS bundle → assert the updater artifact stayed under 100 MB →
+  SHA-256 → draft GitHub Release.
   MSI is not produced; NSIS alone keeps one artifact to test and one to sign. A
   `workflow_dispatch` run exercises the whole packaging path and publishes nothing,
   so the release path is never first tried at tag time. `cargo-dist` later for
@@ -821,17 +824,20 @@ than rediscovered.
 | Question | Answer | Record |
 |---|---|---|
 | Stack — Rust/Tauri or Electron? | Tauri v2 + Rust core, React/TS frontend | [ADR 0002](adr/0002-tauri-rust-stack.md) |
-| Day-one ASR backend — faster-whisper sidecar or whisper.cpp in-process? | faster-whisper in a supervised Python sidecar, behind the `Transcriber` trait so the swap stays cheap | [ADR 0003](adr/0003-asr-backend.md) |
+| Day-one ASR backend — faster-whisper sidecar or whisper.cpp in-process? | faster-whisper in a supervised Python sidecar, behind the `Transcriber` trait so the swap stays cheap. **Superseded by 0008.** | [ADR 0003](adr/0003-asr-backend.md) |
+| Speech engine at v0.5.0 — keep Whisper, or move to Parakeet? | Parakeet TDT 0.6B v2, decoded in-process, as the only model. Faster *and* more accurate than every Whisper tier, so the picker had nothing left to offer. | [ADR 0008](adr/0008-parakeet-in-process.md) |
 | Activation — push-to-talk, toggle, or both? | Push-to-talk on Right Ctrl. Toggle deferred, and will be a *second* binding rather than a mode switch. | [ADR 0004](adr/0004-activation-and-license.md) |
 | License — Apache-2.0 or MIT? | Apache-2.0, for the explicit patent grant | [ADR 0004](adr/0004-activation-and-license.md) |
 | Flow Bar geometry — who owns the pill's size, React or the window? | The window, for its size: the pill's painted size was derived from the viewport in CSS so the two could not be stale relative to each other. | [ADR 0006](adr/0006-flow-bar-geometry.md) |
 | Flow Bar position — how is the bar held still while it changes size? | By not moving it. The window is a fixed 404x640 rectangle (symmetrical 300px headroom above and below for bidirectional menu opening) clipped to the pill and menu with `SetWindowRgn`, so its position never depends on the bar's state and a late layout viewport cannot displace it. Supersedes 0006 on position. | [ADR 0007](adr/0007-flow-bar-fixed-window.md) |
 
-Two of those have since been amended by contact with reality, and the amendments
-are the interesting part: ADR 0003 carries the measured cost of bundling Python
-(cheaper than feared, and the remaining weight is CUDA, which any GPU backend would
-also need) and the reversal of the default model from `large-v3-turbo` to `base.en`
-once distribution turned out CPU-only.
+Several of those have since been amended by contact with reality, and the
+amendments are the interesting part. ADR 0003 carries the measured cost of
+bundling Python, the reversal of the default model from `large-v3-turbo` to
+`base.en` once distribution turned out CPU-only, and finally its own supersession
+— its closing follow-up, "remove the Python dependency from installers", is
+exactly what ADR 0008 did. That it stayed cheap is the evidence for ADR 0001: a
+complete engine swap changed nothing behind the port.
 
 **Still genuinely open:** the name (§12), transcript redaction (§9.2), and an
 automated accuracy regression suite (§11). Anything that changes the shape of the

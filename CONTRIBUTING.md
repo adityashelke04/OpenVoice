@@ -33,10 +33,9 @@ winget install Rustlang.Rustup
 winget install --id Microsoft.VisualStudio.2022.BuildTools `
   --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 
-# ASR sidecar, in a uv-managed virtualenv (https://astral.sh/uv)
-winget install astral-sh.uv
-uv venv
-uv pip install -e sidecar nvidia-cublas-cu12 nvidia-cudnn-cu12
+# The speech model (~482 MB, verified against a pinned SHA-256). There is no
+# Python and no virtualenv: the engine links into the binary.
+pwsh scripts/fetch-model.ps1
 
 # Frontend. Also installs the Tauri CLI that "Running the app" below invokes --
 # without this step that path does not exist yet.
@@ -58,16 +57,14 @@ setx CARGO_HOME  D:\dev\cargo
 # then put  [build] target-dir = "D:\\dev\\cargo-target"  in %CARGO_HOME%\config.toml
 ```
 
-**Python environment somewhere unusual?** The app looks for an interpreter in
-`OPENVOICE_PYTHON`, then `VIRTUAL_ENV`, then `.venv/` and `sidecar/.venv/` in the
-repo. Nothing else — no absolute path to anyone's machine is compiled in, and
-none should be added. If yours lives elsewhere, name it once:
+**Model somewhere unusual?** The app looks in `OPENVOICE_MODEL_DIR`, then beside
+the executable, then in `models/` in the checkout. Nothing else — no absolute path
+to anyone's machine is compiled in, and none should be added. If yours lives
+elsewhere, name it once:
 
 ```powershell
-setx OPENVOICE_PYTHON D:\dev\openvoice-venv\Scripts\python.exe
+setx OPENVOICE_MODEL_DIR D:\dev\parakeet-tdt-0.6b-v2
 ```
-
-`ov` also takes `--python <path>` for a one-off.
 
 ### Any platform (pure crates only)
 
@@ -84,12 +81,12 @@ cd crates/ov-app
 node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js dev
 ```
 
-A debug build always prefers the Python sidecar in your checkout over any frozen
-one, so edits to `sidecar/` take effect on the next restart. A release build
-prefers the frozen engine it was packaged with. Setting `OPENVOICE_ROOT` or
-`OPENVOICE_PYTHON` forces the checkout in either case.
+The model is loaded from `models/` in the checkout, or from `OPENVOICE_MODEL_DIR`.
+Nothing is downloaded at run time; if the model is absent the app says so and
+names the paths it looked in.
 
-The first launch downloads `base.en` (~75 MB) before the window becomes usable.
+Startup loads ~750 MB of weights and takes two to three seconds before the window
+is usable.
 
 ### When something doesn't work
 
@@ -110,36 +107,35 @@ you dictated, so read it before pasting it anywhere.
 
 ## Packaging
 
-The machine that installs OpenVoice has no Python, so the sidecar is frozen into
-a standalone folder and bundled as a Tauri resource:
+The engine links into the binary, so the only extra payload is the model:
 
 ```powershell
-pwsh scripts/build-sidecar.ps1 -Clean
+pwsh scripts/fetch-model.ps1
 cd crates/ov-app
 node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js build
 ```
 
 Three things about this that are easy to get wrong:
 
-- **The freeze must run first.** Tauri's resource walker accepts an empty folder,
-  so on its own the build would produce an installer with no speech engine — a
-  failure that only surfaces when someone runs the app. Two independent guards
-  exist: `crates/ov-app/build.rs` panics on a release build when
-  `sidecar/dist/openvoice-asr/openvoice-asr.exe` is missing, and
-  `.github/workflows/release.yml` asserts the same thing before invoking
-  `tauri build`. On a *debug* build the same `build.rs` creates an empty
-  placeholder instead, which is why a fresh checkout can run `cargo test` without
-  standing up Python and PyInstaller first.
-- **`build-sidecar.ps1` is not finished when PyInstaller succeeds.** A frozen
-  binary can die on its first import because a hidden import was missed, which
-  static analysis cannot see. The script sends a real `probe` request over the
-  protocol and fails if it does not get a valid reply.
-- **CUDA is excluded on purpose.** `nvidia-cublas-cu12` and `nvidia-cudnn-cu12`
-  are 1.9 GB — 88% of the dependency tree — against roughly 260 MB for everything
-  else combined, and they do nothing on a machine without an NVIDIA GPU. A packaged
-  build runs on CPU; `engine.py` picks up `OPENVOICE_CUDA_DIR` when the libraries
-  are available by another route. The frozen folder comes to ~173 MB and the
-  installer to 68 MB.
+- **The model is not a Tauri resource, and must not become one.** Tauri's NSIS
+  updater downloads the whole installer on every update, so a bundled model would
+  turn every patch release into a ~550 MB download for every user. It is installed
+  by [`installer-hooks.nsh`](crates/ov-app/installer-hooks.nsh.in) instead, and
+  `.github/workflows/release.yml` fails the build if the updater artifact ever
+  exceeds 100 MB — which is what would happen the moment someone "simplified" this
+  back into `bundle.resources`.
+- **The hook is generated, not hand-written.** `build.rs` renders
+  `installer-hooks.nsh` from the `.in` template with the model paths baked in.
+  This matters because NSIS `!ifdef` tests an NSIS *define* and Tauri does not
+  forward environment variables as defines: the first version guarded the copy
+  with `!ifdef MODEL_SOURCE_DIR`, the guard was never true, and the build
+  cheerfully produced a 9 MB installer containing no speech model and no warning.
+  Edit the `.in` file; the generated one is gitignored.
+- **A missing model warns rather than fails.** Packaging locally without a 482 MB
+  download is a legitimate thing to want, so `build.rs` prints a `cargo:warning`
+  and emits an empty hook. The real guarantee is in `release.yml`, which asserts
+  the model exists before invoking `tauri build`. If you build an installer by
+  hand and it comes out around 9 MB, that is this warning you scrolled past.
 
 Tauri's own build hooks live in the root `package.json` rather than being spelled
 out as relative paths in `tauri.conf.json`. `npm run` searches upwards for a
@@ -173,23 +169,30 @@ Three rules for rule-writing:
 ## Testing
 
 ```sh
-cargo test --workspace                                        # everything
+cargo test --workspace -- --test-threads=1                    # everything
 cargo test -p ov-format                                       # fast inner loop
 cargo check -p ov-core -p ov-format --target wasm32-unknown-unknown   # purity
-cd sidecar && uv run --with pytest pytest -q                  # sidecar protocol
 ```
 
-Every one of those is model-free and runs in seconds. That is deliberate:
-downloading 1.6 GB of weights on each push would make CI slower than the review it
-supports, so nothing in the automated suite loads a model. The cost is that
-accuracy is verified by hand — record a WAV into `fixtures/audio/` (gitignored, so
+`--test-threads=1` for the full run: each `ov-asr` test that touches the model
+loads ~750 MB of weights, and running them in parallel needs several gigabytes.
+
+Most of the suite is model-free and runs in seconds. `ov-asr`'s tests are not —
+they decode real audio through the real model, because a mocked recognizer would
+only prove the mock works. They **skip rather than fail** when the model is
+absent, so a fresh checkout that has not run `scripts/fetch-model.ps1` gets a
+green suite and a printed reason instead of a wall of red. CI fetches the model,
+so they run there.
+
+What is still verified by hand is accuracy on *your own voice*, which no
+benchmark substitutes for: record a WAV into `fixtures/audio/` (gitignored, so
 nobody's voice ends up in the repository) and run
 `cargo run -p ov-cli -- transcribe your.wav`.
 
 CI runs these on every push and pull request, split across jobs so a failure names
 its own cause: the full workspace on Windows, the platform-independent crates on
-Linux, the `wasm32` purity check, `scripts/check-no-network.sh`, `cargo deny`, the
-sidecar's ruff and pytest, and the frontend's lint, typecheck and build. See
+Linux, the `wasm32` purity check, `scripts/check-no-network.sh`, `cargo deny`, and the
+frontend's lint, typecheck and build. See
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ### The app-compatibility matrix
