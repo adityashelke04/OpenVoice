@@ -105,7 +105,19 @@ fn build_redactor(
 
 pub struct Engine {
     audio: ov_audio::CpalAudioSource,
-    transcriber: ov_asr::SidecarTranscriber,
+    /// The speech backend, behind the port rather than named concretely, so the
+    /// engine works the same whichever one it was handed.
+    transcriber: Arc<dyn Transcriber>,
+    /// Sidecar-only, and transitional.
+    ///
+    /// The Models screen can fetch weights for a model it is not running, which
+    /// is a Hugging Face concept the sidecar owns and Parakeet has no analogue
+    /// for — its weights ship in the installer. `None` when running Parakeet.
+    /// Deleted along with the Models screen once Parakeet is the only backend.
+    ///
+    /// The same `Arc` as `transcriber` when the sidecar is in use: one child
+    /// process serves both decoding and downloads.
+    downloader: Option<Arc<ov_asr::SidecarTranscriber>>,
     sink: ov_input::WinTextSink,
     apps: ov_input::WinForeground,
     /// Profiles and formatters live behind one lock and are replaced together.
@@ -280,9 +292,15 @@ impl Engine {
     }
 
     /// The model cache this engine is really using, for the Models screen.
+    ///
+    /// Empty when running Parakeet, whose weights ship in the installer and are
+    /// not in a cache the user can manage.
     #[must_use]
     pub fn hub_dir(&self) -> std::path::PathBuf {
-        self.transcriber.hub_dir()
+        self.downloader
+            .as_ref()
+            .map(|s| s.hub_dir())
+            .unwrap_or_default()
     }
 
     /// Fetch a model's weights now, without switching to it or restarting.
@@ -296,9 +314,16 @@ impl Engine {
     /// Progress goes to the same place first-run progress goes, so the download
     /// is visible in the one spot the user already learned to look.
     pub fn download_model(&self, model: &str) -> Result<bool, String> {
+        let Some(sidecar) = self.downloader.as_ref() else {
+            return Err(
+                "This build ships its speech model in the installer; there is nothing to \
+                 download."
+                    .into(),
+            );
+        };
         let name = model.to_string();
         let shell = self.shell.clone();
-        let result = self.transcriber.ensure_model_named(model, |p| {
+        let result = sidecar.ensure_model_named(model, |p| {
             shell.set_download_progress(Some(DownloadProgress {
                 model: name.clone(),
                 done: p.done,
@@ -614,6 +639,17 @@ pub fn fetch_model(
     result.map_err(|e| format!("Could not download {model}: {e}"))
 }
 
+/// Which speech backend to construct.
+///
+/// Parakeet is opt-in for exactly one commit. It becomes the default next, once
+/// it has been used for real dictation inside the app rather than only in
+/// `ov-asr`'s tests. Until then this is what makes an A/B comparison a restart
+/// instead of a rebuild — and afterwards it is what makes the flip revertible on
+/// its own.
+fn use_parakeet() -> bool {
+    std::env::var("OPENVOICE_ENGINE").is_ok_and(|v| v.eq_ignore_ascii_case("parakeet"))
+}
+
 /// Build every adapter, start the hotkey hook, and run the event loop on a
 /// background thread. Returns once the model is warm.
 ///
@@ -629,32 +665,48 @@ pub fn start(
     let config = settings.config.clone();
     let model = settings.model.as_str();
 
-    let cfg = configure(settings, resource_dir)?;
-    let transcriber = ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())?;
+    let (transcriber, downloader): (Arc<dyn Transcriber>, _) = if use_parakeet() {
+        // No download step at all. The weights ship with the app, so there is
+        // nothing to fetch, nothing to report progress for, and no first-run
+        // wait — which is the entire point of bundling them.
+        let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
+        tracing::info!(dir = %dir.display(), "loading Parakeet");
+        let t = ov_asr::parakeet::ParakeetTranscriber::new(dir).map_err(|e| e.to_string())?;
+        (Arc::new(t), None)
+    } else {
+        let cfg = configure(settings, resource_dir)?;
+        let sidecar = Arc::new(ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())?);
 
-    // Fetch the weights before warming. `warm` on a model that is not present
-    // fails with a message about a missing repository, which tells a first-run
-    // user nothing; this reports a download they can watch instead.
-    //
-    // Cheap and silent when the model is already cached, which is every run after
-    // the first.
-    let name = model.to_string();
-    let reporter = shell.clone();
-    let downloaded = transcriber
-        .ensure_model(|p| {
-            reporter.set_download_progress(Some(DownloadProgress {
-                model: name.clone(),
-                done: p.done,
-                total: p.total,
-            }));
-        })
-        .map_err(|e| format!("Could not get the {model} model: {e}"))?;
-    // Cleared unconditionally: leaving a completed download in place would keep
-    // the UI on the progress screen for the whole of the model load that follows.
-    shell.set_download_progress(None);
-    if downloaded {
-        tracing::info!(model, "downloaded model weights");
-    }
+        // Fetch the weights before warming. `warm` on a model that is not present
+        // fails with a message about a missing repository, which tells a first-run
+        // user nothing; this reports a download they can watch instead.
+        //
+        // Cheap and silent when the model is already cached, which is every run
+        // after the first.
+        let name = model.to_string();
+        let reporter = shell.clone();
+        let downloaded = sidecar
+            .ensure_model(|p| {
+                reporter.set_download_progress(Some(DownloadProgress {
+                    model: name.clone(),
+                    done: p.done,
+                    total: p.total,
+                }));
+            })
+            .map_err(|e| format!("Could not get the {model} model: {e}"))?;
+        // Cleared unconditionally: leaving a completed download in place would
+        // keep the UI on the progress screen for the whole of the model load that
+        // follows.
+        shell.set_download_progress(None);
+        if downloaded {
+            tracing::info!(model, "downloaded model weights");
+        }
+
+        // One child process serves both decoding and the Models screen's
+        // downloads: the same Arc goes into both slots rather than spawning a
+        // second Python to fetch weights.
+        (sidecar.clone(), Some(sidecar))
+    };
 
     transcriber.warm().map_err(|e| e.to_string())?;
 
@@ -690,6 +742,7 @@ pub fn start(
     let engine = Arc::new(Engine {
         audio,
         transcriber,
+        downloader,
         sink: ov_input::WinTextSink::new(config.paste_threshold_chars),
         apps: ov_input::WinForeground,
         rules: Mutex::new(rules),
