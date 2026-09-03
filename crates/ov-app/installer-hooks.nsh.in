@@ -15,10 +15,15 @@
 ; dictate immediately, offline, with no first-run download. The obvious way to do
 ; that is `bundle.resources` in tauri.conf.json. That way is wrong here.
 ;
-; Tauri's NSIS updater downloads the whole installer on every update. With the
-; model as a bundled resource, every patch release would be a ~550 MB download
-; for every user — on a project shipping frequent patches, that is the difference
-; between an update people accept and one they cancel. CI enforces the ceiling.
+; The original reason given here was that this keeps the model out of the updater
+; payload. It does not, and building it is what showed that: `File` embeds the
+; weights into the installer executable, and the updater artifact is a zip of
+; that same executable. An update carries the model whichever mechanism puts it
+; there. That claim is corrected in ADR 0008 rather than quietly deleted.
+;
+; The reason that survives is placement. This installs the model beside the
+; application, where NSIS_HOOK_POSTUNINSTALL below reclaims it on uninstall,
+; rather than inside Tauri's resource tree.
 ;
 ; ---------------------------------------------------------------------------
 ; Why this is generated rather than written by hand

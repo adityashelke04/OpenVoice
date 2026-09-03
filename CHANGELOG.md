@@ -41,10 +41,13 @@ stay on 0.4.4.
   make, which is why there is no longer a screen asking you to make one.
 - **The model ships inside the installer.** Previously a first launch downloaded
   weights before you could say anything. Now it works offline from the moment
-  setup finishes. The installer is correspondingly larger — about 550 MB against
+  setup finishes. The installer is correspondingly larger — about 440 MB against
   68 MB — but you download those bytes once, at a moment you already expect to
-  wait, instead of on first launch when you are trying to use the app. Updates
-  are unaffected and stay small.
+  wait, instead of on first launch when you are trying to use the app.
+
+  **The trade:** app updates now carry the model too, so an update is a ~440 MB
+  download rather than a small one. Fixing that needs a separate model-free build
+  for the update channel; it is not done, and it is recorded rather than glossed.
 - **OpenVoice no longer needs Python.** The speech engine is now part of the
   application itself rather than a separate bundled Python process. One process
   instead of two, and nothing left running if the app is killed.

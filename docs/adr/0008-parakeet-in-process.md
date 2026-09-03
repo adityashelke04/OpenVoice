@@ -83,9 +83,25 @@ two; no IPC, no job object, no orphan risk, no supervision. `ov-asr` drops from 
 - **No confidence score.** A transducer emits no per-segment log-probability.
 - **Process isolation is gone.** A native fault now takes the app down where a
   sidecar crash only degraded it.
-- **A ~550 MB installer**, against 68 MB. Mitigated for updates: the model
-  installs via an NSIS hook rather than as a Tauri resource, so it stays out of
-  the updater payload, and CI fails if that artifact exceeds 100 MB.
+- **A ~440 MB installer**, against 68 MB, and **updates cost the same**.
+
+  This is a correction to an earlier draft of this ADR, which claimed installing
+  the model via an NSIS hook rather than as a `bundle.resources` entry kept it
+  out of the updater payload. Building it disproved that. The hook embeds the
+  weights into the installer executable with `File`, and the updater artifact is
+  a zip of that same executable — so the bytes travel either way, and the choice
+  between the two mechanisms only decides where they land on disk.
+
+  The hook is still the right place for it, for a different reason: it puts the
+  model beside the app where the uninstaller reclaims it, rather than inside
+  Tauri's resource tree.
+
+  Genuinely small updates need a second, model-free build published as the
+  updater artifact while the full installer serves downloads — plus a tested
+  answer for the uninstall hook removing `$INSTDIR\models` during an upgrade's
+  uninstall-previous step, which would otherwise leave an updated app with no
+  model. That is real work, it is not done, and CI now reports the update size
+  rather than asserting a ceiling it cannot meet.
 - **A build-time network dependency.** `sherpa-onnx-sys` downloads prebuilt
   libraries during compilation. Nothing network-capable is linked into the
   shipped binary — `scripts/check-no-network.sh` now proves those two claims
