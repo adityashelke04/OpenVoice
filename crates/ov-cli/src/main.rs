@@ -34,12 +34,6 @@ mod history;
     about = "Local-first voice dictation for developers"
 )]
 struct Cli {
-    /// Model preset. Unknown names are rejected at startup and list the valid ones.
-    ///
-    /// Not enumerated here: the catalogue is `ov_asr::catalog`, and a hardcoded
-    /// list in this help text is one more copy to drift.
-    #[arg(long, global = true, default_value_t = ov_asr::catalog::DEFAULT_MODEL.to_string())]
-    model: String,
 
     /// Forced language as an ISO 639-1 code, or "auto" to let the model detect it.
     /// Forcing beats auto-detect for a single short utterance, which is why this
@@ -47,14 +41,6 @@ struct Cli {
     /// `ov-core` for the reasoning this mirrors.
     #[arg(long, global = true, default_value = "en")]
     language: String,
-
-    /// Python interpreter for the ASR sidecar.
-    #[arg(long, global = true)]
-    python: Option<PathBuf>,
-
-    /// Allow the sidecar to download model weights. Off by default.
-    #[arg(long, global = true)]
-    allow_download: bool,
 
     /// Input device name, or part of one. Run `ov devices` to list them.
     /// Defaults to the Windows default input device.
@@ -246,84 +232,10 @@ fn repo_root() -> Result<PathBuf, String> {
     })
 }
 
-/// Candidate interpreters, in priority order, for an environment that has
-/// faster-whisper installed.
-///
-/// Shared with `ov-app` in spirit; kept duplicated rather than pulled into a
-/// crate because it is fifteen lines and the two binaries are allowed to diverge.
-///
-/// Every entry is a *convention*, never a specific machine. An absolute path to
-/// somebody's development environment compiled into a public binary is both a
-/// privacy leak and dead weight for every other user, so if your interpreter is
-/// somewhere unusual, say so with `OPENVOICE_PYTHON` (or `--python`) instead of
-/// adding a line here:
-///
-/// ```powershell
-/// setx OPENVOICE_PYTHON D:\dev\openvoice-venv\Scripts\python.exe
-/// ```
-fn python_candidates(root: &Path) -> Vec<PathBuf> {
-    let mut c: Vec<PathBuf> = Vec::new();
 
-    // 1. Explicit override. Always wins.
-    if let Some(p) = std::env::var_os("OPENVOICE_PYTHON") {
-        c.push(PathBuf::from(p));
-    }
-
-    // 2. An activated virtualenv in the current shell. Costs nothing to honour
-    //    and is what a developer who just ran `activate` expects.
-    if let Some(venv) = std::env::var_os("VIRTUAL_ENV") {
-        let venv = PathBuf::from(venv);
-        c.push(venv.join("Scripts/python.exe"));
-        c.push(venv.join("bin/python"));
-    }
-
-    // 3. The repo-local environments, in the two places the documented setup
-    //    commands create them: `uv venv` at the root, and `uv run` inside
-    //    sidecar/.
-    for base in [root.join(".venv"), root.join("sidecar/.venv")] {
-        c.push(base.join("Scripts/python.exe"));
-        c.push(base.join("bin/python"));
-    }
-
-    c
-}
-
-/// Find the Python interpreter that has faster-whisper installed.
-///
-/// Every candidate is checked for existence, and failure names what was tried.
-/// Falling through to a bare `python` on PATH is deliberately *not* done: it
-/// usually exists and usually lacks the dependencies, which produces a confusing
-/// import error rather than an honest "no environment found".
-fn find_python(root: &Path) -> Result<PathBuf, String> {
-    let candidates = python_candidates(root);
-
-    if let Some(found) = candidates.iter().find(|p| p.is_file()) {
-        return Ok(found.clone());
-    }
-    Err(format!(
-        "could not find a Python environment with faster-whisper installed.\n  tried:\n{}\n  \
-         Set OPENVOICE_PYTHON to the interpreter, or create one with:\n    \
-         uv venv && uv pip install -e sidecar nvidia-cublas-cu12 nvidia-cudnn-cu12",
-        candidates
-            .iter()
-            .map(|p| format!("    {}", p.display()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    ))
-}
-
-fn build_transcriber(cli: &Cli) -> Result<ov_asr::SidecarTranscriber, String> {
-    let root = repo_root()?;
-    let python = match cli.python.clone() {
-        Some(p) => p,
-        None => find_python(&root)?,
-    };
-    if !python.is_file() {
-        return Err(format!("python not found at {}", python.display()));
-    }
-    let mut cfg = ov_asr::SidecarConfig::dev(&root, python, &cli.model);
-    cfg.allow_download = cli.allow_download;
-    ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())
+fn build_transcriber(_cli: &Cli) -> Result<ov_asr::parakeet::ParakeetTranscriber, String> {
+    let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
+    ov_asr::parakeet::ParakeetTranscriber::new(dir).map_err(|e| e.to_string())
 }
 
 /* -- format ------------------------------------------------------------------ */
@@ -378,33 +290,21 @@ fn resolve_mic(want: Option<&String>) -> Result<Option<String>, String> {
 fn cmd_doctor(cli: &Cli) -> Result<(), String> {
     // Doctor must report problems, never abort on them: the whole point is to run
     // when something is broken.
-    let root = match repo_root() {
+    match repo_root() {
         Ok(r) => {
             println!("repo root     ok  {}", r.display());
-            println!("sidecar dir   ok  {}", r.join("sidecar").display());
-            Some(r)
         }
-        Err(e) => {
-            println!("repo root     FAILED\n{e}");
-            None
-        }
-    };
-
-    let python = match (&cli.python, &root) {
-        (Some(p), _) => Some(p.clone()),
-        (None, Some(r)) => match find_python(r) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                println!("python        FAILED\n{e}");
-                None
-            }
-        },
-        (None, None) => None,
-    };
-    if let Some(p) = &python {
-        println!("python        ok  {}", p.display());
+        Err(e) => println!("repo root     FAILED\n{e}"),
     }
-    println!("model         {}", cli.model);
+
+    // Python and a model preset were the two things most likely to be wrong
+    // here. Neither exists any more: the model ships with the app, so the one
+    // remaining failure is that it is not where it should be.
+    match ov_asr::locate::model_dir() {
+        Ok(d) => println!("model         ok  {}", d.display()),
+        Err(e) => println!("model         FAILED
+{e}"),
+    }
 
     match ov_audio::CpalAudioSource::new(None) {
         Ok(a) => {
@@ -671,7 +571,7 @@ fn cmd_transcribe(cli: &Cli, path: &Path, profile: &str) -> Result<(), String> {
 
 struct Runtime {
     audio: ov_audio::CpalAudioSource,
-    transcriber: ov_asr::SidecarTranscriber,
+    transcriber: ov_asr::parakeet::ParakeetTranscriber,
     sink: ov_input::WinTextSink,
     apps: ov_input::WinForeground,
     profiles: Vec<Profile>,
@@ -701,7 +601,7 @@ fn cmd_dictate(cli: &Cli) -> Result<(), String> {
     let config = Config::default();
     let transcriber = build_transcriber(cli)?;
 
-    eprintln!("loading {} ...", cli.model);
+    eprintln!("loading the speech model ...");
     transcriber.warm().map_err(|e| e.to_string())?;
 
     let profiles = Profile::builtins();

@@ -7,7 +7,6 @@
 //! for the same pipeline.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -31,30 +30,12 @@ pub struct Ready {
     pub mic: String,
 }
 
-/// How far the first-run model download has got.
-///
-/// `total` is 0 when the size could not be determined ahead of time; show an
-/// indeterminate bar rather than 0%.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DownloadProgress {
-    pub model: String,
-    pub done: u64,
-    pub total: u64,
-}
-
 /// Anything the shell must do in response to the engine.
 pub trait Shell: Send + Sync + 'static {
     /// Publish a domain event to the UI.
     fn emit(&self, event: &Event);
     /// Show or hide the floating overlay.
     fn set_overlay_visible(&self, visible: bool);
-    /// Record download progress, or `None` once there is nothing downloading.
-    ///
-    /// Recorded rather than emitted. A first run downloads over a gigabyte before
-    /// the window has finished loading, so an event would be published to nobody;
-    /// the UI polls status instead, and cannot miss what it asks for.
-    fn set_download_progress(&self, progress: Option<DownloadProgress>);
 }
 
 /// Profiles and their compiled formatters, replaced as a unit.
@@ -105,19 +86,14 @@ fn build_redactor(
 
 pub struct Engine {
     audio: ov_audio::CpalAudioSource,
-    /// The speech backend, behind the port rather than named concretely, so the
-    /// engine works the same whichever one it was handed.
-    transcriber: Arc<dyn Transcriber>,
-    /// Sidecar-only, and transitional.
+    /// The speech backend.
     ///
-    /// The Models screen can fetch weights for a model it is not running, which
-    /// is a Hugging Face concept the sidecar owns and Parakeet has no analogue
-    /// for — its weights ship in the installer. `None` when running Parakeet.
-    /// Deleted along with the Models screen once Parakeet is the only backend.
-    ///
-    /// The same `Arc` as `transcriber` when the sidecar is in use: one child
-    /// process serves both decoding and downloads.
-    downloader: Option<Arc<ov_asr::SidecarTranscriber>>,
+    /// Named concretely rather than held behind `Arc<dyn Transcriber>`: there is
+    /// one backend now, and a trait object that is only ever one type is
+    /// indirection pretending to be flexibility. The port still exists and
+    /// `ov-core` still depends on it -- that is what made this swap cheap -- but
+    /// the composition root can say what it actually built.
+    transcriber: ov_asr::parakeet::ParakeetTranscriber,
     sink: ov_input::WinTextSink,
     apps: ov_input::WinForeground,
     /// Profiles and formatters live behind one lock and are replaced together.
@@ -291,50 +267,6 @@ impl Engine {
         Ok(())
     }
 
-    /// The model cache this engine is really using, for the Models screen.
-    ///
-    /// Empty when running Parakeet, whose weights ship in the installer and are
-    /// not in a cache the user can manage.
-    #[must_use]
-    pub fn hub_dir(&self) -> std::path::PathBuf {
-        self.downloader
-            .as_ref()
-            .map(|s| s.hub_dir())
-            .unwrap_or_default()
-    }
-
-    /// Fetch a model's weights now, without switching to it or restarting.
-    ///
-    /// Downloading and loading are separate things. This writes to the shared
-    /// cache and leaves the resident weights alone, so the running sidecar can
-    /// serve it while dictation continues to work on the current model. What it
-    /// does *not* do is make the app decode with the new weights — that still
-    /// happens on the next start.
-    ///
-    /// Progress goes to the same place first-run progress goes, so the download
-    /// is visible in the one spot the user already learned to look.
-    pub fn download_model(&self, model: &str) -> Result<bool, String> {
-        let Some(sidecar) = self.downloader.as_ref() else {
-            return Err(
-                "This build ships its speech model in the installer; there is nothing to \
-                 download."
-                    .into(),
-            );
-        };
-        let name = model.to_string();
-        let shell = self.shell.clone();
-        let result = sidecar.ensure_model_named(model, |p| {
-            shell.set_download_progress(Some(DownloadProgress {
-                model: name.clone(),
-                done: p.done,
-                total: p.total,
-            }));
-        });
-        // Cleared on both paths: a failed download that left the progress bar up
-        // would strand the UI on a transfer that is not happening.
-        self.shell.set_download_progress(None);
-        result.map_err(|e| format!("Could not download {model}: {e}"))
-    }
 
     /// Discard whatever session is in flight.
     ///
@@ -432,295 +364,35 @@ impl Engine {
     }
 }
 
-/// Locate the repository root, verifying each candidate rather than guessing.
-/// See the same function in `ov-cli` for why this is not a simple parent walk.
-fn find_root() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(p) = std::env::var_os("OPENVOICE_ROOT") {
-        candidates.push(PathBuf::from(p));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.to_path_buf());
-        }
-    }
-    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2) {
-        candidates.push(root.to_path_buf());
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.extend(cwd.ancestors().map(Path::to_path_buf));
-    }
-    candidates
-        .into_iter()
-        .find(|p| p.join("sidecar").join("openvoice_asr").is_dir())
-}
-
-/// Locate an interpreter that has faster-whisper installed.
-///
-/// Only *conventions* are searched — an override, an activated virtualenv, and
-/// the two repo-local paths the documented setup commands create. Never a
-/// specific machine: an absolute path to one developer's environment baked into
-/// a public binary is a privacy leak and useless to everyone else. If the
-/// interpreter lives somewhere unusual, point at it explicitly:
-///
-/// ```powershell
-/// setx OPENVOICE_PYTHON D:\dev\openvoice-venv\Scripts\python.exe
-/// ```
-fn find_python(root: &Path) -> Option<PathBuf> {
-    let mut c: Vec<PathBuf> = Vec::new();
-
-    if let Some(p) = std::env::var_os("OPENVOICE_PYTHON") {
-        c.push(PathBuf::from(p));
-    }
-    if let Some(venv) = std::env::var_os("VIRTUAL_ENV") {
-        let venv = PathBuf::from(venv);
-        c.push(venv.join("Scripts/python.exe"));
-        c.push(venv.join("bin/python"));
-    }
-    for base in [root.join(".venv"), root.join("sidecar/.venv")] {
-        c.push(base.join("Scripts/python.exe"));
-        c.push(base.join("bin/python"));
-    }
-
-    c.into_iter().find(|p| p.is_file())
-}
-
-/// Locate the frozen sidecar shipped inside an installed copy.
-///
-/// `resource_dir` is what Tauri reports; the two fallbacks cover a build that was
-/// run in place rather than installed, where the resource directory sits beside
-/// the executable instead of under it.
-fn find_bundled(resource_dir: Option<&Path>) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = resource_dir {
-        candidates.push(dir.join("sidecar/openvoice-asr.exe"));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("resources/sidecar/openvoice-asr.exe"));
-            candidates.push(dir.join("sidecar/openvoice-asr.exe"));
-        }
-    }
-    candidates.into_iter().find(|p| p.is_file())
-}
-
-/// Build a configuration that runs the sidecar from a repository checkout.
-fn from_checkout(model: &str) -> Result<ov_asr::SidecarConfig, String> {
-    let root = find_root().ok_or_else(|| {
-        "Could not find the OpenVoice sources. Set OPENVOICE_ROOT to a checkout.".to_string()
-    })?;
-    let python = find_python(&root).ok_or_else(|| {
-        format!(
-            "Found the OpenVoice sources at {} but no Python environment with \
-             faster-whisper installed. Create one with `uv sync` in `sidecar/`, or \
-             set OPENVOICE_PYTHON to an interpreter that has it.",
-            root.display()
-        )
-    })?;
-    Ok(ov_asr::SidecarConfig::dev(&root, python, model))
-}
-
-/// Decide how the speech engine is going to be started.
-///
-/// Both routes are always available as a fallback; only the *order* changes,
-/// and it changes on who is running the binary rather than on what is on disk:
-///
-/// * A **release build** prefers the frozen engine it was packaged with. An
-///   installed copy must never end up depending on a repository that happens to
-///   be lying around — that works right up until the user moves the folder, and
-///   then the app breaks for no visible reason.
-/// * A **debug build**, or one where `OPENVOICE_ROOT`/`OPENVOICE_PYTHON` is set,
-///   prefers the checkout. Tauri stages bundle resources into the target
-///   directory during development too, so preferring the bundle everywhere would
-///   quietly run a developer's *last frozen* sidecar instead of the Python they
-///   are editing — and the edits would appear to do nothing.
-fn locate_sidecar(
-    resource_dir: Option<&Path>,
-    model: &str,
-) -> Result<ov_asr::SidecarConfig, String> {
-    let prefer_checkout = cfg!(debug_assertions)
-        || std::env::var_os("OPENVOICE_ROOT").is_some()
-        || std::env::var_os("OPENVOICE_PYTHON").is_some();
-
-    if prefer_checkout {
-        match from_checkout(model) {
-            Ok(cfg) => {
-                tracing::info!("using the speech engine from a checkout");
-                return Ok(cfg);
-            }
-            Err(e) => tracing::debug!(reason = %e, "no usable checkout; trying the bundle"),
-        }
-    }
-
-    if let Some(exe) = find_bundled(resource_dir) {
-        tracing::info!(path = %exe.display(), "using the bundled speech engine");
-        return Ok(ov_asr::SidecarConfig::bundled(exe, model));
-    }
-
-    // Nothing worked. Report the checkout's own diagnosis rather than a generic
-    // message: it names the directory it looked in, which is the one fact that
-    // makes this fixable.
-    from_checkout(model).map_err(|e| {
-        format!("{e} This build also has no speech engine bundled with it — reinstall the app.")
-    })
-}
-
-/// Everything needed to launch the sidecar, resolved from settings and the
-/// install layout.
-///
-/// Split out of [`start`] because fetching weights and running the engine are now
-/// separate operations. They used to be the same one, and that was the defect:
-/// the Models screen's Download button went through the live engine, and the
-/// engine only existed once a first-run download had already succeeded. A user
-/// whose first download failed — a dropped connection, a rate-limited request —
-/// was told "The speech engine is still starting. Try again in a moment." by the
-/// one screen that could have fixed it, forever, on every subsequent launch.
-/// [`fetch_model`] uses this to fetch weights with no engine at all.
-fn configure(
-    settings: &crate::settings::Settings,
-    resource_dir: Option<&Path>,
-) -> Result<ov_asr::SidecarConfig, String> {
-    let config = settings.config.clone();
-    let mut cfg = locate_sidecar(resource_dir, settings.model.as_str())?;
-    let data = crate::history::data_dir();
-    // Weights and CUDA libraries live under the app's own data directory, so that
-    // uninstalling reclaims the several gigabytes they occupy. A developer's
-    // shared HF cache is left alone: `dev` leaves both as `None`, and only an
-    // installed copy sets them.
-    if cfg.package_dir.is_none() {
-        cfg.model_dir = Some(data.join("models"));
-        let cuda = data.join("cuda");
-        cfg.cuda_dir = cuda.is_dir().then_some(cuda);
-    }
-    // Backs the "Keep recordings" toggle, which until now was a switch with
-    // nothing behind it. Off means the scratch WAV is deleted after every decode,
-    // exactly as before; on means it is moved here instead.
-    cfg.retain_audio_dir = config
-        .privacy
-        .retain_audio
-        .then(|| crate::history::data_dir().join("audio"));
-    if let Some(dir) = &cfg.retain_audio_dir {
-        tracing::warn!(dir = %dir.display(), "keeping recordings on disk; this is off by default");
-    }
-    cfg.allow_download = std::env::var("OPENVOICE_ALLOW_DOWNLOAD").is_ok();
-    Ok(cfg)
-}
-
-/// Fetch a model's weights without a running engine.
-///
-/// Spawns a sidecar, downloads, and lets it exit. That is more expensive than
-/// asking a live engine — a process start and a Python import, a second or two —
-/// and it buys the thing that matters: the Models screen works when the engine is
-/// down, which is precisely when a user needs it. A first run that failed to fetch
-/// its weights is now recoverable from inside the app instead of being terminal.
-///
-/// Downloading is safe to do beside a *running* sidecar too: it writes to the
-/// shared cache and disturbs nothing already resident.
-pub fn fetch_model(
-    shell: Arc<dyn Shell>,
-    settings: &crate::settings::Settings,
-    resource_dir: Option<&Path>,
-    model: &str,
-) -> Result<bool, String> {
-    let cfg = configure(settings, resource_dir)?;
-    let transcriber = ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())?;
-    let name = model.to_string();
-    let reporter = shell.clone();
-    let result = transcriber.ensure_model_named(model, |p| {
-        reporter.set_download_progress(Some(DownloadProgress {
-            model: name.clone(),
-            done: p.done,
-            total: p.total,
-        }));
-    });
-    // Cleared on both paths: a failed download that left the progress bar up would
-    // strand the UI on a transfer that is not happening.
-    shell.set_download_progress(None);
-    result.map_err(|e| format!("Could not download {model}: {e}"))
-}
-
-/// Which speech backend to construct.
-///
-/// Parakeet unless explicitly overridden. `OPENVOICE_ENGINE=whisper` still
-/// reaches the sidecar; that escape hatch survives exactly until the sidecar is
-/// deleted in the next commit, and exists so this flip can be reverted alone if
-/// real dictation turns out worse than the benchmarks promised.
-fn use_parakeet() -> bool {
-    !std::env::var("OPENVOICE_ENGINE").is_ok_and(|v| v.eq_ignore_ascii_case("whisper"))
-}
-
 /// Build every adapter, start the hotkey hook, and run the event loop on a
 /// background thread. Returns once the model is warm.
 ///
-/// `resource_dir` is Tauri's resource directory, or `None` when the caller has
-/// none. It is passed in rather than resolved here so this module stays free of
-/// Tauri types and testable on its own.
 pub fn start(
     shell: Arc<dyn Shell>,
     settings: &crate::settings::Settings,
     history: Arc<dyn HistoryStore>,
-    resource_dir: Option<&Path>,
 ) -> Result<(Arc<Engine>, Ready), String> {
     let config = settings.config.clone();
     let model = settings.model.as_str();
 
-    let (transcriber, downloader): (Arc<dyn Transcriber>, _) = if use_parakeet() {
-        // No download step at all. The weights ship with the app, so there is
-        // nothing to fetch, nothing to report progress for, and no first-run
-        // wait — which is the entire point of bundling them.
-        let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
-        tracing::info!(dir = %dir.display(), "loading Parakeet");
+    let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
+    tracing::info!(dir = %dir.display(), "loading the speech model");
 
-        // Retention has to be passed explicitly now. With the sidecar it fell
-        // out of how audio crossed the process boundary — a WAV was written
-        // either way, and "keep recordings" merely spared it from deletion.
-        // In-process nothing is written unless it is asked for, so forgetting
-        // this would silently turn the setting off rather than silently on.
-        let retain = config
-            .privacy
-            .retain_audio
-            .then(|| crate::history::data_dir().join("audio"));
-        if let Some(dir) = &retain {
-            tracing::warn!(dir = %dir.display(), "keeping recordings on disk; this is off by default");
-        }
+    // Retention has to be passed explicitly. With the old sidecar it fell out of
+    // how audio crossed the process boundary -- a WAV was written either way, and
+    // "keep recordings" merely spared it from deletion. In-process nothing is
+    // written unless it is asked for, so omitting this would silently turn the
+    // setting off rather than silently on.
+    let retain = config
+        .privacy
+        .retain_audio
+        .then(|| crate::history::data_dir().join("audio"));
+    if let Some(d) = &retain {
+        tracing::warn!(dir = %d.display(), "keeping recordings on disk; this is off by default");
+    }
 
-        let t = ov_asr::parakeet::ParakeetTranscriber::with_retention(dir, retain)
-            .map_err(|e| e.to_string())?;
-        (Arc::new(t), None)
-    } else {
-        let cfg = configure(settings, resource_dir)?;
-        let sidecar = Arc::new(ov_asr::SidecarTranscriber::new(cfg).map_err(|e| e.to_string())?);
-
-        // Fetch the weights before warming. `warm` on a model that is not present
-        // fails with a message about a missing repository, which tells a first-run
-        // user nothing; this reports a download they can watch instead.
-        //
-        // Cheap and silent when the model is already cached, which is every run
-        // after the first.
-        let name = model.to_string();
-        let reporter = shell.clone();
-        let downloaded = sidecar
-            .ensure_model(|p| {
-                reporter.set_download_progress(Some(DownloadProgress {
-                    model: name.clone(),
-                    done: p.done,
-                    total: p.total,
-                }));
-            })
-            .map_err(|e| format!("Could not get the {model} model: {e}"))?;
-        // Cleared unconditionally: leaving a completed download in place would
-        // keep the UI on the progress screen for the whole of the model load that
-        // follows.
-        shell.set_download_progress(None);
-        if downloaded {
-            tracing::info!(model, "downloaded model weights");
-        }
-
-        // One child process serves both decoding and the Models screen's
-        // downloads: the same Arc goes into both slots rather than spawning a
-        // second Python to fetch weights.
-        (sidecar.clone(), Some(sidecar))
-    };
+    let transcriber = ov_asr::parakeet::ParakeetTranscriber::with_retention(dir, retain)
+        .map_err(|e| e.to_string())?;
 
     transcriber.warm().map_err(|e| e.to_string())?;
 
@@ -756,7 +428,6 @@ pub fn start(
     let engine = Arc::new(Engine {
         audio,
         transcriber,
-        downloader,
         sink: ov_input::WinTextSink::new(config.paste_threshold_chars),
         apps: ov_input::WinForeground,
         rules: Mutex::new(rules),

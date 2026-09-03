@@ -3032,11 +3032,8 @@ dependencies = [
  "filetime",
  "hound",
  "ov-core",
- "serde",
- "serde_json",
  "sherpa-onnx",
  "tracing",
- "windows 0.58.0",
 ]
 
 [[package]]
