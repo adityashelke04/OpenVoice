@@ -276,8 +276,12 @@ export function AdvancedScreen({ settings }: { settings: S }) {
 
       <Card title="Engine">
         <div className="srows">
-          <Row label="Speech model" hint="Changed on the Speech model screen.">
-            <span className="t-mono">{settings.model}</span>
+          {/* Reads the engine's own id rather than settings.model. Those two
+              drifted apart when the model stopped being selectable, and this row
+              spent that time confidently naming a model the app was not running,
+              under a hint pointing at a screen that no longer exists. */}
+          <Row label="Speech model" hint="Included with OpenVoice. English, and runs on this computer.">
+            <span className="t-mono">parakeet-tdt-0.6b-v2</span>
           </Row>
           <Row
             label="Switch to typing above"

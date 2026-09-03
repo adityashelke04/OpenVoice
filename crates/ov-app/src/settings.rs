@@ -37,13 +37,16 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             config: Config::default(),
-            // `base.en` — not `large-v3-turbo` — because this is what a fresh
-            // install picks before the user has chosen anything. The installed
-            // engine is CPU-only (see ADR 0003), and large-v3-turbo paired with
-            // CPU is the slowest model on the slowest path: a 1.6 GB download for
-            // an experience worse than the 75 MB alternative. Anyone who wants
-            // more accuracy upgrades from the Models screen, on demand.
-            model: "base.en".into(),
+            // Vestigial, and deliberately kept.
+            //
+            // There is one model and it is not selectable, so nothing reads this
+            // to decide what to load -- `ov_asr::parakeet::MODEL_ID` is the
+            // answer to that. The field stays because `settings.toml` on every
+            // existing install contains it, and a struct that no longer accepts
+            // the key would make those files fail to parse on upgrade. It is
+            // written out with the current engine's id so a curious reader of
+            // the file is told the truth rather than "base.en".
+            model: ov_asr::parakeet::MODEL_ID.into(),
             dictionary: Vec::new(),
             profiles: Profile::builtins(),
         }

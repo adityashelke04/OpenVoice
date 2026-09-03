@@ -22,6 +22,58 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-03
+
+Dictation is faster and much more accurate, and OpenVoice now works the moment
+it finishes installing — no download, no waiting, no model to choose.
+
+**Breaking:** OpenVoice transcribes **English only** in this release, and the
+model picker and language setting are gone. If you dictate in another language,
+stay on 0.4.4.
+
+### Changed
+
+- **A new speech engine: NVIDIA Parakeet TDT 0.6B v2, replacing Whisper.** On
+  the same 25 test clips, it transcribes in about half the time of the old
+  "Fastest" model while making roughly a seventh as many mistakes — it is
+  simultaneously quicker than the quickest option you had and more accurate than
+  the most accurate one. There is no longer a speed-versus-accuracy choice to
+  make, which is why there is no longer a screen asking you to make one.
+- **The model ships inside the installer.** Previously a first launch downloaded
+  weights before you could say anything. Now it works offline from the moment
+  setup finishes. The installer is correspondingly larger — about 550 MB against
+  68 MB — but you download those bytes once, at a moment you already expect to
+  wait, instead of on first launch when you are trying to use the app. Updates
+  are unaffected and stay small.
+- **OpenVoice no longer needs Python.** The speech engine is now part of the
+  application itself rather than a separate bundled Python process. One process
+  instead of two, and nothing left running if the app is killed.
+- **"Sends nothing anywhere" is now literally true.** That note used to carry an
+  exception — "except to download a speech model you ask for". With the model in
+  the installer, dictation has no network path at all.
+- **Silence stays silent.** Whisper would occasionally invent words out of room
+  tone; a two-second near-silent recording once produced the word "Jordan". The
+  new engine returns nothing for silence, room tone and hiss.
+
+### Removed
+
+- **Other languages.** Parakeet v2 is English-only, so the language setting is
+  gone rather than left as a control that changes nothing.
+- **The Speech model screen**, and choosing, downloading or deleting models.
+  There is one model, it arrives with the app, and Settings states which it is.
+- **The confidence score on history rows.** The new engine does not produce one.
+
+### Known regression
+
+- **Proper nouns that sound like ordinary words may come out as the ordinary
+  word.** Marking a dictionary term as a proper noun used to tell the decoder
+  that, say, "Claude" was a candidate while it could still hear the difference
+  from "cloud" — something no amount of after-the-fact correction can recover.
+  The replacement mechanism exists in the new engine but needs a file the model
+  release does not currently ship, so it is a follow-up. Everything else your
+  dictionary does is unchanged.
+
+
 ## [0.4.4] - 2026-09-02
 
 Changing your dictation shortcut now works the moment you change it, and the

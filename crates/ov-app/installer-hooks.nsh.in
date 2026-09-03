@@ -1,0 +1,49 @@
+; Installer hooks — where the speech model goes, and why it is not a resource.
+;
+; This is a TEMPLATE. `crates/ov-app/build.rs` substitutes @MODEL_FILES@ and
+; writes the real `installer-hooks.nsh` beside it, which tauri.conf.json points
+; at. Do not edit the generated file; edit this one.
+;
+; ---------------------------------------------------------------------------
+; Why the model is installed here rather than bundled as a Tauri resource
+;
+; The 631 MB Parakeet model ships inside the installer so a fresh install can
+; dictate immediately, offline, with no first-run download. The obvious way to do
+; that is `bundle.resources` in tauri.conf.json. That way is wrong here.
+;
+; Tauri's NSIS updater downloads the whole installer on every update. With the
+; model as a bundled resource, every patch release would be a ~550 MB download
+; for every user — on a project shipping frequent patches, that is the difference
+; between an update people accept and one they cancel. CI enforces the ceiling.
+;
+; ---------------------------------------------------------------------------
+; Why this is generated rather than written by hand
+;
+; NSIS `!ifdef` tests an NSIS *define*, and Tauri does not forward environment
+; variables into the generated script as defines. An earlier version of this file
+; guarded the copy with `!ifdef MODEL_SOURCE_DIR` and passed MODEL_SOURCE_DIR as
+; an environment variable. The guard was never true. The build succeeded, printed
+; no warning, and produced a 9 MB installer with no speech model in it — which
+; would have looked entirely fine until the first person tried to dictate.
+;
+; So the file paths are baked in at build time, where their absence is visible.
+; When no model is present the substitution is empty and the installer builds
+; without one: a developer packaging locally should not be forced into a 482 MB
+; download they did not ask for, and release.yml asserts the model exists before
+; it ever invokes `tauri build`.
+
+!macro NSIS_HOOK_PREINSTALL
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+@MODEL_FILES@
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; Uninstalling must not strand 631 MB. The weights are ours, they live inside
+  ; $INSTDIR, and nothing else on the machine refers to them.
+  RMDir /r "$INSTDIR\models"
+!macroend

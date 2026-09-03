@@ -115,7 +115,7 @@ disappears on white is a defect worth catching before you ship it.</sub>
 </div>
 
 <details>
-<summary><b>Writing style, Speech model and Settings</b></summary>
+<summary><b>Writing style and Settings</b></summary>
 
 <br>
 
@@ -152,9 +152,10 @@ until v0.2.0; each now does what it says.</sub>
 
 ## Principles
 
-1. **Local by default, network by exception.** OpenVoice makes exactly two kinds of
-   outbound request, and both are listed here: a **model download you asked for**,
-   and an **update check you can switch off** (Settings → Updates). Nothing else.
+1. **Local by default, network by exception.** OpenVoice makes exactly one kind of
+   outbound request, and it is listed here: an **update check you can switch off**
+   (Settings → Updates). Nothing else. Dictation itself has no network path at
+   all — the speech model ships in the installer, so there is nothing to fetch.
    Every crate that touches your microphone, your transcripts, your keyboard or
    your history is *sealed*: it has no path to an HTTP client, TLS stack or socket
    library anywhere in its dependency graph. That is
@@ -189,9 +190,9 @@ until v0.2.0; each now does what it says.</sub>
 ## How it works
 
 ```
-  Right Ctrl ──► capture ──► Whisper ──► format ──► inject at caret
-   (held)        16 kHz       local       rules        SendInput /
-                  mono      GPU or CPU   pipeline      clipboard
+  Right Ctrl ──► capture ──► Parakeet ──► format ──► inject at caret
+   (held)        16 kHz      in-process     rules        SendInput /
+                  mono          CPU       pipeline      clipboard
 ```
 
 Built as [ports and adapters](docs/adr/0001-hexagonal-architecture.md): the domain
@@ -223,7 +224,7 @@ flowchart LR
 
     subgraph driven["Driven adapters — the core calls out"]
         direction TB
-        ASR["faster-whisper sidecar<br/>ov-asr"]
+        ASR["Parakeet, in-process<br/>ov-asr"]
         APP["Foreground app<br/>ov-input"]
         SINK["SendInput / clipboard<br/>ov-input"]
         DB["SQLite + FTS5<br/>ov-store"]
@@ -248,12 +249,11 @@ requires an ADR.
 | `ov-core` | Session state machine, the six ports, events, config. **Pure.** |
 | `ov-format` | Formatting pipeline, dictionary, voice commands. **Pure.** |
 | `ov-audio` | WASAPI capture via cpal; downmix and resample to 16 kHz mono |
-| `ov-asr` | Supervises the speech sidecar and owns its process lifetime |
+| `ov-asr` | Parakeet speech recognition, decoded in this process |
 | `ov-input` | Keyboard hook, text injection, foreground app detection |
 | `ov-store` | SQLite history with FTS5 search |
 | `ov-cli` | `ov` — the same pipeline, headless. The integration harness |
 | `ov-app` | `openvoice` — the Tauri shell, and the composition root |
-| `sidecar/` | faster-whisper, as a supervised child process (frozen for release) |
 
 Full design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Decisions and their
 rationale: [`docs/adr/`](docs/adr/).
@@ -264,32 +264,31 @@ RTX 3050 Laptop (4 GB VRAM), Ryzen 5 6600H:
 
 | | |
 |---|---:|
-| Model load, warm cache | 1.4 s |
-| Decode, ~5 s utterance, `base.en` | ~190–600 ms |
-| Realtime factor | ~27× |
+| Model load, at startup | ~2.5–3.4 s |
+| Decode, ~5 s utterance | ~500 ms median |
+| Decode, p90 across clip lengths | ~1.2 s |
+| Memory while loaded | ~750 MB |
 
-Two findings from bringing this up, both now handled in code and worth knowing if
-you hit them elsewhere:
+Measured on the reference machine, CPU only, at four decode threads. Four rather
+than all twelve: the extra eight buy about 110 ms and cost the responsiveness of
+whatever you are dictating into.
 
-- **pip-installed CUDA libraries aren't on the Windows DLL search path.** ctranslate2
-  reports a healthy GPU, loads the model, then fails at the *first decode* with
-  `Library cublas64_12.dll is not found`. `engine.register_cuda_dll_dirs()` fixes it.
-- **`huggingface_hub` revalidates cached models over the network**, and blocked for
-  **171 seconds** per load before falling back to the cache it already had. The
-  tell was that the delay repeated to the millisecond — compute does not do that,
-  a network timeout does. Offline mode is now the default and is lifted only for
-  the duration of a download the user asked for.
+Accuracy is deliberately not quoted as a number here. It was measured — see
+[ADR 0008](docs/adr/0008-parakeet-in-process.md) — but on a public benchmark that
+is in-domain for this model, so the figure is a ceiling rather than a forecast,
+and a number in a README outlives that caveat.
 
 ## Requirements
 
 - Windows 10/11 (macOS and Linux planned for v0.5)
-- ~250 MB disk for the app — most of it the bundled speech engine — plus the model
-  you choose (148 MB to 1.6 GB)
-- An NVIDIA GPU with ≥2 GB VRAM is optional but makes the large model practical.
+- ~700 MB disk: the app plus the speech model, which is included rather than
+  downloaded
+- No GPU needed. The engine runs on the CPU and takes about 750 MB of memory
+  while loaded.
   See the note under [Installing](#installing) about what the installer ships.
 
-Building from source needs considerably more: the Rust toolchain, MSVC build
-tools, and a Python environment come to roughly 16 GB. See
+Building from source needs considerably more: the Rust toolchain and MSVC build
+tools come to roughly 14 GB, plus the model. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) if that is a problem — it can all be
 relocated to another drive.
 
@@ -301,12 +300,12 @@ a hand-written one goes stale the moment a release ships without someone
 remembering to edit it. The [releases page](https://github.com/adityashelke04/OpenVoice/releases)
 has the version history.
 
-Nothing to configure, no Python to install — the speech engine is inside the
-installer. On first launch it downloads the `base.en` weights (~150 MB), with
-progress shown in the app; everything after that works offline. If that first
-download fails — a dropped connection, a network that blocks `huggingface.co` —
-the app says so and offers **Try again**, and the Models screen can fetch the
-weights whether or not the engine came up.
+Nothing to configure, no Python to install, and no model to download. The speech
+engine and its weights are both inside the installer, so OpenVoice works offline
+from the moment setup finishes — including the very first sentence. That is why
+the installer is around 550 MB: you download those bytes once, while you are
+already expecting to wait, rather than on first launch when you are trying to
+use the app.
 
 Then hold **Right Ctrl**, speak, and release.
 
@@ -330,10 +329,10 @@ Two things worth knowing before you install:
   shipped. An installed copy runs on the CPU, which works everywhere but is
   markedly slower on the large model. To use the GPU today, run from source.
 
-To uninstall, use Windows *Add or remove programs*. Your history
-(`%APPDATA%\OpenVoice\history.db`) and downloaded models
-(`%APPDATA%\OpenVoice\models`) are yours — delete that folder if you want them
-gone too.
+To uninstall, use Windows *Add or remove programs*; that removes the speech model
+along with the app. Your history (`%APPDATA%\OpenVoice\history.db`) and settings
+are left behind because they are yours — delete that folder if you want them gone
+too.
 
 ## Building it yourself
 
@@ -343,25 +342,25 @@ winget install Rustlang.Rustup
 winget install --id Microsoft.VisualStudio.2022.BuildTools `
   --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 
-# 2. The ASR sidecar, in a virtualenv managed by uv (astral.sh/uv).
-#    Drop the two nvidia packages for a CPU-only setup.
-winget install astral-sh.uv
-uv venv
-uv pip install -e sidecar nvidia-cublas-cu12 nvidia-cudnn-cu12
+# 2. The speech model (~482 MB download, verified against a pinned SHA-256).
+#    There is no Python and no virtualenv any more; the engine links into the
+#    binary. This only fetches weights.
+pwsh scripts/fetch-model.ps1
 
 # 3. Frontend dependencies. This also installs the Tauri CLI used in step 5.
 npm --prefix apps/ui ci
 
-# 4. Run the tests
-cargo test --workspace
+# 4. Run the tests. --test-threads=1 because each ov-asr test that touches the
+#    model loads ~750 MB, and running them in parallel needs several gigabytes.
+cargo test --workspace -- --test-threads=1
 
-# 5. Run it, against the Python sidecar in your checkout
+# 5. Run it
 cd crates/ov-app
 node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js dev
 ```
 
-The first run downloads the `base.en` weights (~150 MB) before the window becomes
-usable; the progress is shown in the app.
+The model is found in `models/` in the checkout, or wherever `OPENVOICE_MODEL_DIR`
+points. Nothing is downloaded at run time.
 
 That sequence builds the full Windows app. You do not need any of it to work on
 the parts that matter most: `ov-core` and `ov-format` are pure Rust and build and
@@ -373,22 +372,23 @@ cargo test -p ov-core -p ov-format
 
 ### Producing an installer
 
-The installer has to carry a speech engine, because the machine it lands on has
-no Python. `build-sidecar.ps1` freezes the sidecar into a standalone folder that
-`tauri build` then bundles as a resource:
+The engine links into the binary, so the only extra payload is the model itself:
 
 ```powershell
-pwsh scripts/build-sidecar.ps1 -Clean       # ~175 MB, verifies itself on the protocol
+pwsh scripts/fetch-model.ps1                 # ~482 MB, SHA-256 verified
+$env:MODEL_SOURCE_DIR = "$PWD\models\parakeet-tdt-0.6b-v2"
 cd crates/ov-app
 node ../../apps/ui/node_modules/@tauri-apps/cli/tauri.js build
 ```
 
-The freeze must run first. Tauri's own resource step does not care whether the
-folder has anything in it, so without the freeze the build would happily produce
-an installer with no speech engine inside — a failure that only surfaces when a
-user runs the app. Two guards exist for that: `crates/ov-app/build.rs` refuses a
-release build when the frozen executable is missing, and the [release
-workflow](.github/workflows/release.yml) asserts it independently before
+`MODEL_SOURCE_DIR` is read by
+[`installer-hooks.nsh`](crates/ov-app/installer-hooks.nsh), which installs the
+weights into the application directory. They are deliberately *not* a
+`bundle.resources` entry: Tauri's updater downloads the whole installer on every
+update, so a bundled model would turn every patch release into a ~550 MB download
+for every user. Leave it unset and the installer builds without a model — useful
+for testing packaging, useless to a user — which is why the [release
+workflow](.github/workflows/release.yml) asserts the model is present before
 bundling.
 
 Details and troubleshooting: [`CONTRIBUTING.md`](CONTRIBUTING.md).
@@ -484,8 +484,8 @@ new formatting rule is about thirty lines plus two tests: one that would fail
 without it, and one proving it does not fire when it shouldn't.
 
 Good first things to look at: a missing term in
-[`dictionary.rs`](crates/ov-format/src/dictionary.rs) (Whisper mistranscribes some
-tool name you use — add what it actually hears), a voice command in
+[`dictionary.rs`](crates/ov-format/src/dictionary.rs) (the model mistranscribes
+some tool name you use — add what it actually hears), a voice command in
 [`rules.rs`](crates/ov-format/src/rules.rs), or an app profile for an editor nobody
 has covered yet. Setup, the boundary rules, and how to write a rule that behaves:
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
@@ -496,9 +496,12 @@ has covered yet. Setup, the boundary rules, and how to write a rule that behaves
 excellent and worth paying for. OpenVoice exists because I wanted something local,
 open, and tuned specifically for writing code and prompting agents.
 
-Built on [faster-whisper](https://github.com/SYSTRAN/faster-whisper),
-[CTranslate2](https://github.com/OpenNMT/CTranslate2), and
-[Whisper](https://github.com/openai/whisper).
+Built on [Parakeet TDT](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) from
+NVIDIA NeMo, running on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) from
+k2-fsa. Earlier releases used
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) and
+[Whisper](https://github.com/openai/whisper); see
+[ADR 0008](docs/adr/0008-parakeet-in-process.md) for why that changed.
 
 > **Name note:** [MyShell's OpenVoice](https://github.com/myshell-ai/OpenVoice) is an
 > unrelated and well-known text-to-speech project. No affiliation. A rename is under

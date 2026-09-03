@@ -127,9 +127,9 @@ pub struct Engine {
     paste_threshold: usize,
     /// Forced transcription language, or `None` to auto-detect.
     ///
-    /// Unlike the model, this needs no restart: it is a per-request parameter
-    /// faster-whisper reads at decode time, not something baked into loaded
-    /// weights, so it reloads the same way the dictionary and profiles do.
+    /// Retained but unused: Parakeet v2 is English-only, so there is no language
+    /// to force and none to detect. Kept because `Config` is versioned and
+    /// persisted, and Parakeet v3 is multilingual on the same runtime.
     language: Mutex<Option<String>>,
     start: Instant,
     shell: Arc<dyn Shell>,
@@ -373,7 +373,6 @@ pub fn start(
     history: Arc<dyn HistoryStore>,
 ) -> Result<(Arc<Engine>, Ready), String> {
     let config = settings.config.clone();
-    let model = settings.model.as_str();
 
     let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
     tracing::info!(dir = %dir.display(), "loading the speech model");
@@ -411,7 +410,10 @@ pub fn start(
         .unwrap_or_else(|| "System default".into());
 
     let ready = Ready {
-        model: model.to_string(),
+        // What actually loaded, not what settings.toml happens to say. Those two
+        // drifted apart the moment the model stopped being selectable, and the
+        // Engine card was reporting "base.en" while Parakeet was doing the work.
+        model: transcriber.model_id(),
         device: transcriber.model_id(),
         // The key actually bound, not a guess. This was the literal string
         // "Right Ctrl", which was true only until someone rebound it — and the

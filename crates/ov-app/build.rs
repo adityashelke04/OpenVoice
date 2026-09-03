@@ -1,64 +1,104 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn main() {
-    ensure_sidecar_resource_present();
+    generate_installer_hooks();
     tauri_build::build();
 }
 
-/// `tauri_build::build()` validates every path in `tauri.conf.json`'s
-/// `bundle.resources` against the filesystem *unconditionally* — even for a
-/// plain `cargo check` / `clippy` / `test`, which never bundle anything. It is
-/// not gated on `tauri build` or on release profile; `tauri-utils`' resource
-/// walker hard-errors ("resource path ... doesn't exist") the moment the
-/// configured path is missing.
+/// Name of the model directory, mirroring `ov_asr::locate::MODEL_DIR_NAME`.
 ///
-/// `sidecar/dist/openvoice-asr/` is the frozen ASR engine produced by
-/// `scripts/build-sidecar.ps1` (see ADR 0003) and is deliberately gitignored —
-/// it is ~200 MB of PyInstaller output that must never be committed. That
-/// means a fresh checkout (a new contributor's machine, or CI's `rust` job,
-/// which runs `cargo fmt`/`clippy`/`test` with no sidecar-freezing step at
-/// all) can never satisfy this check without first standing up a Python
-/// environment and running PyInstaller — something `cargo test` has no
-/// business requiring.
-///
-/// Fix: an empty directory satisfies tauri-build's resource walker (it walks
-/// and silently skips directories with nothing in them), so create one when
-/// missing rather than requiring the real frozen binary. This is safe for
-/// ordinary dev builds. For a genuine release-profile build (what `tauri
-/// build` runs by default) we still hard-fail if the frozen executable itself
-/// is absent, so `cargo tauri build --release` cannot silently produce an
-/// installer with no speech engine — the exact failure mode called out in
-/// the CHANGELOG. `release.yml` freezes the real sidecar and asserts the
-/// binary exists before ever invoking `tauri build`, so this is
-/// defense-in-depth for anyone bundling outside that workflow, not a
-/// replacement for it.
-fn ensure_sidecar_resource_present() {
-    let dist_dir = Path::new("../../sidecar/dist/openvoice-asr");
-    let frozen_exe = dist_dir.join("openvoice-asr.exe");
+/// Duplicated rather than imported: a build script cannot depend on a crate in
+/// the same workspace without a build-dependency cycle. The `installs_the_model`
+/// test below fails if this ever drifts from what the app looks for.
+const MODEL_DIR_NAME: &str = "parakeet-tdt-0.6b-v2";
 
-    if frozen_exe.exists() {
-        return;
+/// The four files that make up a loadable model.
+const MODEL_FILES: [&str; 4] = [
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+    "joiner.int8.onnx",
+    "tokens.txt",
+];
+
+/// Write `installer-hooks.nsh` from its template, with the model paths baked in.
+///
+/// Baked in rather than passed as `MODEL_SOURCE_DIR`, because NSIS `!ifdef` tests
+/// an NSIS define and Tauri does not turn environment variables into defines. The
+/// first version of this did exactly that and produced a 9 MB installer with no
+/// speech model, silently — the guard was never true, and nothing said so.
+///
+/// A missing model is a warning, not a panic: building the packaging path without
+/// a 482 MB download is a legitimate thing to want, and `release.yml` asserts the
+/// model exists before it invokes `tauri build`. The guarantee belongs there,
+/// where it can be enforced without blocking a contributor.
+fn generate_installer_hooks() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let template = dir.join("installer-hooks.nsh.in");
+    let out = dir.join("installer-hooks.nsh");
+
+    println!("cargo:rerun-if-changed={}", template.display());
+    println!("cargo:rerun-if-env-changed=MODEL_SOURCE_DIR");
+
+    let model = model_dir();
+    if let Some(m) = &model {
+        println!("cargo:rerun-if-changed={}", m.join("tokens.txt").display());
     }
 
-    let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
-    if is_release {
-        panic!(
-            "no frozen sidecar at {} — run `pwsh scripts/build-sidecar.ps1` before a release \
-             build, or the installer ships with no speech engine",
-            frozen_exe.display()
-        );
-    }
-
-    if !dist_dir.exists() {
-        std::fs::create_dir_all(dist_dir).unwrap_or_else(|e| {
-            panic!(
-                "failed to create placeholder sidecar resource dir {}: {e}",
-                dist_dir.display()
+    let body = match &model {
+        Some(m) => {
+            let files: Vec<String> = MODEL_FILES
+                .iter()
+                .map(|f| format!("      File \"{}\"", m.join(f).display()))
+                .collect();
+            format!(
+                "  ; Skip when this version's weights are already here. Re-installing or\n\
+                 \x20 ; repairing should not rewrite 631 MB to produce byte-identical files.\n\
+                 \x20 IfFileExists \"$INSTDIR\\models\\{MODEL_DIR_NAME}\\tokens.txt\" model_present 0\n\
+                 \x20   DetailPrint \"Installing the speech model (631 MB)...\"\n\
+                 \x20   SetOutPath \"$INSTDIR\\models\\{MODEL_DIR_NAME}\"\n\
+                 {}\n\
+                 \x20 model_present:",
+                files.join("\n")
             )
-        });
-        println!(
-            "cargo:warning=sidecar/dist/openvoice-asr/ is empty (dev build placeholder); \
-             run scripts/build-sidecar.ps1 before packaging a real installer"
-        );
+        }
+        None => {
+            println!(
+                "cargo:warning=no speech model found; the installer will ship without one. \
+                 Run scripts/fetch-model.ps1, or set MODEL_SOURCE_DIR."
+            );
+            "  ; No model was present at build time.".to_string()
+        }
+    };
+
+    let rendered = std::fs::read_to_string(&template)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", template.display()))
+        .replace("@MODEL_FILES@", &body);
+
+    // Only write when the content actually changes: an unconditional write
+    // updates the mtime every build, and `rerun-if-changed` on a file this script
+    // rewrites would rebuild forever.
+    if std::fs::read_to_string(&out).ok().as_deref() != Some(rendered.as_str()) {
+        std::fs::write(&out, rendered)
+            .unwrap_or_else(|e| panic!("writing {}: {e}", out.display()));
     }
+}
+
+/// The model directory, from `MODEL_SOURCE_DIR` or the checkout, if it is complete.
+fn model_dir() -> Option<PathBuf> {
+    let candidate = match std::env::var_os("MODEL_SOURCE_DIR") {
+        Some(d) => PathBuf::from(d),
+        // The workspace root by walking up, not by joining "../..": NSIS is given
+        // these paths verbatim, and a `C:\../..\models` with mixed
+        // separators is not something to hand a 1990s installer compiler.
+        None => Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("crates/ov-app is two levels below the workspace root")
+            .join("models")
+            .join(MODEL_DIR_NAME),
+    };
+    MODEL_FILES
+        .iter()
+        .all(|f| candidate.join(f).exists())
+        .then_some(candidate)
 }

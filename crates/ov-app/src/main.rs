@@ -381,10 +381,8 @@ fn restart_reasons(app: AppHandle, state: tauri::State<'_, AppState>) -> Vec<Str
     let now = effective_settings(&app);
     let mut reasons = Vec::new();
 
-    // Weights are loaded into the sidecar once, at warm-up.
-    if booted.model != now.model {
-        reasons.push("the speech model".to_string());
-    }
+    // No model reason any more: there is one model, it is not selectable, and a
+    // banner offering to restart for a change nobody can make would be a lie.
     // The capture device is opened when the audio source is built.
     if booted.config.input_device != now.config.input_device {
         reasons.push("the microphone".to_string());
@@ -420,15 +418,14 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     update::install(&app).await
 }
 
-/// The settings the engine should start with, environment overrides applied.
+/// The settings the engine should start with.
+///
+/// This used to apply an `OPENVOICE_MODEL` override, which was the escape hatch
+/// for a configuration that had pinned itself to a model that would not load.
+/// With one model that cannot be selected, there is nothing to override and no
+/// such corner to be stuck in.
 fn effective_settings(app: &AppHandle) -> settings::Settings {
-    let mut settings = app.state::<AppState>().settings.get();
-    // The environment variable still wins, so a stuck configuration can always be
-    // overridden from a shortcut without editing a file.
-    if let Ok(m) = std::env::var("OPENVOICE_MODEL") {
-        settings.model = m;
-    }
-    settings
+    app.state::<AppState>().settings.get()
 }
 
 /// Start the engine on a background thread, recording the outcome in state.
