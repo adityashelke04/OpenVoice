@@ -13,6 +13,11 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 hound = "3.5"
+# Official k2-fsa bindings. Default features link sherpa-onnx statically, which
+# is what makes the app a single binary with no DLLs beside it -- verified as an
+# 18.9 MB release binary that runs from any working directory. Do not switch to
+# `shared`: that trades the whole packaging premise for nothing.
+sherpa-onnx = "1.13.7"
 
 [dev-dependencies]
 # Test-only: backdating a file's modified time is the only way to test a

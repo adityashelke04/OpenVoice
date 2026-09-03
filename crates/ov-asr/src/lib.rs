@@ -38,6 +38,8 @@ use ov_core::types::Transcript;
 use serde::Deserialize;
 
 pub mod catalog;
+pub mod locate;
+pub mod parakeet;
 #[cfg(windows)]
 mod job;
 pub mod store;
