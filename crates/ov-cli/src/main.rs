@@ -166,9 +166,10 @@ fn pick_profile(name: &str) -> Profile {
         .unwrap_or_else(Profile::editor)
 }
 
-fn build_transcriber(_cli: &Cli) -> Result<ov_asr::parakeet::ParakeetTranscriber, String> {
+fn build_transcriber(_cli: &Cli) -> Result<ov_asr::sherpa::SherpaTranscriber, String> {
     let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
-    ov_asr::parakeet::ParakeetTranscriber::new(dir).map_err(|e| e.to_string())
+    ov_asr::sherpa::SherpaTranscriber::new(ov_asr::catalog::default_spec(), dir)
+        .map_err(|e| e.to_string())
 }
 
 /* -- format ------------------------------------------------------------------ */
@@ -497,7 +498,7 @@ fn cmd_transcribe(cli: &Cli, path: &Path, profile: &str) -> Result<(), String> {
 
 struct Runtime {
     audio: ov_audio::CpalAudioSource,
-    transcriber: ov_asr::parakeet::ParakeetTranscriber,
+    transcriber: ov_asr::sherpa::SherpaTranscriber,
     sink: ov_input::WinTextSink,
     apps: ov_input::WinForeground,
     profiles: Vec<Profile>,

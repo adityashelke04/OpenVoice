@@ -93,7 +93,7 @@ pub struct Engine {
     /// indirection pretending to be flexibility. The port still exists and
     /// `ov-core` still depends on it -- that is what made this swap cheap -- but
     /// the composition root can say what it actually built.
-    transcriber: ov_asr::parakeet::ParakeetTranscriber,
+    transcriber: ov_asr::sherpa::SherpaTranscriber,
     sink: ov_input::WinTextSink,
     apps: ov_input::WinForeground,
     /// Profiles and formatters live behind one lock and are replaced together.
@@ -390,8 +390,9 @@ pub fn start(
         tracing::warn!(dir = %d.display(), "keeping recordings on disk; this is off by default");
     }
 
-    let transcriber = ov_asr::parakeet::ParakeetTranscriber::with_retention(dir, retain)
-        .map_err(|e| e.to_string())?;
+    let transcriber =
+        ov_asr::sherpa::SherpaTranscriber::with_retention(ov_asr::catalog::default_spec(), dir, retain)
+            .map_err(|e| e.to_string())?;
 
     transcriber.warm().map_err(|e| e.to_string())?;
 

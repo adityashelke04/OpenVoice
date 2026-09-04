@@ -1,7 +1,17 @@
-//! # Parakeet — in-process speech recognition
+//! # In-process speech recognition
 //!
-//! Implements [`ov_core::ports::Transcriber`] with NVIDIA Parakeet TDT 0.6B v2
-//! running inside this process through k2-fsa's `sherpa-onnx` bindings.
+//! Implements [`ov_core::ports::Transcriber`] for any model in
+//! [`crate::catalog`], running inside this process through k2-fsa's
+//! `sherpa-onnx` bindings.
+//!
+//! ## One loader, two model shapes
+//!
+//! sherpa-onnx configures a transducer and a Whisper model through different
+//! structs, so [`SherpaTranscriber::with_retention`] matches on
+//! [`crate::catalog::ModelKind`] to fill in the right one. Everything after
+//! `OfflineRecognizer::create` is identical: the same stream, the same decode,
+//! the same result. That is why adding a model is a catalogue entry rather than
+//! a code change.
 //!
 //! ## Why in-process, when ADR 0003 chose a child process
 //!
@@ -46,13 +56,12 @@ use std::path::{Path, PathBuf};
 use ov_core::error::{Error, Result};
 use ov_core::ports::{DecodeHint, Pcm16k, Transcriber};
 use ov_core::types::Transcript;
-use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig};
+use sherpa_onnx::{
+    OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig,
+    OfflineWhisperModelConfig,
+};
 
-/// Stable identifier for this model, recorded in history beside every transcript.
-///
-/// Changing it orphans the attribution of every row already written, so it is a
-/// constant rather than something derived from a path or a filename.
-pub const MODEL_ID: &str = "parakeet-tdt-0.6b-v2";
+use crate::catalog::{ModelKind, ModelSpec};
 
 /// Decode threads.
 ///
@@ -63,16 +72,12 @@ pub const MODEL_ID: &str = "parakeet-tdt-0.6b-v2";
 /// takes the smaller share deliberately.
 const DECODE_THREADS: i32 = 4;
 
-/// The files a Parakeet model directory must contain to be loadable.
-pub const REQUIRED_FILES: [&str; 4] = [
-    "encoder.int8.onnx",
-    "decoder.int8.onnx",
-    "joiner.int8.onnx",
-    "tokens.txt",
-];
-
-/// Parakeet, loaded and ready to decode.
-pub struct ParakeetTranscriber {
+/// A loaded model, ready to decode.
+pub struct SherpaTranscriber {
+    /// Which catalogue entry this is. Carried so `model_id` reports the id that
+    /// history rows are attributed with, rather than something derived from a
+    /// directory name a user could rename.
+    spec: &'static ModelSpec,
     recognizer: OfflineRecognizer,
     /// Where to keep recordings, when the user has asked for them to be kept.
     ///
@@ -84,21 +89,21 @@ pub struct ParakeetTranscriber {
 
 // `OfflineRecognizer` wraps an opaque C pointer and has nothing printable in it,
 // so this reports what is actually useful about the value: which model it holds.
-impl std::fmt::Debug for ParakeetTranscriber {
+impl std::fmt::Debug for SherpaTranscriber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ParakeetTranscriber")
-            .field("model", &MODEL_ID)
+        f.debug_struct("SherpaTranscriber")
+            .field("model", &self.spec.id)
             .finish_non_exhaustive()
     }
 }
 
-impl ParakeetTranscriber {
-    /// Load the model from `dir`, keeping no recordings.
+impl SherpaTranscriber {
+    /// Load `spec` from `dir`, keeping no recordings.
     ///
-    /// Expensive — roughly 2.5 seconds and 757 MB resident — and done once at
-    /// startup, which is why [`Transcriber::warm`] is a no-op.
-    pub fn new(dir: PathBuf) -> Result<Self> {
-        Self::with_retention(dir, None)
+    /// Expensive — two to three seconds, and up to 750 MB resident — and done
+    /// once at startup, which is why [`Transcriber::warm`] is a no-op.
+    pub fn new(spec: &'static ModelSpec, dir: PathBuf) -> Result<Self> {
+        Self::with_retention(spec, dir, None)
     }
 
     /// Load the model, keeping every recording in `retain_audio_dir` when it is
@@ -108,49 +113,73 @@ impl ParakeetTranscriber {
     /// transcriber that could be switched into recording mid-life would make
     /// "is this app recording me right now" a question with a time-dependent
     /// answer. It is fixed when the engine is built, from the user's setting.
-    pub fn with_retention(dir: PathBuf, retain_audio_dir: Option<PathBuf>) -> Result<Self> {
+    pub fn with_retention(
+        spec: &'static ModelSpec,
+        dir: PathBuf,
+        retain_audio_dir: Option<PathBuf>,
+    ) -> Result<Self> {
         // Check the files before handing paths to the C library. It reports a
         // missing or unreadable model as a null pointer with no detail, and
         // "could not create recognizer" is not something a user can act on.
         // Naming the missing file is the difference between a support thread and
         // a fixed install.
-        for f in REQUIRED_FILES {
+        for f in spec.files {
             if !dir.join(f).exists() {
                 return Err(Error::Transcription(format!(
-                    "the speech model is incomplete: {f} is missing from {}",
+                    "the {} model is incomplete: {f} is missing from {}",
+                    spec.id,
                     dir.display()
                 )));
             }
         }
 
-        let mut cfg = OfflineRecognizerConfig {
-            model_config: OfflineRecognizerConfig::default().model_config,
-            ..Default::default()
-        };
-        cfg.model_config.transducer = OfflineTransducerModelConfig {
-            encoder: Some(path_str(&dir, "encoder.int8.onnx")?),
-            decoder: Some(path_str(&dir, "decoder.int8.onnx")?),
-            joiner: Some(path_str(&dir, "joiner.int8.onnx")?),
-        };
-        cfg.model_config.tokens = Some(path_str(&dir, "tokens.txt")?);
-        cfg.model_config.model_type = Some("nemo_transducer".into());
+        let mut cfg = OfflineRecognizerConfig::default();
+        match spec.kind {
+            ModelKind::Transducer => {
+                cfg.model_config.transducer = OfflineTransducerModelConfig {
+                    encoder: Some(path_str(&dir, "encoder.int8.onnx")?),
+                    decoder: Some(path_str(&dir, "decoder.int8.onnx")?),
+                    joiner: Some(path_str(&dir, "joiner.int8.onnx")?),
+                };
+                cfg.model_config.tokens = Some(path_str(&dir, "tokens.txt")?);
+                cfg.model_config.model_type = Some("nemo_transducer".into());
+            }
+            ModelKind::Whisper => {
+                cfg.model_config.whisper = OfflineWhisperModelConfig {
+                    encoder: Some(path_str(&dir, "tiny.en-encoder.int8.onnx")?),
+                    decoder: Some(path_str(&dir, "tiny.en-decoder.int8.onnx")?),
+                    language: Some("en".into()),
+                    task: Some("transcribe".into()),
+                    // -1 lets sherpa-onnx decide. Whisper is trained on
+                    // 30-second windows and pads short audio itself; overriding
+                    // this was not measured, so it is not overridden.
+                    tail_paddings: -1,
+                    enable_token_timestamps: false,
+                    enable_segment_timestamps: false,
+                };
+                cfg.model_config.tokens = Some(path_str(&dir, "tiny.en-tokens.txt")?);
+                cfg.model_config.model_type = Some("whisper".into());
+            }
+        }
         cfg.model_config.num_threads = DECODE_THREADS;
 
         let started = std::time::Instant::now();
         let recognizer = OfflineRecognizer::create(&cfg).ok_or_else(|| {
             Error::Transcription(format!(
-                "the speech model at {} could not be loaded",
+                "the {} model at {} could not be loaded",
+                spec.id,
                 dir.display()
             ))
         })?;
         tracing::info!(
-            model = MODEL_ID,
+            model = spec.id,
             threads = DECODE_THREADS,
             took_ms = started.elapsed().as_millis() as u64,
             "speech model loaded"
         );
 
         Ok(Self {
+            spec,
             recognizer,
             retain_audio_dir,
         })
@@ -202,7 +231,7 @@ fn path_str(dir: &Path, file: &str) -> Result<String> {
     })
 }
 
-impl Transcriber for ParakeetTranscriber {
+impl Transcriber for SherpaTranscriber {
     fn warm(&self) -> Result<()> {
         // Weights are already resident: `new` loaded them, and loading twice
         // would cost 757 MB more. Kept so callers need not know which backend
@@ -233,11 +262,11 @@ impl Transcriber for ParakeetTranscriber {
 
         Ok(Transcript {
             text: text.trim().to_owned(),
-            // `hint.language` is ignored rather than honoured: Parakeet v2 is
-            // English-only, so there is nothing to detect and nothing to force.
-            // The field stays in DecodeHint because Parakeet v3 is multilingual
-            // and the swap is a three-file change.
-            language: Some("en".into()),
+            // Reported, not forced. An English-only model can honestly say
+            // "en"; a multilingual one detects per utterance and sherpa-onnx
+            // does not surface which it chose, so naming a language there would
+            // put a guess into history. None is the truthful answer.
+            language: self.spec.english_only.then(|| "en".to_owned()),
             // A transducer emits no per-segment log-probability, so there is no
             // honest number to put here. The field stays in the persisted
             // Transcript type; it is simply never filled.
@@ -246,7 +275,7 @@ impl Transcriber for ParakeetTranscriber {
     }
 
     fn model_id(&self) -> String {
-        MODEL_ID.to_owned()
+        self.spec.id.to_owned()
     }
 }
 
@@ -280,8 +309,14 @@ mod tests {
         false
     }
 
-    fn load() -> ParakeetTranscriber {
-        ParakeetTranscriber::new(model_dir().expect("guarded by skip()")).expect("load the model")
+    /// The bundled model's spec, which every model-dependent test loads.
+    fn bundled() -> &'static ModelSpec {
+        crate::catalog::default_spec()
+    }
+
+    fn load() -> SherpaTranscriber {
+        SherpaTranscriber::new(bundled(), model_dir().expect("guarded by skip()"))
+            .expect("load the model")
     }
 
     /// Two seconds of digital silence, built rather than committed: .gitignore
@@ -311,7 +346,7 @@ mod tests {
         // The likeliest packaging bug is an installer built without weights. It
         // has to fail loudly, naming what it looked for, rather than leaving the
         // user on a spinner they cannot diagnose.
-        let err = ParakeetTranscriber::new("Z:/definitely/not/here".into())
+        let err = SherpaTranscriber::new(bundled(), "Z:/definitely/not/here".into())
             .expect_err("a missing model must not load")
             .to_string();
         assert!(
@@ -369,7 +404,7 @@ mod tests {
     #[test]
     fn model_id_is_stable() {
         // History rows are attributed with this string; changing it orphans them.
-        assert_eq!(MODEL_ID, "parakeet-tdt-0.6b-v2");
+        assert_eq!(bundled().id, "parakeet-tdt-0.6b-v2");
         if skip() {
             return;
         }
@@ -399,7 +434,7 @@ mod tests {
         // to forget to delete, and this test is what keeps that true.
         let dir = std::env::temp_dir().join("ov-retain-off");
         let _ = std::fs::remove_dir_all(&dir);
-        let t = ParakeetTranscriber::with_retention(model_dir().expect("model"), None)
+        let t = SherpaTranscriber::with_retention(bundled(), model_dir().expect("model"), None)
             .expect("load the model");
         t.transcribe(&speech(), &DecodeHint::default()).expect("decode");
         assert!(!dir.exists(), "retention was off; nothing may be written");
@@ -412,8 +447,12 @@ mod tests {
         }
         let dir = std::env::temp_dir().join("ov-retain-on");
         let _ = std::fs::remove_dir_all(&dir);
-        let t = ParakeetTranscriber::with_retention(model_dir().expect("model"), Some(dir.clone()))
-            .expect("load the model");
+        let t = SherpaTranscriber::with_retention(
+            bundled(),
+            model_dir().expect("model"),
+            Some(dir.clone()),
+        )
+        .expect("load the model");
         t.transcribe(&speech(), &DecodeHint::default()).expect("decode");
 
         let kept: Vec<_> = std::fs::read_dir(&dir)
@@ -443,8 +482,12 @@ mod tests {
         // not be conditional on the decode succeeding.
         let dir = std::env::temp_dir().join("ov-retain-empty");
         let _ = std::fs::remove_dir_all(&dir);
-        let t = ParakeetTranscriber::with_retention(model_dir().expect("model"), Some(dir.clone()))
-            .expect("load the model");
+        let t = SherpaTranscriber::with_retention(
+            bundled(),
+            model_dir().expect("model"),
+            Some(dir.clone()),
+        )
+        .expect("load the model");
 
         // Empty audio is rejected before anything is written, which is correct:
         // there is no recording to keep.
@@ -452,6 +495,33 @@ mod tests {
         assert!(!dir.exists(), "no audio means no recording");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_whisper_spec_names_its_own_missing_file() {
+        // The two model kinds have different file names, and the error must come
+        // from the spec rather than a hardcoded Parakeet list -- otherwise a
+        // missing Whisper model would complain about encoder.int8.onnx, a file
+        // it never had.
+        let spec = crate::catalog::find("whisper-tiny.en").expect("in catalogue");
+        let err = SherpaTranscriber::new(spec, "Z:/nope".into())
+            .expect_err("must not load")
+            .to_string();
+        assert!(err.contains("Z:/nope"), "must name the path: {err}");
+        assert!(
+            err.contains("tiny.en-encoder.int8.onnx"),
+            "must name the file this model actually needs: {err}"
+        );
+    }
+
+    #[test]
+    fn a_multilingual_model_reports_no_language() {
+        // v3 detects per utterance and sherpa-onnx does not report which it
+        // chose. Writing "en" into history for it would be a guess recorded as
+        // fact, so the field stays empty.
+        let spec = crate::catalog::find("parakeet-tdt-0.6b-v3").expect("in catalogue");
+        assert!(!spec.english_only);
+        assert!(bundled().english_only, "the bundled model can honestly say en");
     }
 
     #[test]

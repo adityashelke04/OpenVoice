@@ -40,13 +40,13 @@ impl Default for Settings {
             // Vestigial, and deliberately kept.
             //
             // There is one model and it is not selectable, so nothing reads this
-            // to decide what to load -- `ov_asr::parakeet::MODEL_ID` is the
+            // to decide what to load -- the catalogue is the
             // answer to that. The field stays because `settings.toml` on every
             // existing install contains it, and a struct that no longer accepts
             // the key would make those files fail to parse on upgrade. It is
             // written out with the current engine's id so a curious reader of
             // the file is told the truth rather than "base.en".
-            model: ov_asr::parakeet::MODEL_ID.into(),
+            model: ov_asr::catalog::DEFAULT_MODEL.into(),
             dictionary: Vec::new(),
             profiles: Profile::builtins(),
         }
