@@ -167,9 +167,21 @@ fn pick_profile(name: &str) -> Profile {
 }
 
 fn build_transcriber(_cli: &Cli) -> Result<ov_asr::sherpa::SherpaTranscriber, String> {
-    let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
-    ov_asr::sherpa::SherpaTranscriber::new(ov_asr::catalog::default_spec(), dir)
-        .map_err(|e| e.to_string())
+    // The CLI always runs the bundled model. It is a development and testing
+    // harness; picking a model is a thing the app does, and adding a flag here
+    // would be a second place for that choice to live.
+    let spec = ov_asr::catalog::default_spec();
+    let dir = ov_asr::locate::model_dir(spec, &user_models()).map_err(|e| e.to_string())?;
+    ov_asr::sherpa::SherpaTranscriber::new(spec, dir).map_err(|e| e.to_string())
+}
+
+/// Where downloaded models live, mirroring `ov-app`'s data directory.
+fn user_models() -> PathBuf {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("OpenVoice")
+        .join("models")
 }
 
 /* -- format ------------------------------------------------------------------ */
@@ -227,7 +239,7 @@ fn cmd_doctor(cli: &Cli) -> Result<(), String> {
     // Python and a model preset were the two things most likely to be wrong
     // here. Neither exists any more: the model ships with the app, so the one
     // remaining failure is that it is not where it should be.
-    match ov_asr::locate::model_dir() {
+    match ov_asr::locate::model_dir(ov_asr::catalog::default_spec(), &user_models()) {
         Ok(d) => println!("model         ok  {}", d.display()),
         Err(e) => println!("model         FAILED
 {e}"),

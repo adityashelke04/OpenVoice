@@ -374,7 +374,11 @@ pub fn start(
 ) -> Result<(Arc<Engine>, Ready), String> {
     let config = settings.config.clone();
 
-    let dir = ov_asr::locate::model_dir().map_err(|e| e.to_string())?;
+    let dir = ov_asr::locate::model_dir(
+        ov_asr::catalog::default_spec(),
+        &crate::history::data_dir().join("models"),
+    )
+    .map_err(|e| e.to_string())?;
     tracing::info!(dir = %dir.display(), "loading the speech model");
 
     // Retention has to be passed explicitly. With the old sidecar it fell out of

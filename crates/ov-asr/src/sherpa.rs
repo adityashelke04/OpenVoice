@@ -292,7 +292,7 @@ mod tests {
     fn model_dir() -> Option<PathBuf> {
         let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../models")
-            .join(crate::locate::MODEL_DIR_NAME);
+            .join(crate::catalog::DEFAULT_MODEL);
         d.join("tokens.txt").exists().then_some(d)
     }
 
