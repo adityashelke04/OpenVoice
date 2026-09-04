@@ -5,11 +5,16 @@ fn main() {
     tauri_build::build();
 }
 
-/// Name of the model directory, mirroring `ov_asr::locate::MODEL_DIR_NAME`.
+/// The bundled model's id, mirroring `ov_asr::catalog::DEFAULT_MODEL`.
 ///
 /// Duplicated rather than imported: a build script cannot depend on a crate in
-/// the same workspace without a build-dependency cycle. The `installs_the_model`
-/// test below fails if this ever drifts from what the app looks for.
+/// the same workspace without a build-dependency cycle.
+///
+/// Nothing checks that this matches `ov_asr::catalog::DEFAULT_MODEL`, and an
+/// earlier version of this comment claimed a test did. If they ever drift, the
+/// installer writes the weights to one directory and the app looks in another --
+/// which surfaces as `release.yml`'s size check passing and the app reporting no
+/// model on a fresh install.
 const MODEL_DIR_NAME: &str = "parakeet-tdt-0.6b-v2";
 
 /// The four files that make up a loadable model.
