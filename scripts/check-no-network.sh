@@ -45,6 +45,12 @@
 # explicit allow-list: anything not on it fails, including a future plugin that
 # happens to be built on the same transport.
 #
+# `ov-fetch` joins that list as of 2026-09-04 (ADR 0009). It downloads speech
+# models, which needs a socket, and it exists as a separate crate precisely so
+# that the socket lives somewhere named rather than inside `ov-asr` — the crate
+# that holds the microphone. It is matched by FORBIDDEN below like any other
+# network client, so it cannot appear anywhere by accident.
+#
 # Adding an entry here means writing an ADR. That is the point of the friction.
 #
 # ---------------------------------------------------------------------------
@@ -75,12 +81,27 @@ NO_DIRECT_CRATES=(ov-app)
 # with the reason. Anything not listed here still fails the build-edge check.
 BUILD_FETCH='sherpa-onnx-sys'   # ADR 0008 - fetches prebuilt sherpa-onnx libs, linked statically
 
+# Crates that must never gain a *run-time* path to ov-fetch, checked explicitly.
+#
+# ov-asr is sealed already, so this is belt and braces -- but it is the crate
+# holding the microphone, and "ov-asr cannot phone home" is the single claim in
+# this file most worth being unable to break by accident. It takes ov-fetch as a
+# dev-dependency for one ignored end-to-end test, which `--edges normal` does not
+# see; this asserts that distinction still holds.
+NEVER_FETCH=(ov-asr ov-core ov-format ov-audio ov-input ov-store)
+
 # Substrings that indicate network capability.
-FORBIDDEN='reqwest|hyper|ureq|isahc|curl|surf|tokio-tungstenite|rustls|native-tls|openssl|socket2|tauri-plugin-updater|tauri-plugin-http'
+# `ov-fetch` is ours and is listed deliberately: it wraps ureq, so without a
+# name of its own here it could be added to a sealed crate and match none of the
+# other words. That is the exact silent drift this script exists to prevent.
+FORBIDDEN='reqwest|hyper|ureq|isahc|curl|surf|tokio-tungstenite|rustls|native-tls|openssl|socket2|tauri-plugin-updater|tauri-plugin-http|ov-fetch'
 
 # Direct dependencies of a NO_DIRECT crate that are permitted anyway, one per
 # line, each with the ADR that justifies it.
-ALLOWED_DIRECT='tauri-plugin-updater'   # ADR 0005 — check-only, disableable, signed
+ALLOWED_DIRECT='tauri-plugin-updater
+ov-fetch'
+# tauri-plugin-updater  — ADR 0005: check-only, disableable, signed
+# ov-fetch              — ADR 0009: model downloads the user starts, checksum-verified
 
 status=0
 
@@ -200,9 +221,26 @@ for crate in "${NO_DIRECT_CRATES[@]}"; do
     while IFS= read -r allowed; do
       [[ -z "${allowed}" ]] && continue
       if grep -qi "^${allowed} " <<<"${hits}"; then
-        echo "  allowed:     ${allowed} (see ADR 0005)"
+        echo "  allowed:     ${allowed} (justified in ALLOWED_DIRECT above)"
       fi
     done <<<"${ALLOWED_DIRECT}"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+for crate in "${NEVER_FETCH[@]}"; do
+  in_workspace "${crate}" || continue
+  if ! tree=$(cargo tree -p "${crate}" --edges normal --prefix none --target all 2>&1); then
+    echo "FAIL: cannot resolve the run-time tree for ${crate}"
+    status=1
+    continue
+  fi
+  if grep -qEi '^ov-fetch' <<<"${tree}"; then
+    echo "FAIL: ${crate} has a run-time dependency on ov-fetch."
+    echo "    A dev-dependency is fine; a normal one is not. ${crate} must stay sealed."
+    status=1
+  else
+    echo "no-fetch ok:   ${crate}"
   fi
 done
 
@@ -212,7 +250,8 @@ if [[ ${status} -ne 0 ]]; then
 A crate gained network capability it is not allowed to have.
 
 Do not move the crate to a weaker list to make the build pass. Either:
-  1. Move the code that needs the network into ov-asr's model downloader, or
+  1. Move the code that needs the network into `ov-fetch`, which exists for
+     exactly this and is the only crate allowed to open a socket, or
   2. Write an ADR explaining why the local-first guarantee should change, and
      update SECURITY.md and the README's privacy section in the same PR.
 
