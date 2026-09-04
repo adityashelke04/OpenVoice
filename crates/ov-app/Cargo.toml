@@ -19,6 +19,8 @@ ov-core.workspace = true
 ov-format.workspace = true
 ov-audio.workspace = true
 ov-asr.workspace = true
+# The one network-capable crate; see ADR 0009.
+ov-fetch.workspace = true
 ov-input.workspace = true
 ov-store.workspace = true
 

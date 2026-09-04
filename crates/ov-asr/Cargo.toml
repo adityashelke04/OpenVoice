@@ -1,6 +1,6 @@
 [package]
 name = "ov-asr"
-description = "OpenVoice speech recognition: supervises the faster-whisper sidecar over newline-delimited JSON."
+description = "OpenVoice speech recognition: NVIDIA Parakeet TDT, decoded in-process via sherpa-onnx."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,29 +10,32 @@ repository.workspace = true
 [dependencies]
 ov-core.workspace = true
 tracing.workspace = true
+# The catalogue crosses the IPC boundary to the Models screen.
 serde.workspace = true
-serde_json.workspace = true
 hound = "3.5"
+# Official k2-fsa bindings. Default features link sherpa-onnx statically, which
+# is what makes the app a single binary with no DLLs beside it -- verified as an
+# 18.9 MB release binary that runs from any working directory. Do not switch to
+# `shared`: that trades the whole packaging premise for nothing.
+sherpa-onnx = "1.13.7"
 
 [dev-dependencies]
-# Test-only: backdating a file's modified time is the only way to test a
+# Test-only, and only for the ignored end-to-end download test. ov-asr itself
+# must never depend on this: it is the crate that holds the microphone, and
+# scripts/check-no-network.sh proves it cannot open a socket. A dev-dependency
+# is not in the shipped graph, and the guard checks `--edges normal`.
+ov-fetch.workspace = true
+# Test-only: backdating a file's modified time is the only way to test the
 # retention window without making the test sleep for a week.
 filetime = "0.2"
 
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_System_JobObjects",
-    "Win32_System_Threading",
-] }
-
 [lints.rust]
 missing_docs = "warn"
-# Allowed only for the job-object FFI in `job.rs`, which guarantees the sidecar
-# cannot outlive the app and strand GPU memory. Every block there states its
-# invariant.
-unsafe_code = "allow"
+# Forbidden, not merely denied. The only `unsafe` this crate ever held was the
+# Win32 job-object FFI that stopped the Python sidecar outliving the app; with
+# the sidecar gone there is none left, and the C++ that does the decoding is
+# behind sherpa-onnx's safe wrapper.
+unsafe_code = "forbid"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -155,35 +155,6 @@ jobs:
           command: check bans licenses advisories sources
 
   # ---------------------------------------------------------------------------
-  sidecar:
-    name: ASR sidecar
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-
-      # Ruff is pinned. An unpinned linter turns "upstream shipped a new rule"
-      # into "main is red", on a morning nobody chose.
-      - name: Lint
-        working-directory: sidecar
-        run: uvx ruff@0.16.1 check .
-
-      - name: Format
-        working-directory: sidecar
-        run: uvx ruff@0.16.1 format --check .
-
-      - name: Test
-        working-directory: sidecar
-        # Protocol and hint-packing tests only. Model inference is exercised
-        # nightly, not per-PR: pulling weights on every push would make CI slower
-        # than the review it is meant to support.
-        #
-        # `uv run` installs the package first, so this doubles as a check that
-        # `uv pip install -e sidecar` still works. faster-whisper is imported
-        # lazily inside Engine.load(), so no model code executes here.
-        run: uv run --python 3.12 --with pytest pytest -q
-
-  # ---------------------------------------------------------------------------
   # The Tauri shell embeds apps/ui/dist. Without this job a frontend that does
   # not typecheck or does not build is only discovered at package time, and the
   # installer ships an empty window.

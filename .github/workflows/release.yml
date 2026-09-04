@@ -2,7 +2,8 @@
 #
 # This is the only path by which a user ever gets OpenVoice. Everything the app
 # needs at run time has to be assembled here, because the machine that installs
-# it has no Rust, no Node, and no Python.
+# it has no Rust and no Node. It no longer needs Python either: the speech
+# engine links into the binary, and the weights are installed by an NSIS hook.
 name: Release
 
 on:
@@ -34,36 +35,19 @@ jobs:
           cache: npm
           cache-dependency-path: apps/ui/package-lock.json
 
-      # 3.12 rather than the newest release: the frozen sidecar embeds this
-      # interpreter, and PyInstaller support for a Python version reliably lags
-      # its release by months. A packaging break discovered at tag time is the
-      # worst moment to discover it.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # ------------------------------------------------------------------ model
+      # The weights are installed by an NSIS hook, not bundled as a Tauri
+      # resource, so that they stay out of the updater payload. See
+      # crates/ov-app/installer-hooks.nsh for why.
+      - name: Fetch and verify the speech model
+        run: pwsh scripts/fetch-model.ps1
 
-      - uses: astral-sh/setup-uv@v5
-
-      # ---------------------------------------------------------------- sidecar
-      # Frozen first, because tauri.conf.json lists sidecar/dist/openvoice-asr/
-      # as a bundle resource. If it is missing, `tauri build` does not fail — it
-      # produces an installer with no speech engine in it, which only shows up
-      # when a user runs the app.
-      - name: Create the sidecar environment
-        run: |
-          uv venv --python 3.12 .venv
-          uv pip install --python .venv/Scripts/python.exe ./sidecar
-          uv pip install --python .venv/Scripts/python.exe "pyinstaller>=6.11"
-
-      - name: Freeze the sidecar
-        run: pwsh scripts/build-sidecar.ps1 -Clean -Python .venv/Scripts/python.exe
-
-      - name: Fail if the sidecar is missing
+      - name: Fail if the model is missing
         shell: pwsh
         run: |
-          $exe = 'sidecar/dist/openvoice-asr/openvoice-asr.exe'
-          if (-not (Test-Path $exe)) {
-            throw "no frozen sidecar at $exe; the installer would ship without a speech engine"
+          $tokens = 'models/parakeet-tdt-0.6b-v2/tokens.txt'
+          if (-not (Test-Path $tokens)) {
+            throw "no speech model at $tokens; the installer would ship without one"
           }
 
       # ----------------------------------------------------------------- bundle
@@ -106,7 +90,57 @@ jobs:
           # makes the signer prompt, which in CI means hanging until the job is
           # cancelled rather than failing with a reason.
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Consumed by installer-hooks.nsh. Absolute, because NSIS resolves
+          # `File` paths relative to the generated script, not the repo.
+          MODEL_SOURCE_DIR: ${{ github.workspace }}\models\parakeet-tdt-0.6b-v2
         run: npx --prefix ../../apps/ui tauri build
+
+      # Asserts the failure that actually bit during development: an installer
+      # that builds cleanly, reports success, and contains no speech model. The
+      # first 0.5.0 build was 9 MB for exactly that reason and said nothing.
+      #
+      # The size floor is deliberately crude. Anything under 200 MB cannot be
+      # carrying a 482 MB compressed model, whatever else may have changed.
+      - name: The installer must contain the speech model
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Filter '*-setup.exe' -Path target |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $exe) { throw "tauri build produced no NSIS installer" }
+          $mb = [math]::Round($exe.Length / 1MB, 1)
+          Write-Host "installer: $($exe.Name) - $mb MB"
+          if ($exe.Length -lt 200MB) {
+            throw ("Installer is $mb MB. It cannot contain the speech model, which is " +
+                   "482 MB compressed. Check that build.rs found the model and filled " +
+                   "in crates/ov-app/installer-hooks.nsh.")
+          }
+
+      # Reports, rather than enforces, what an update costs a user.
+      #
+      # The design intent was that updates stay small: the model is installed by
+      # an NSIS hook rather than as a `bundle.resources` entry, so that it sits
+      # outside the Tauri resource walker. That distinction turns out not to help.
+      # The hook embeds the weights in the installer executable with `File`, and
+      # the updater artifact is a zip of that same executable -- so an update
+      # carries the model either way, and moving it between the two mechanisms
+      # changes only where it lands on disk.
+      #
+      # Making updates genuinely small needs a second, model-free build published
+      # as the updater artifact while the full installer serves downloads, plus a
+      # tested answer for the uninstall hook wiping $INSTDIR\models during the
+      # upgrade's uninstall-previous step. That is a real piece of work and it is
+      # not done, so this step states the number instead of pretending otherwise.
+      - name: Report the update download size
+        shell: pwsh
+        run: |
+          $art = Get-ChildItem -Recurse -Filter '*.nsis.zip' -Path target |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $art) {
+            Write-Host "no updater artifact (unsigned build)"
+          } else {
+            $mb = [math]::Round($art.Length / 1MB, 1)
+            Write-Host "::notice::Existing installs will download $mb MB for this update."
+          }
 
       - name: Collect the installer and checksum it
         id: collect
@@ -215,8 +249,9 @@ jobs:
             Windows installer. Runs entirely on your machine — no account, no
             cloud, no telemetry.
 
-            The speech model downloads on first launch and is cached afterwards.
-            Everything after that works offline.
+            The speech model is included in the installer, so it works offline
+            from the moment it finishes installing — there is no first-run
+            download and nothing to choose.
 
             This build is **not code-signed**, so Windows SmartScreen will warn
             about an unknown publisher. Verify it yourself:

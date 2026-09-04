@@ -18,7 +18,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![warn(clippy::all)]
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -29,6 +28,7 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 mod engine;
 mod history;
+mod models;
 mod overlay;
 mod settings;
 mod topmost;
@@ -58,15 +58,6 @@ impl engine::Shell for TauriShell {
             .overlay
             .set_active(&win, active);
     }
-
-    fn set_download_progress(&self, progress: Option<engine::DownloadProgress>) {
-        *self
-            .app
-            .state::<AppState>()
-            .download
-            .lock()
-            .expect("download") = progress;
-    }
 }
 
 /// Engine lifecycle as the UI sees it.
@@ -80,30 +71,21 @@ impl engine::Shell for TauriShell {
 #[serde(tag = "state", rename_all = "snake_case")]
 enum Status {
     Starting,
-    /// First run, fetching model weights. Can last several minutes.
-    Downloading(engine::DownloadProgress),
     Ready(engine::Ready),
-    Failed {
-        error: String,
-    },
+    Failed { error: String },
 }
 
 #[tauri::command]
 fn get_status(state: tauri::State<'_, AppState>) -> Status {
-    // Order matters. A failure outranks everything; a finished engine outranks a
-    // stale download record; and only then does an in-flight download outrank the
-    // bare "starting", so the UI never shows a progress bar for a run that has
-    // already succeeded or failed.
+    // A failure outranks a success: an engine that came up and then died must not
+    // still report Ready.
     if let Some(e) = state.error.lock().expect("error").clone() {
         return Status::Failed { error: e };
     }
     if let Some(r) = state.ready.lock().expect("ready").clone() {
         return Status::Ready(r);
     }
-    match state.download.lock().expect("download").clone() {
-        Some(p) => Status::Downloading(p),
-        None => Status::Starting,
-    }
+    Status::Starting
 }
 
 /// Everything the UI asks for once, at startup.
@@ -231,8 +213,11 @@ struct AppState {
     /// Whether a start attempt is in flight, so a retry cannot begin a second one
     /// beside it. Two live engines would mean two sidecars and two hotkey hooks.
     starting: AtomicBool,
-    /// Set while weights are being fetched, on a first run or from the Models
-    /// screen.
+    /// Set while a model is being fetched from the Models screen.
+    ///
+    /// Recorded rather than emitted as an event: a 465 MB transfer can start
+    /// before the webview has finished loading, so an event would be published
+    /// to nobody. The screen polls, and polling cannot miss what it asks for.
     download: Mutex<Option<engine::DownloadProgress>>,
     /// The settings the running engine was actually built from.
     ///
@@ -300,7 +285,7 @@ fn open_history(settings: &settings::Store) -> Arc<ov_store::SqliteStore> {
     // is on, so turning the setting *off* also clears out what it left behind
     // instead of stranding it forever.
     let audio_dir = history::data_dir().join("audio");
-    if let Err(e) = ov_asr::store::purge_recordings(&audio_dir, privacy.audio_days) {
+    if let Err(e) = ov_asr::recordings::purge_recordings(&audio_dir, privacy.audio_days) {
         tracing::warn!(error = %e, "recording purge failed");
     }
 
@@ -399,7 +384,8 @@ fn restart_reasons(app: AppHandle, state: tauri::State<'_, AppState>) -> Vec<Str
     let now = effective_settings(&app);
     let mut reasons = Vec::new();
 
-    // Weights are loaded into the sidecar once, at warm-up.
+    // Weights are loaded once, at warm-up, so choosing a different model on the
+    // Models screen takes effect at the next start and not before.
     if booted.model != now.model {
         reasons.push("the speech model".to_string());
     }
@@ -438,82 +424,14 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     update::install(&app).await
 }
 
-/// The models this build can load.
+/// The settings the engine should start with.
 ///
-/// Served from `ov_asr::catalog`, which is the only place a model is described.
-/// The Models screen used to carry its own copy of this list — ids, sizes and all
-/// — so a model added to the sidecar simply never appeared, and a size corrected
-/// in one file silently disagreed with the other.
-///
-/// Deliberately does not require a running engine: the catalogue is static data,
-/// and a settings screen that cannot render until the speech engine is warm would
-/// be unusable during exactly the first-run download it needs to explain.
-#[tauri::command]
-fn list_models(state: tauri::State<'_, AppState>) -> Vec<ModelRow> {
-    let hub = model_hub_dir(&state);
-    let in_use = state.settings.get().model;
-    ov_asr::catalog::CATALOG
-        .iter()
-        .map(|spec| {
-            let installed = ov_asr::store::installed_bytes(&hub, spec);
-            ModelRow {
-                spec: *spec,
-                installed: installed.is_some(),
-                installed_bytes: installed.unwrap_or(0),
-                in_use: spec.id == in_use,
-            }
-        })
-        .collect()
-}
-
-/// The model cache in use, asked of the running engine wherever possible.
-///
-/// The engine is the only thing that knows: an installed copy keeps weights under
-/// its own data directory, but falls back to a repository checkout when
-/// `OPENVOICE_PYTHON` is set — and then the cache is wherever `HF_HOME` points.
-/// Hardcoding the first case made the Models screen report an empty cache on a
-/// machine holding 1.6 GB of weights, and offer to download models already
-/// present.
-///
-/// Before the engine is up, resolve the same way it will: the installed default,
-/// unless the environment overrides it.
-fn model_hub_dir(state: &tauri::State<'_, AppState>) -> PathBuf {
-    if let Some(engine) = state.engine.lock().expect("engine").as_ref() {
-        return engine.hub_dir();
-    }
-    let installed_default = history::data_dir().join("models");
-    if std::env::var_os("HF_HUB_CACHE").is_some() || std::env::var_os("HF_HOME").is_some() {
-        ov_asr::store::hub_dir(None)
-    } else {
-        ov_asr::store::hub_dir(Some(&installed_default))
-    }
-}
-
-/// A catalogue entry plus what this machine knows about it.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ModelRow {
-    #[serde(flatten)]
-    spec: ov_asr::catalog::ModelSpec,
-    /// Whether any files for it are on disk.
-    installed: bool,
-    /// How much room they take. Zero when `installed` is false, and also when a
-    /// transfer failed before writing anything — the two are told apart by
-    /// `installed`, not by this.
-    installed_bytes: u64,
-    /// Whether this is the model the app is configured to load.
-    in_use: bool,
-}
-
-/// The settings the engine should start with, environment overrides applied.
+/// This used to apply an `OPENVOICE_MODEL` override, which was the escape hatch
+/// for a configuration that had pinned itself to a model that would not load.
+/// With one model that cannot be selected, there is nothing to override and no
+/// such corner to be stuck in.
 fn effective_settings(app: &AppHandle) -> settings::Settings {
-    let mut settings = app.state::<AppState>().settings.get();
-    // The environment variable still wins, so a stuck configuration can always be
-    // overridden from a shortcut without editing a file.
-    if let Ok(m) = std::env::var("OPENVOICE_MODEL") {
-        settings.model = m;
-    }
-    settings
+    app.state::<AppState>().settings.get()
 }
 
 /// Start the engine on a background thread, recording the outcome in state.
@@ -529,8 +447,7 @@ fn spawn_engine(app: AppHandle) {
         let store = app.state::<AppState>().store.clone();
         // Where the frozen speech engine lives in an installed copy. `Err` simply
         // means this is not one, and the engine falls back to a repository checkout.
-        let resources = app.path().resource_dir().ok();
-        match engine::start(shell, &settings, store, resources.as_deref()) {
+        match engine::start(shell, &settings, store) {
             Ok((engine, ready)) => {
                 let state = app.state::<AppState>();
                 *state.engine.lock().expect("engine") = Some(engine);
@@ -582,80 +499,6 @@ fn retry_engine(app: AppHandle, state: tauri::State<'_, AppState>) -> bool {
     tracing::info!("retrying engine start");
     spawn_engine(app);
     true
-}
-
-/// How a download that is running right now is getting on.
-///
-/// Polled separately from [`get_status`] rather than folded into it. `get_status`
-/// answers "can I dictate", and it answers `Ready` in preference to anything else
-/// — correctly, because the Flow Bar must not claim the engine is down while it is
-/// serving. But that also meant a download started from the Models screen *after*
-/// the engine was up reported no progress at all: the only progress channel was
-/// outranked by the readiness it had nothing to do with. Two questions, two
-/// commands.
-#[tauri::command]
-fn get_download(state: tauri::State<'_, AppState>) -> Option<engine::DownloadProgress> {
-    state.download.lock().expect("download").clone()
-}
-
-/// Fetch a model's weights now, without switching to it.
-///
-/// Separate from choosing a model on purpose. Downloading a gigabyte and
-/// committing your next dictation to it are different decisions, and before this
-/// the only way to get the weights was to select the model and restart — which
-/// meant discovering the download only after you had already switched.
-///
-/// Works whether or not the engine is running. It used to require it, and that
-/// was the trap: the engine only comes up *after* a successful first-run
-/// download, so the screen offering to fetch a model was unavailable in the one
-/// situation where it was the fix. A user whose first download failed got "The
-/// speech engine is still starting. Try again in a moment." on every launch,
-/// indefinitely, with no way forward from inside the app.
-#[tauri::command]
-async fn download_model(app: AppHandle, id: String) -> Result<bool, String> {
-    // On a blocking pool: this transfers up to 1.6 GB and would otherwise hold
-    // the async runtime for the whole download.
-    tauri::async_runtime::spawn_blocking(move || {
-        let engine = app
-            .state::<AppState>()
-            .engine
-            .lock()
-            .expect("engine")
-            .as_ref()
-            .cloned();
-        match engine {
-            // Cheaper when it is available: no second process, no second import.
-            Some(engine) => engine.download_model(&id),
-            None => {
-                let shell = Arc::new(TauriShell { app: app.clone() });
-                let settings = effective_settings(&app);
-                let resources = app.path().resource_dir().ok();
-                engine::fetch_model(shell, &settings, resources.as_deref(), &id)
-            }
-        }
-    })
-    .await
-    .map_err(|e| format!("download task failed: {e}"))?
-}
-
-/// Delete a model's weights.
-///
-/// Refuses to remove the model currently in use. Deleting it would leave the app
-/// configured to load something that is no longer there, and the next start would
-/// silently re-download over a gigabyte — which is exactly the surprise this
-/// screen exists to prevent.
-#[tauri::command]
-fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
-    if state.settings.get().model == id {
-        return Err(
-            "That is the model in use. Choose a different one first, then delete it.".into(),
-        );
-    }
-    let spec = ov_asr::catalog::resolve(&id).map_err(|e| e.to_string())?;
-    let hub = model_hub_dir(&state);
-    ov_asr::store::remove(&hub, spec).map_err(|e| e.to_string())?;
-    tracing::info!(model = %id, "deleted model weights");
-    Ok(())
 }
 
 /// Input devices, for the microphone picker.
@@ -924,6 +767,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_ready,
+            models::list_models,
+            models::download_model,
+            models::delete_model,
+            models::get_download,
+            models::models_on_disk,
             get_history,
             get_totals,
             clear_history,
@@ -948,11 +796,7 @@ fn main() {
             save_settings,
             restart_reasons,
             list_microphones,
-            list_models,
-            download_model,
-            delete_model,
             retry_engine,
-            get_download,
             preview_format,
             check_for_update,
             install_update,

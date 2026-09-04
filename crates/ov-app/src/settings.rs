@@ -37,13 +37,16 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             config: Config::default(),
-            // `base.en` — not `large-v3-turbo` — because this is what a fresh
-            // install picks before the user has chosen anything. The installed
-            // engine is CPU-only (see ADR 0003), and large-v3-turbo paired with
-            // CPU is the slowest model on the slowest path: a 1.6 GB download for
-            // an experience worse than the 75 MB alternative. Anyone who wants
-            // more accuracy upgrades from the Models screen, on demand.
-            model: "base.en".into(),
+            // Vestigial, and deliberately kept.
+            //
+            // There is one model and it is not selectable, so nothing reads this
+            // to decide what to load -- the catalogue is the
+            // answer to that. The field stays because `settings.toml` on every
+            // existing install contains it, and a struct that no longer accepts
+            // the key would make those files fail to parse on upgrade. It is
+            // written out with the current engine's id so a curious reader of
+            // the file is told the truth rather than "base.en".
+            model: ov_asr::catalog::DEFAULT_MODEL.into(),
             dictionary: Vec::new(),
             profiles: Profile::builtins(),
         }
@@ -78,6 +81,20 @@ impl Settings {
                 // this file must be non-empty.
                 if s.profiles.is_empty() {
                     s.profiles = Profile::builtins();
+                }
+                // A model name from a build that is no longer installed.
+                // Upgrading from 0.4.x leaves `small.en` or `large-v3-turbo`
+                // here, and every one of those is now unknown. The engine would
+                // fall back and run correctly either way, but the Models screen
+                // would show nothing selected, which reads as a broken install
+                // rather than a migrated one. Repair it here, once.
+                if ov_asr::catalog::find(&s.model).is_none() {
+                    tracing::info!(
+                        was = %s.model,
+                        now = ov_asr::catalog::DEFAULT_MODEL,
+                        "settings named a model this build does not have; migrating"
+                    );
+                    s.model = ov_asr::catalog::DEFAULT_MODEL.into();
                 }
                 tracing::info!(
                     model = %s.model,

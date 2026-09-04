@@ -20,9 +20,9 @@
  * its operator had last dictated. Fixtures are the fix for that, and they are
  * also the only way the numbers stay the same between two runs a month apart.
  *
- * THE DATA IS TRUE. The dictionary terms, app profiles and model catalogue below
- * are copied from `ov-format/src/dictionary.rs`, `ov-format/src/profile.rs` and
- * `ov-asr/src/catalog.rs`. The two history rows are the transcriptions the README
+ * THE DATA IS TRUE. The dictionary terms and app profiles below
+ * are copied from `ov-format/src/dictionary.rs` and `ov-format/src/profile.rs`.
+ * The two history rows are the transcriptions the README
  * quotes, which are asserted as tests in `ov-format/src/lib.rs`. The totals are
  * invented — they are one plausible person's month — and nothing in the project
  * claims otherwise.
@@ -193,46 +193,6 @@ const PROFILES = [
   },
 ];
 
-/** Copied from `ov-asr/src/catalog.rs`. `base.en` is installed and in use,
- *  matching what a first launch actually downloads. */
-const MODELS = [
-  {
-    id: "large-v3-turbo",
-    repo: "deepdml/faster-whisper-large-v3-turbo-ct2",
-    computeType: "float16",
-    fallbackCompute: "int8_float16",
-    sizeMb: 1600,
-    vramMb: 1600,
-    englishOnly: false,
-    installed: false,
-    installedBytes: 0,
-    inUse: false,
-  },
-  {
-    id: "small.en",
-    repo: "Systran/faster-whisper-small.en",
-    computeType: "float16",
-    fallbackCompute: "int8_float16",
-    sizeMb: 250,
-    vramMb: 600,
-    englishOnly: true,
-    installed: true,
-    installedBytes: 249_000_000,
-    inUse: false,
-  },
-  {
-    id: "base.en",
-    repo: "Systran/faster-whisper-base.en",
-    computeType: "int8",
-    fallbackCompute: null,
-    sizeMb: 75,
-    vramMb: 0,
-    englishOnly: true,
-    installed: true,
-    installedBytes: 74_500_000,
-    inUse: true,
-  },
-];
 
 /** Mirrors `ov_core::config::Config`'s defaults. */
 const CONFIG = {
@@ -266,7 +226,7 @@ export function responses(now = Date.now()) {
   return {
     get_status: {
       state: "ready",
-      model: "base.en",
+      model: "parakeet-tdt-0.6b-v2",
       device: "CPU · int8",
       shortcut: "Right Ctrl",
       mic: "Microphone Array (Realtek Audio)",
@@ -282,7 +242,7 @@ export function responses(now = Date.now()) {
     },
     get_settings: {
       config: CONFIG,
-      model: "base.en",
+      model: "parakeet-tdt-0.6b-v2",
       dictionary: DICTIONARY,
       profiles: PROFILES,
     },
@@ -294,7 +254,6 @@ export function responses(now = Date.now()) {
       topApp: { name: "Code.exe", count: 61 },
       activeDays: activeDays(now),
     },
-    list_models: MODELS,
     list_microphones: [
       "Microphone Array (Realtek Audio)",
       "Headset (WH-1000XM4 Hands-Free)",

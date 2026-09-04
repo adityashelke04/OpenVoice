@@ -1,6 +1,6 @@
 # ADR 0003 — faster-whisper in a Python sidecar as the day-one ASR backend
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0008](0008-parakeet-in-process.md) on 2026-09-03
 - **Date:** 2026-07-31
 
 ## Context
@@ -110,3 +110,30 @@ suited to the hardware it would run on.
 than ~1.9 GB. Anyone who wants more accuracy upgrades from the Models screen,
 which already downloads on demand — this changes only what a first run gets
 before anyone has chosen anything.
+
+---
+
+## Outcome (2026-09-03): the follow-up, cashed in
+
+This ADR ended with a follow-up: *"Before v0.5 (distribution), revisit
+whisper.cpp in-process to remove the Python dependency from installers."* That
+happened at v0.5.0, though not with whisper.cpp — see
+[ADR 0008](0008-parakeet-in-process.md).
+
+The reason it became cheap is not the one anticipated here. This ADR framed the
+obstacle as toolchain friction: an in-process backend meant the CUDA Toolkit or a
+hand-built binary on Windows. What changed is that k2-fsa began publishing an
+official `sherpa-onnx` Rust crate whose build script fetches **prebuilt static
+libraries**, so the in-process path now needs no CMake, no CUDA Toolkit, and
+produces a binary with no DLLs beside it.
+
+The judgement that has held up best here is the last line of the Rationale:
+*"This decision is deliberately cheap to reverse. `Transcriber` is one trait with
+three methods."* It was, and it cost exactly what was predicted. A complete
+engine swap — different model architecture, different inference runtime,
+different implementation language, different packaging story — changed nothing in
+`ov-core`, `ov-format`, `ov-audio`, `ov-input` or `ov-store`.
+
+Also settled: the "Model plan" table and its 2026-08-02 correction about
+`base.en` being the right default for a CPU-only engine. Both are moot. There is
+one model, it needs no GPU, and it ships inside the installer.

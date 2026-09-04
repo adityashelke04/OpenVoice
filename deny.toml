@@ -81,6 +81,25 @@ allow = ["MPL-2.0"]
 name = "webpki-root-certs"
 allow = ["CDLA-Permissive-2.0"]
 
+# `webpki-roots` is the same data under a different crate name, and it now
+# arrives by two more routes, both added in v0.5.0-v0.6.0:
+#
+#   * `sherpa-onnx-sys`'s build script, which downloads prebuilt sherpa-onnx
+#     libraries over HTTPS while compiling (ADR 0008), and
+#   * `ov-fetch`, which downloads speech models the user asks for (ADR 0009).
+#
+# The reasoning above applies unchanged: it is Mozilla's root CA bundle, a
+# permissive data licence with no copyleft and no source-disclosure obligation,
+# governing redistribution of the certificate list rather than our code.
+#
+# Recorded rather than folded into the blanket allowlist, for the same reason as
+# every entry here. This one also went unnoticed for a release: cargo-deny was
+# not run while the Parakeet work landed, and `licenses` had been failing since
+# sherpa-onnx-sys first appeared in the lock.
+[[licenses.exceptions]]
+name = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
 [bans]
 # Duplicate versions are noise, not danger, in a workspace pulling in Tauri.
 # Warn so the number stays visible; don't fail a PR over a transitive bump.
