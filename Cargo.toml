@@ -8,6 +8,7 @@ members = [
     "crates/ov-input",
     "crates/ov-audio",
     "crates/ov-asr",
+    "crates/ov-fetch",
     "crates/ov-store",
     "crates/ov-cli",
     "crates/ov-app",
@@ -43,6 +44,9 @@ ov-input = { path = "crates/ov-input", version = "0.5.0" }
 # Not yet written. Declared here so the crate lands without a manifest change;
 # harmless while unused, because Cargo only resolves an entry a member consumes.
 ov-store = { path = "crates/ov-store", version = "0.5.0" }
+# The only network-capable crate in the workspace. See ADR 0009 and
+# scripts/check-no-network.sh, which enforces that "only".
+ov-fetch = { path = "crates/ov-fetch", version = "0.5.0" }
 
 # Errors
 thiserror = "2"

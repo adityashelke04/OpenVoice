@@ -3032,6 +3032,7 @@ dependencies = [
  "filetime",
  "hound",
  "ov-core",
+ "serde",
  "sherpa-onnx",
  "tracing",
 ]
@@ -3074,6 +3075,17 @@ dependencies = [
  "thiserror 2.0.19",
  "toml 0.8.2",
  "tracing",
+]
+
+[[package]]
+name = "ov-fetch"
+version = "0.5.0"
+dependencies = [
+ "bzip2 0.4.4",
+ "sha2",
+ "tar",
+ "tracing",
+ "ureq",
 ]
 
 [[package]]
