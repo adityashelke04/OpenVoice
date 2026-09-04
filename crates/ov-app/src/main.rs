@@ -28,6 +28,7 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 mod engine;
 mod history;
+mod models;
 mod overlay;
 mod settings;
 mod topmost;
@@ -215,8 +216,12 @@ struct AppState {
     /// Whether a start attempt is in flight, so a retry cannot begin a second one
     /// beside it. Two live engines would mean two sidecars and two hotkey hooks.
     starting: AtomicBool,
-    /// Set while weights are being fetched, on a first run or from the Models
-    /// screen.
+    /// Set while a model is being fetched from the Models screen.
+    ///
+    /// Recorded rather than emitted as an event: a 465 MB transfer can start
+    /// before the webview has finished loading, so an event would be published
+    /// to nobody. The screen polls, and polling cannot miss what it asks for.
+    download: Mutex<Option<engine::DownloadProgress>>,
     /// The settings the running engine was actually built from.
     ///
     /// Kept so "does this need a restart?" can be *answered* rather than
@@ -238,6 +243,7 @@ impl Default for AppState {
             error: Mutex::new(None),
             // The launch attempt begins immediately, so this starts true.
             starting: AtomicBool::new(true),
+            download: Mutex::new(None),
             booted: Mutex::new(None),
             overlay: overlay::Overlay::new(),
             store: open_history(&settings),
@@ -764,6 +770,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_ready,
+            models::list_models,
+            models::download_model,
+            models::delete_model,
+            models::get_download,
+            models::models_on_disk,
             get_history,
             get_totals,
             clear_history,

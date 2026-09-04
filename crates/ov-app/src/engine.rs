@@ -30,6 +30,19 @@ pub struct Ready {
     pub mic: String,
 }
 
+/// How far a model download has got.
+///
+/// `total` is the catalogue's figure when the server sends no `Content-Length`,
+/// so the bar shows a real proportion rather than dropping to indeterminate
+/// halfway through a 465 MB transfer.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    pub model: String,
+    pub done: u64,
+    pub total: u64,
+}
+
 /// Anything the shell must do in response to the engine.
 pub trait Shell: Send + Sync + 'static {
     /// Publish a domain event to the UI.
