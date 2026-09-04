@@ -381,8 +381,11 @@ fn restart_reasons(app: AppHandle, state: tauri::State<'_, AppState>) -> Vec<Str
     let now = effective_settings(&app);
     let mut reasons = Vec::new();
 
-    // No model reason any more: there is one model, it is not selectable, and a
-    // banner offering to restart for a change nobody can make would be a lie.
+    // Weights are loaded once, at warm-up, so choosing a different model on the
+    // Models screen takes effect at the next start and not before.
+    if booted.model != now.model {
+        reasons.push("the speech model".to_string());
+    }
     // The capture device is opened when the audio source is built.
     if booted.config.input_device != now.config.input_device {
         reasons.push("the microphone".to_string());

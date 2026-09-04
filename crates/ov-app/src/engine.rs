@@ -374,12 +374,32 @@ pub fn start(
 ) -> Result<(Arc<Engine>, Ready), String> {
     let config = settings.config.clone();
 
-    let dir = ov_asr::locate::model_dir(
-        ov_asr::catalog::default_spec(),
-        &crate::history::data_dir().join("models"),
-    )
-    .map_err(|e| e.to_string())?;
-    tracing::info!(dir = %dir.display(), "loading the speech model");
+    // Which model, with a fallback that is guaranteed to exist.
+    //
+    // A user can select a downloaded model and then delete its files, or a
+    // transfer can be interrupted, or settings.toml can be hand-edited to a name
+    // that was never valid. None of those may leave the app unable to
+    // transcribe: the bundled model ships in the installer and is always on
+    // disk, so there is no state in which OpenVoice legitimately cannot hear
+    // you. Falling back is loud in the log and silent to the user, who finds the
+    // Models screen already showing which one is actually running.
+    let user_models = crate::history::data_dir().join("models");
+    let bundled = ov_asr::catalog::default_spec();
+    let wanted = ov_asr::catalog::find(&settings.model).unwrap_or_else(|| {
+        tracing::warn!(model = %settings.model, "unknown model in settings; using the bundled one");
+        bundled
+    });
+
+    let (spec, dir) = match ov_asr::locate::model_dir(wanted, &user_models) {
+        Ok(d) => (wanted, d),
+        Err(e) if wanted.id != bundled.id => {
+            tracing::warn!(model = wanted.id, error = %e, "falling back to the bundled model");
+            let d = ov_asr::locate::model_dir(bundled, &user_models).map_err(|e| e.to_string())?;
+            (bundled, d)
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    tracing::info!(model = spec.id, dir = %dir.display(), "loading the speech model");
 
     // Retention has to be passed explicitly. With the old sidecar it fell out of
     // how audio crossed the process boundary -- a WAV was written either way, and
@@ -394,9 +414,8 @@ pub fn start(
         tracing::warn!(dir = %d.display(), "keeping recordings on disk; this is off by default");
     }
 
-    let transcriber =
-        ov_asr::sherpa::SherpaTranscriber::with_retention(ov_asr::catalog::default_spec(), dir, retain)
-            .map_err(|e| e.to_string())?;
+    let transcriber = ov_asr::sherpa::SherpaTranscriber::with_retention(spec, dir, retain)
+        .map_err(|e| e.to_string())?;
 
     transcriber.warm().map_err(|e| e.to_string())?;
 

@@ -82,6 +82,20 @@ impl Settings {
                 if s.profiles.is_empty() {
                     s.profiles = Profile::builtins();
                 }
+                // A model name from a build that is no longer installed.
+                // Upgrading from 0.4.x leaves `small.en` or `large-v3-turbo`
+                // here, and every one of those is now unknown. The engine would
+                // fall back and run correctly either way, but the Models screen
+                // would show nothing selected, which reads as a broken install
+                // rather than a migrated one. Repair it here, once.
+                if ov_asr::catalog::find(&s.model).is_none() {
+                    tracing::info!(
+                        was = %s.model,
+                        now = ov_asr::catalog::DEFAULT_MODEL,
+                        "settings named a model this build does not have; migrating"
+                    );
+                    s.model = ov_asr::catalog::DEFAULT_MODEL.into();
+                }
                 tracing::info!(
                     model = %s.model,
                     terms = s.dictionary.len(),
