@@ -184,3 +184,76 @@ export const checkForUpdate = () => call<UpdateStatus>("check_for_update");
  *  nothing is downloaded as a side effect of checking. */
 export const installUpdate = () => call<void>("install_update");
 
+/* -- Speech models ---------------------------------------------------------- */
+
+/** A model as the Rust side describes it.
+ *
+ *  Mirrors `ov_app::models::ModelRow`, which flattens `ov_asr::catalog::ModelSpec`.
+ *  Every fact here comes from the catalogue; this file adds only the words used
+ *  to describe them. */
+export interface ModelSpec {
+  id: string;
+  kind: "transducer" | "whisper";
+  downloadMb: number;
+  diskMb: number;
+  bundled: boolean;
+  englishOnly: boolean;
+  /** Every file present. A part-finished download is not installed. */
+  installed: boolean;
+  /** What the app will load at the next start. */
+  selected: boolean;
+}
+
+export const listModels = () => call<ModelSpec[]>("list_models");
+export const downloadModel = (id: string) => call<void>("download_model", { id });
+export const deleteModel = (id: string) => call<void>("delete_model", { id });
+export const modelsOnDisk = () => call<number>("models_on_disk");
+
+/** Bytes fetched so far by whatever download is running, or null if none is.
+ *
+ *  Polled rather than pushed: a 465 MB transfer can begin before the webview has
+ *  finished loading, so an event would be published to nobody. */
+export const getDownload = () =>
+  call<{ model: string; done: number; total: number } | null>("get_download");
+
+/** Bytes as a person would write them. */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  if (bytes > 0) return "under 1 MB";
+  return "nothing";
+}
+
+/** Megabytes as a person would write them. */
+export function formatSize(mb: number): string {
+  return mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`;
+}
+
+/** How a model is described to someone who has never heard of Parakeet.
+ *
+ *  Deliberately *not* in the Rust catalogue: "Multilingual" is copy and "~0.6 s"
+ *  is a measurement taken on one particular laptop, and neither is a property of
+ *  the model. A model with no entry here still renders, labelled with its id.
+ *
+ *  No accuracy figure appears in any of these. The measured one came from audio
+ *  that is in-domain for Parakeet (see ADR 0008), so it is a ceiling rather than
+ *  a forecast, and a number on screen would outlive that caveat. */
+export const MODEL_COPY: Record<string, { name: string; detail: string; speed: string }> = {
+  "parakeet-tdt-0.6b-v2": {
+    name: "Standard",
+    detail: "English. Included with OpenVoice, so it is always available — even offline.",
+    speed: "~0.5 s",
+  },
+  "parakeet-tdt-0.6b-v3": {
+    name: "Multilingual",
+    detail:
+      "25 languages, detected as you speak with nothing to configure. Same speed and size as Standard.",
+    speed: "~0.6 s",
+  },
+  "whisper-tiny.en": {
+    name: "Light",
+    detail:
+      "English. A sixth of the disk and far less memory, and noticeably less accurate — for machines that cannot spare the room.",
+    speed: "~0.5 s",
+  },
+};

@@ -27,6 +27,7 @@ import {
 } from "../engine/settings";
 import { DictionaryScreen } from "../screens/Dictionary";
 import { AdvancedScreen, ProfilesScreen } from "../screens/Profiles";
+import { ModelsScreen } from "../screens/Models";
 import { SettingsScreen, useSettings } from "../screens/Settings";
 import "./hub.css";
 
@@ -34,6 +35,7 @@ const NAV = [
   { id: "home", label: "Home", ready: true },
   { id: "dictionary", label: "Dictionary", ready: true },
   { id: "style", label: "Writing style", ready: true },
+  { id: "models", label: "Speech model", ready: true },
   { id: "settings", label: "Settings", ready: true },
   { id: "advanced", label: "Advanced", ready: true },
 ];
@@ -222,6 +224,7 @@ export function Hub() {
           <>
             {tab === "dictionary" && <DictionaryScreen settings={settings} patch={patch} />}
             {tab === "style" && <ProfilesScreen settings={settings} patch={patch} />}
+            {tab === "models" && <ModelsScreen settings={settings} patch={patch} />}
             {tab === "settings" && (
               <SettingsScreen
                 settings={settings}

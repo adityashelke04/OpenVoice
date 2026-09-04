@@ -20,6 +20,11 @@ hound = "3.5"
 sherpa-onnx = "1.13.7"
 
 [dev-dependencies]
+# Test-only, and only for the ignored end-to-end download test. ov-asr itself
+# must never depend on this: it is the crate that holds the microphone, and
+# scripts/check-no-network.sh proves it cannot open a socket. A dev-dependency
+# is not in the shipped graph, and the guard checks `--edges normal`.
+ov-fetch.workspace = true
 # Test-only: backdating a file's modified time is the only way to test the
 # retention window without making the test sleep for a week.
 filetime = "0.2"

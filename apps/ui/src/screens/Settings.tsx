@@ -404,24 +404,10 @@ export function SettingsScreen({
           </Row>
           <Row
             label="Sends nothing anywhere"
-            hint="There is no analytics, no crash reporting and no account. This is not a setting because there is nothing to turn off — dictation has no network path at all. The speech model is installed with the app, so nothing is ever fetched."
+            hint="There is no analytics, no crash reporting and no account. This is not a setting because there is nothing to turn off. OpenVoice uses the network for exactly two things, both of which you start: a speech model you choose to download, and the update check you can switch off."
           >
             <Badge dot tone="live">
               Local only
-            </Badge>
-          </Row>
-          {/* Deliberately has no Download, Delete or "In use" control. There is
-              one model, it arrived with the app, and it cannot be changed or
-              removed -- so this states a fact rather than offering a choice. No
-              accuracy figure appears here on purpose: the measured one came from
-              audio that is in-domain for this model, and a number on screen would
-              outlive that caveat. */}
-          <Row
-            label="Speech engine"
-            hint="Parakeet TDT 0.6B v2, from NVIDIA. English. It runs entirely on this computer and is installed with the app, so there is nothing to choose and nothing to download."
-          >
-            <Badge dot tone="live">
-              Typically ~0.5 s
             </Badge>
           </Row>
           <Row label="Your data" hint="Transcripts and settings live in a plain folder you can open, copy or delete.">
