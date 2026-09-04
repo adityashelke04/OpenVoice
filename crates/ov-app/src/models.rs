@@ -86,9 +86,11 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
         let dir = user_models_dir();
 
         if spec.bundled {
-            return Err("That model is included with OpenVoice; there is nothing to \
+            return Err(
+                "That model is included with OpenVoice; there is nothing to \
                         download."
-                .into());
+                    .into(),
+            );
         }
         if ov_asr::locate::is_installed(spec, &dir) {
             return Ok(());
@@ -141,14 +143,18 @@ pub fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<(),
     let spec = ov_asr::catalog::resolve(&id).map_err(|e| e.to_string())?;
 
     if spec.bundled {
-        return Err("The included model cannot be removed — it is what OpenVoice falls \
+        return Err(
+            "The included model cannot be removed — it is what OpenVoice falls \
                     back to if anything else fails."
-            .into());
+                .into(),
+        );
     }
     if state.settings.get().model == id {
-        return Err("That is the model in use. Choose a different one first, then \
+        return Err(
+            "That is the model in use. Choose a different one first, then \
                     delete it."
-            .into());
+                .into(),
+        );
     }
 
     let dir = user_models_dir().join(spec.id);

@@ -280,7 +280,6 @@ impl Engine {
         Ok(())
     }
 
-
     /// Discard whatever session is in flight.
     ///
     /// The same input the Escape key produces, so there is exactly one cancel

@@ -83,8 +83,7 @@ fn generate_installer_hooks() {
     // updates the mtime every build, and `rerun-if-changed` on a file this script
     // rewrites would rebuild forever.
     if std::fs::read_to_string(&out).ok().as_deref() != Some(rendered.as_str()) {
-        std::fs::write(&out, rendered)
-            .unwrap_or_else(|e| panic!("writing {}: {e}", out.display()));
+        std::fs::write(&out, rendered).unwrap_or_else(|e| panic!("writing {}: {e}", out.display()));
     }
 }
 

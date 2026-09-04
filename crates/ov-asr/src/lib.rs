@@ -36,6 +36,6 @@
 
 pub mod catalog;
 pub mod locate;
-pub mod sherpa;
 pub mod recordings;
+pub mod sherpa;
 mod wav;

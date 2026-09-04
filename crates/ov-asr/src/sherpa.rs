@@ -419,7 +419,10 @@ mod tests {
         let out = load()
             .transcribe(&speech(), &DecodeHint::default())
             .expect("decode");
-        assert!(out.confidence.is_none(), "a transducer has no logprob to report");
+        assert!(
+            out.confidence.is_none(),
+            "a transducer has no logprob to report"
+        );
         assert_eq!(out.language.as_deref(), Some("en"));
     }
 
@@ -436,7 +439,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let t = SherpaTranscriber::with_retention(bundled(), model_dir().expect("model"), None)
             .expect("load the model");
-        t.transcribe(&speech(), &DecodeHint::default()).expect("decode");
+        t.transcribe(&speech(), &DecodeHint::default())
+            .expect("decode");
         assert!(!dir.exists(), "retention was off; nothing may be written");
     }
 
@@ -453,7 +457,8 @@ mod tests {
             Some(dir.clone()),
         )
         .expect("load the model");
-        t.transcribe(&speech(), &DecodeHint::default()).expect("decode");
+        t.transcribe(&speech(), &DecodeHint::default())
+            .expect("decode");
 
         let kept: Vec<_> = std::fs::read_dir(&dir)
             .expect("the retention directory must exist")
@@ -521,7 +526,10 @@ mod tests {
         // fact, so the field stays empty.
         let spec = crate::catalog::find("parakeet-tdt-0.6b-v3").expect("in catalogue");
         assert!(!spec.english_only);
-        assert!(bundled().english_only, "the bundled model can honestly say en");
+        assert!(
+            bundled().english_only,
+            "the bundled model can honestly say en"
+        );
     }
 
     #[test]

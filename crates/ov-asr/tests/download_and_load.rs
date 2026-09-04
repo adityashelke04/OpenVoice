@@ -90,7 +90,9 @@ fn a_catalogued_model_downloads_verifies_extracts_and_transcribes() {
             .collect(),
     };
 
-    let out = t.transcribe(&audio, &DecodeHint::default()).expect("decode");
+    let out = t
+        .transcribe(&audio, &DecodeHint::default())
+        .expect("decode");
     assert!(
         out.text.to_lowercase().contains("portrait"),
         "expected the spoken words, got {:?}",

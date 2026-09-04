@@ -258,7 +258,11 @@ mod tests {
         for m in CATALOG {
             let url = m.url();
             assert!(url.starts_with("https://"), "{} is not https: {url}", m.id);
-            assert!(url.ends_with(".tar.bz2"), "{} is not an archive: {url}", m.id);
+            assert!(
+                url.ends_with(".tar.bz2"),
+                "{} is not an archive: {url}",
+                m.id
+            );
         }
     }
 

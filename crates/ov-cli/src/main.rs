@@ -34,7 +34,6 @@ mod history;
     about = "Local-first voice dictation for developers"
 )]
 struct Cli {
-
     /// Forced language as an ISO 639-1 code, or "auto" to let the model detect it.
     /// Forcing beats auto-detect for a single short utterance, which is why this
     /// defaults to English rather than "auto" -- see `Config::language` in
@@ -241,8 +240,10 @@ fn cmd_doctor(cli: &Cli) -> Result<(), String> {
     // remaining failure is that it is not where it should be.
     match ov_asr::locate::model_dir(ov_asr::catalog::default_spec(), &user_models()) {
         Ok(d) => println!("model         ok  {}", d.display()),
-        Err(e) => println!("model         FAILED
-{e}"),
+        Err(e) => println!(
+            "model         FAILED
+{e}"
+        ),
     }
 
     match ov_audio::CpalAudioSource::new(None) {

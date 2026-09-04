@@ -58,7 +58,6 @@ impl engine::Shell for TauriShell {
             .overlay
             .set_active(&win, active);
     }
-
 }
 
 /// Engine lifecycle as the UI sees it.
@@ -73,9 +72,7 @@ impl engine::Shell for TauriShell {
 enum Status {
     Starting,
     Ready(engine::Ready),
-    Failed {
-        error: String,
-    },
+    Failed { error: String },
 }
 
 #[tauri::command]

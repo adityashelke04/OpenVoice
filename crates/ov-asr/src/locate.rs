@@ -124,7 +124,10 @@ mod tests {
         // Treating that as installed sends the user to a model that cannot load.
         let base = install(v3(), "partial");
         std::fs::remove_file(base.join(v3().id).join(v3().files[0])).expect("remove one file");
-        assert!(!is_installed(v3(), &base), "three files of four is not installed");
+        assert!(
+            !is_installed(v3(), &base),
+            "three files of four is not installed"
+        );
         assert!(model_dir(v3(), &base).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -135,7 +138,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let err = model_dir(v3(), &base).unwrap_err().to_string();
         assert!(err.contains(v3().id), "must name the model: {err}");
-        assert!(err.contains("not installed"), "must say what is wrong: {err}");
+        assert!(
+            err.contains("not installed"),
+            "must say what is wrong: {err}"
+        );
     }
 
     #[test]
