@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
@@ -36,17 +36,17 @@ authors = ["Aditya Shelke <adityashelke04@gmail.com>"]
 # where that stopped being true, and every `cargo` invocation began failing with
 # "failed to select a version for the requirement `ov-core = ^0.4.2`". If you
 # change the version above, change these six lines in the same commit.
-ov-core = { path = "crates/ov-core", version = "0.5.0" }
-ov-format = { path = "crates/ov-format", version = "0.5.0" }
-ov-audio = { path = "crates/ov-audio", version = "0.5.0" }
-ov-asr = { path = "crates/ov-asr", version = "0.5.0" }
-ov-input = { path = "crates/ov-input", version = "0.5.0" }
+ov-core = { path = "crates/ov-core", version = "0.6.0" }
+ov-format = { path = "crates/ov-format", version = "0.6.0" }
+ov-audio = { path = "crates/ov-audio", version = "0.6.0" }
+ov-asr = { path = "crates/ov-asr", version = "0.6.0" }
+ov-input = { path = "crates/ov-input", version = "0.6.0" }
 # Not yet written. Declared here so the crate lands without a manifest change;
 # harmless while unused, because Cargo only resolves an entry a member consumes.
-ov-store = { path = "crates/ov-store", version = "0.5.0" }
+ov-store = { path = "crates/ov-store", version = "0.6.0" }
 # The only network-capable crate in the workspace. See ADR 0009 and
 # scripts/check-no-network.sh, which enforces that "only".
-ov-fetch = { path = "crates/ov-fetch", version = "0.5.0" }
+ov-fetch = { path = "crates/ov-fetch", version = "0.6.0" }
 
 # Errors
 thiserror = "2"

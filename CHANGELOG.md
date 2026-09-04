@@ -22,6 +22,44 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-04
+
+You can choose a speech model again, and one of the choices speaks 25 languages.
+
+### Added
+
+- **The Speech model screen is back**, with three options. **Standard** is
+  included with OpenVoice, is what you get by default, and works offline from
+  the moment you install — nothing here changes for you if you are happy with it.
+- **Multilingual** (465 MB, optional). 25 languages, detected as you speak, with
+  nothing to configure. Same speed and size as Standard. This restores the
+  non-English dictation that 0.5.0 removed.
+- **Light** (112 MB, optional). English, and a sixth of the disk and memory of
+  Standard — for machines that cannot spare the room. It is noticeably less
+  accurate, and the screen says so.
+
+### Changed
+
+- **Downloads are opt-in and verified.** Nothing is fetched unless you press
+  Download. Every archive is checked against a fingerprint built into the app
+  before it is unpacked, and an interrupted or corrupted download leaves nothing
+  behind rather than a half-installed model.
+- **The privacy note names the exception again.** 0.6.0 uses the network for
+  exactly two things, both of which you start: a model you choose to download,
+  and the update check you can switch off. 0.5.0 could say dictation had no
+  network path at all; with a Download button that is no longer true, and the
+  copy says so rather than quietly staying optimistic.
+- **Upgrading from 0.4.x fixes itself.** Settings naming a Whisper model that no
+  longer exists are migrated to Standard on load, instead of leaving the screen
+  showing nothing selected.
+
+### Fixed
+
+- **Choosing a model you have not downloaded can no longer leave OpenVoice
+  unable to transcribe.** Standard is always on disk and cannot be deleted, and
+  the app falls back to it if anything else is missing.
+
+
 ## [0.5.0] - 2026-09-03
 
 Dictation is faster and much more accurate, and OpenVoice now works the moment

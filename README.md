@@ -142,10 +142,15 @@ until v0.2.0; each now does what it says.</sub>
 
 ## Principles
 
-1. **Local by default, network by exception.** OpenVoice makes exactly one kind of
-   outbound request, and it is listed here: an **update check you can switch off**
-   (Settings → Updates). Nothing else. Dictation itself has no network path at
-   all — the speech model ships in the installer, so there is nothing to fetch.
+1. **Local by default, network by exception.** OpenVoice makes exactly two kinds
+   of outbound request, both of which you start, and both are listed here: a
+   **speech model you press Download on**, and an **update check you can switch
+   off** (Settings → Updates). Nothing else. The default model ships in the
+   installer, so a fresh install dictates offline without fetching anything.
+   Every crate that touches your microphone, transcripts, keyboard or history is
+   *sealed* — it has no path to a socket at all, and downloading lives in one
+   separate crate that does. That is
+   [checked in CI](scripts/check-no-network.sh), not just promised here.
    Every crate that touches your microphone, your transcripts, your keyboard or
    your history is *sealed*: it has no path to an HTTP client, TLS stack or socket
    library anywhere in its dependency graph. That is
@@ -239,7 +244,8 @@ requires an ADR.
 | `ov-core` | Session state machine, the six ports, events, config. **Pure.** |
 | `ov-format` | Formatting pipeline, dictionary, voice commands. **Pure.** |
 | `ov-audio` | WASAPI capture via cpal; downmix and resample to 16 kHz mono |
-| `ov-asr` | Parakeet speech recognition, decoded in this process |
+| `ov-asr` | Speech recognition, decoded in this process |
+| `ov-fetch` | Model downloads. The only crate that can open a socket |
 | `ov-input` | Keyboard hook, text injection, foreground app detection |
 | `ov-store` | SQLite history with FTS5 search |
 | `ov-cli` | `ov` — the same pipeline, headless. The integration harness |
@@ -290,9 +296,11 @@ a hand-written one goes stale the moment a release ships without someone
 remembering to edit it. The [releases page](https://github.com/adityashelke04/OpenVoice/releases)
 has the version history.
 
-Nothing to configure, no Python to install, and no model to download. The speech
-engine and its weights are both inside the installer, so OpenVoice works offline
-from the moment setup finishes — including the very first sentence. That is why
+Nothing to configure and no Python to install. The speech engine and its default
+model are both inside the installer, so OpenVoice works offline from the moment
+setup finishes — including the very first sentence. Two further models
+(multilingual, and a low-memory one) are optional and downloaded only if you ask
+for them on the Speech model screen. That is why
 the installer is around 550 MB: you download those bytes once, while you are
 already expecting to wait, rather than on first launch when you are trying to
 use the app.

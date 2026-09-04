@@ -183,7 +183,8 @@ openvoice/
 │   ├── ov-core/        # domain: FSM, events, config types, ports. NO os/io deps.
 │   ├── ov-format/      # formatting pipeline + dictionary + voice commands (pure)
 │   ├── ov-audio/       # cpal/WASAPI capture, downmix, resample to 16 kHz mono
-│   ├── ov-asr/         # Parakeet speech recognition, decoded in this process
+│   ├── ov-asr/         # speech recognition, decoded in this process
+│   ├── ov-fetch/       # model downloads. The ONLY crate that can open a socket
 │   ├── ov-input/       # low-level keyboard hook + text injection + foreground app
 │   ├── ov-store/       # SQLite (rusqlite, bundled) history + FTS5 + migrations
 │   ├── ov-cli/         # `ov`: the same pipeline, headless. Integration harness.
@@ -314,31 +315,36 @@ into a shipped app never happens.
 
 ## 5. ASR layer
 
-### 5.1 The model
+### 5.1 The models
 
-One model, and it is not selectable: **Parakeet TDT 0.6B v2**, int8, decoded
-in-process by `ov-asr` through k2-fsa's `sherpa-onnx` bindings. It ships inside
-the installer rather than being downloaded.
+Three, one of them bundled. All decoded in-process by `ov-asr` through k2-fsa's
+`sherpa-onnx` bindings; the catalogue in `ov-asr/src/catalog.rs` is the single
+source of truth for every fact about them.
 
-| | |
-|---|---|
-| Size on disk | 631 MB (482 MB compressed in the installer) |
-| Memory while loaded | ~750 MB |
-| Load time | 2.5–3.4 s, once, at startup |
-| Decode, dictation-length utterance | ~500 ms median, ~1.2 s p90 |
-| Languages | English only |
+| | role | ships | on disk | decode |
+|---|---|---|---:|---:|
+| `parakeet-tdt-0.6b-v2` | default, English | in the installer | 631 MB | ~500 ms |
+| `parakeet-tdt-0.6b-v3` | 25 languages | on request | 641 MB | ~600 ms |
+| `whisper-tiny.en` | low memory | on request | 99 MB | ~490 ms |
 
-Three Whisper presets used to live here — `base.en`, `small.en` and
-`large-v3-turbo` — with a picker, a downloader, a VRAM column and a compute-type
-fallback. All of it is gone, because Parakeet is faster than the fastest of them
-*and* more accurate than the most accurate, so there is no trade left to expose.
-[ADR 0008](adr/0008-parakeet-in-process.md) has the measurements and the costs,
-including what was given up: other languages, the confidence score, and process
-isolation.
+Measured on the reference machine, CPU only, four decode threads. Twelve threads
+buy about 110 ms and cost the responsiveness of whatever is being dictated into,
+so the background tool takes the smaller share.
 
-Decode runs on four threads rather than all of them. Measured on a 12-thread
-machine, twelve threads buy about 110 ms and cost the responsiveness of whatever
-the user is dictating into.
+Adding a model is a catalogue entry. `sherpa-onnx` needs a different config
+struct per architecture, so `SherpaTranscriber` matches on `ModelKind` to fill in
+the right one; everything after `OfflineRecognizer::create` is identical.
+
+**The bundled model is load-bearing beyond being the default.** It cannot be
+deleted, and it is what the app falls back to when a selected model is missing,
+half-downloaded, or named by a settings file from an older build. There is no
+state in which OpenVoice legitimately cannot transcribe, and that property is
+what the whole arrangement protects. See [ADR 0009](adr/0009-model-downloads.md);
+the engine decision underneath it is [ADR 0008](adr/0008-parakeet-in-process.md).
+
+Accuracy is deliberately not tabulated. The measured figures came from audio that
+is in-domain for Parakeet, so they are a ceiling rather than a forecast, and a
+number in a document outlives that caveat.
 
 ### 5.2 Decode hints — tried, measured, and turned off
 
@@ -372,35 +378,35 @@ must be re-measured before it is ever made default again.
 survived review and was written into three files before anyone ran it. It took one
 A/B test to overturn. Prefer the experiment to the argument.
 
-### 5.3 How the model gets onto the machine
+### 5.3 How a model gets onto the machine
 
-There is no model manager, and no network surface, because there is nothing to
-fetch at run time. The weights ship inside the installer and
-[`installer-hooks.nsh`](../crates/ov-app/installer-hooks.nsh.in) writes them to
-`<install dir>\models\parakeet-tdt-0.6b-v2\`. `ov_asr::locate` finds them there,
-or under `OPENVOICE_MODEL_DIR`, or in `models/` in a checkout; if none of those
-resolve it fails with an error naming every path it tried, rather than hanging.
+Two routes, and they are different on purpose.
 
-This deleted a genuinely awkward subsystem. Previously the weights came from
-Hugging Face over the network on first run, which meant a download manager, byte
-progress plumbed through the IPC protocol into the UI, resumable transfers, a
-first-run progress screen, per-model disk accounting, a delete button, and an
-offline-mode workaround for `huggingface_hub` revalidating a cached model over
-the network on every load — **171 seconds** per load before falling back to the
-cache it already had. None of that exists now.
+**The default arrives with the app.** `installer-hooks.nsh` writes it to
+`<install dir>\models\parakeet-tdt-0.6b-v2\`, so a fresh install dictates
+offline immediately and the uninstaller reclaims it.
 
-It also retires a documented lie. ADR 0003 and an earlier draft of this file both
-claimed downloads were "SHA-256 verified against a manifest committed to the
-repo"; no manifest was ever written. `scripts/fetch-model.ps1` now pins the
-archive's SHA-256 and treats a mismatch as a hard failure — the claim is finally
-true, and it is enforced in CI before the bytes reach an installer.
+**The optional two are downloaded on request**, into
+`%APPDATA%\OpenVoice\models\<id>\`. Not beside the executable: that needs
+administrator rights, and a download started from a settings screen must not
+raise a UAC prompt.
 
-The model is installed *beside* the app rather than as a Tauri bundle resource,
-which is not a detail: Tauri's NSIS updater downloads the whole installer on
-every update, so a bundled model would make every patch release a ~550 MB
-download. CI fails if the updater artifact exceeds 100 MB.
+Downloading is the only run-time network path in the product, and it lives in
+`ov-fetch` — the single crate permitted to open a socket, kept separate so that
+`ov-asr`, which holds the microphone, stays provably sealed. Two guarantees, both
+tested:
 
-Uninstalling removes the model with the app.
+* **Nothing is trusted before it is verified.** Each archive is checked against a
+  SHA-256 pinned in the catalogue before a byte is extracted. These files become
+  weights the app executes. ADR 0003 once claimed downloads were verified against
+  a committed manifest when no such manifest existed; this time it is code.
+* **A failure leaves no trace.** Extraction stages in a sibling directory and is
+  moved into place only once every expected file is present, so an interrupted or
+  corrupt transfer cannot leave a partial model that `locate::is_installed` would
+  report as ready.
+
+Only the files the catalogue names are kept. Whisper ships fp32 and int8 weights
+side by side; taking only int8 saves 146 MB of the 245 MB the archive expands to.
 
 ---
 
@@ -595,7 +601,7 @@ Everything lives under `%APPDATA%\OpenVoice\`:
 |---|---|
 | `settings.toml` | Config, dictionary and profiles in one document. Versioned; migrated and validated on load. Written atomically (temp file, then rename) because the dictionary represents real accumulated effort. |
 | `history.db` | SQLite via `rusqlite` with `bundled` SQLite compiled in, FTS5 for search, migrations in-tree keyed off `PRAGMA user_version`. |
-| `models/` | Not under `%APPDATA%` any more: the weights are installed beside the executable and removed by the uninstaller. A checkout uses `models/` in the repo. |
+| `models/` | Downloaded models only. The bundled one lives beside the executable and is removed by the uninstaller; a checkout uses `models/` in the repo. |
 | `openvoice.log` | Single appending log file. **Planned:** rotation; today it grows without bound. |
 
 An unreadable `settings.toml` is copied aside as `settings.toml.broken` rather than
@@ -741,6 +747,8 @@ manager involved, is the forcing function that keeps this honest.
 | `ov-input` | pure decision functions (`should_restore`, `mode_for`) unit-tested; the Win32 itself is not | `inject.rs`, CI |
 | `ov-store` | schema, migration, search and purge against a temp database | `lib.rs`, CI |
 | Speech engine | real decodes of real audio through the real model: a known transcript, silence returning empty, retention on and off, a missing model naming its path | `ov-asr`, CI |
+| Model downloads | checksum accepted and refused, only the wanted files kept, a missing file reported, an archive path flattened to its leaf | `ov-fetch`, CI |
+| Download end to end | a real fetch from the catalogue URL that verifies, extracts, loads and transcribes — and a refused one that leaves nothing installed | `ov-asr/tests/`, opt-in |
 | Installer payload | `release.yml` asserts the model exists before packaging, and fails if the updater artifact exceeds 100 MB | packaging |
 | End-to-end, by hand | `ov transcribe file.wav`, `ov mictest`, `ov type`, `ov keytest` | manual |
 
@@ -826,6 +834,7 @@ than rediscovered.
 | Stack — Rust/Tauri or Electron? | Tauri v2 + Rust core, React/TS frontend | [ADR 0002](adr/0002-tauri-rust-stack.md) |
 | Day-one ASR backend — faster-whisper sidecar or whisper.cpp in-process? | faster-whisper in a supervised Python sidecar, behind the `Transcriber` trait so the swap stays cheap. **Superseded by 0008.** | [ADR 0003](adr/0003-asr-backend.md) |
 | Speech engine at v0.5.0 — keep Whisper, or move to Parakeet? | Parakeet TDT 0.6B v2, decoded in-process, as the only model. Faster *and* more accurate than every Whisper tier, so the picker had nothing left to offer. | [ADR 0008](adr/0008-parakeet-in-process.md) |
+| Optional models at v0.6.0 — where does a download live? | In `ov-fetch`, a crate that exists only to hold the one socket, so `ov-asr` stays sealed while holding the microphone. | [ADR 0009](adr/0009-model-downloads.md) |
 | Activation — push-to-talk, toggle, or both? | Push-to-talk on Right Ctrl. Toggle deferred, and will be a *second* binding rather than a mode switch. | [ADR 0004](adr/0004-activation-and-license.md) |
 | License — Apache-2.0 or MIT? | Apache-2.0, for the explicit patent grant | [ADR 0004](adr/0004-activation-and-license.md) |
 | Flow Bar geometry — who owns the pill's size, React or the window? | The window, for its size: the pill's painted size was derived from the viewport in CSS so the two could not be stale relative to each other. | [ADR 0006](adr/0006-flow-bar-geometry.md) |
