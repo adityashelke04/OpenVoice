@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 ov-core.workspace = true
 tracing.workspace = true
+# The catalogue crosses the IPC boundary to the Models screen.
+serde.workspace = true
 hound = "3.5"
 # Official k2-fsa bindings. Default features link sherpa-onnx statically, which
 # is what makes the app a single binary with no DLLs beside it -- verified as an

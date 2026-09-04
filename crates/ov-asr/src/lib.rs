@@ -22,8 +22,9 @@
 //!
 //! Three small modules and no processes:
 //!
-//! * [`parakeet`] — the [`ov_core::ports::Transcriber`] implementation.
-//! * [`locate`] — where the weights are on this machine.
+//! * [`catalog`] — the models this build can run.
+//! * [`sherpa`] — the [`ov_core::ports::Transcriber`] implementation.
+//! * [`locate`] — where a model's weights are on this machine.
 //! * [`recordings`] — sweeping up audio the user asked us to keep.
 //!
 //! The port did not change, and neither did `ov-core`, `ov-format`, `ov-audio`,
@@ -33,6 +34,7 @@
 
 #![warn(missing_docs, clippy::all)]
 
+pub mod catalog;
 pub mod locate;
 pub mod parakeet;
 pub mod recordings;
