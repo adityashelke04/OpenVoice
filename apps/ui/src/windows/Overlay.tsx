@@ -1402,9 +1402,11 @@ export function Overlay() {
   // and the listener below only ever fires in the component sheet, where the same
   // component runs in an ordinary browser window. Without the state check, right-
   // clicking the bar and then dictating left the 226px menu panel open behind the
-  // pill — an opaque rectangle around a window whose entire job is to be a pill,
-  // and one the user cannot dismiss by clicking away from, because there is
-  // nowhere to click that this window can see.
+  // pill — an opaque rectangle around a window whose entire job is to be a pill.
+  //
+  // "Nowhere to click that this window can see" used to be the end of the story,
+  // and it was the whole bug: the menu had no dismissal but a second right-click.
+  // Rust now goes and finds those clicks — see `overlay-menu-dismiss` below.
   useEffect(() => {
     if (!menu) return;
     if (live || working) {
@@ -1415,6 +1417,38 @@ export function Overlay() {
     window.addEventListener("blur", close);
     return () => window.removeEventListener("blur", close);
   }, [menu, live, working]);
+
+  // Arm the click-away watch for exactly as long as the menu is up.
+  //
+  // One effect on `menu` rather than a call beside each `setMenu`, so a future
+  // route that closes the menu cannot forget to take the hook down with it — and
+  // a hook left installed is a dictation app watching every click in the system
+  // for no reason.
+  useEffect(() => {
+    if (!inTauri()) return;
+    void call("overlay_menu_open", { open: menu });
+    return () => {
+      if (menu) void call("overlay_menu_open", { open: false });
+    };
+  }, [menu]);
+
+  // The dismissal itself: a click somewhere else, another app coming forward,
+  // Escape, or the bar being hidden. All four arrive on one event, because from
+  // this side they are one fact — the menu is no longer what the user is doing.
+  //
+  // This is the listener the `blur` one above could never be. The window is
+  // `WS_EX_NOACTIVATE` and clipped to the pill, so a click anywhere else is not
+  // an event it is capable of observing; Rust has to go and find it. See the
+  // `clickaway` module.
+  useEffect(() => {
+    if (!inTauri()) return;
+    let un: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      un = await listen("overlay-menu-dismiss", () => setMenu(false));
+    })();
+    return () => un?.();
+  }, []);
 
   // State changes are announced. A person using a screen reader gets no benefit
   // from a waveform, and the whole point of this window is knowing whether the
