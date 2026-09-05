@@ -543,6 +543,17 @@ export function Overlay() {
   /** Stable, so `useMenuTimeout` is not handed a new callback every render. */
   const closeMenu = useCallback(() => setMenu(false), []);
   /**
+   * Which side the menu opens on, decided once when it opens.
+   *
+   * Derived from `anchor`, which is a ref: reading a ref during render is not
+   * reactive, so the placement could be computed from an anchor that had not
+   * landed yet, and could flip from above to below underneath a menu the user was
+   * already reading. Freezing it at open time makes the placement a property of
+   * this particular opening rather than of whatever the bar's position happened
+   * to be on the last render.
+   */
+  const [menuAbove, setMenuAbove] = useState(true);
+  /**
    * The layout viewport, measured rather than assumed to be `OVERLAY_W`x`OVERLAY_H`.
    *
    * State, not a ref, because it has to re-render: the shape sent to Rust is
@@ -1290,8 +1301,7 @@ export function Overlay() {
   const pillWidth = geo.w;
   const pillHeight = geo.h;
   expectedPillH.current = pillHeight;
-  // If the bar is near the top of the screen (top < 340), open menu below; otherwise open above.
-  const menuAbove = (anchor.current?.top ?? 900) >= 340;
+  // Frozen when the menu opened -- see `menuAbove`.
   const menuPlacement = menuAbove ? "above" : "below";
   const shapeHeight = menu ? menuHeight(rows) : pillHeight;
 
@@ -1538,7 +1548,16 @@ export function Overlay() {
         }}
         onContextMenu={(e) => {
           e.preventDefault();
-          setMenu((m) => !m);
+          setMenu((m) => {
+            // Only on the way open. Deciding the side on every toggle would let a
+            // close recompute a placement nothing is going to use, and a bar that
+            // had since moved would then animate the panel out on the wrong side.
+            //
+            // Near the top of the screen there is no room above, so the menu goes
+            // below; anywhere else it opens upward, away from the pointer.
+            if (!m) setMenuAbove((anchor.current?.top ?? 900) >= 340);
+            return !m;
+          });
         }}
         data-collapsed={collapsed}
         title={
