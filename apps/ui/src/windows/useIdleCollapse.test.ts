@@ -107,20 +107,122 @@ describe("useIdleCollapse", () => {
   });
 
   /**
-   * A blocker clearing restarts the count rather than resuming it.
+   * A *hold* clearing restarts the count rather than resuming it.
    *
-   * Someone who hovered the bar, read it, and moved the pointer away has just
-   * told you they were looking at it. Handing them the tail of an old countdown
-   * would take it away again almost immediately.
+   * A session that just ended, a message that was just dismissed, a menu that
+   * was just closed — each leaves the bar with something the user has only this
+   * moment finished with, and each earns the full delay before it goes away.
+   *
+   * Hover is deliberately not in this class; see the peek tests below.
    */
-  it("restarts the count from zero after a blocker clears", () => {
-    const { result, rerender } = setup({ blockers: { hovering: true } });
+  it("restarts the count from zero after a hold clears", () => {
+    const { result, rerender } = setup({ blockers: { live: true } });
     act(() => void vi.advanceTimersByTime(DELAY * 2));
 
-    rerender({ blockers: { hovering: false } });
+    rerender({ blockers: { live: false } });
     act(() => void vi.advanceTimersByTime(DELAY - 1));
     expect(result.current).toBe(false);
 
+    act(() => void vi.advanceTimersByTime(1));
+    expect(result.current).toBe(true);
+  });
+
+  /**
+   * A peek is not a reset.
+   *
+   * The bar is already put away; the pointer arrives, it unfurls to be read, and
+   * the pointer leaves. It has to fold back on that render — not five seconds
+   * later. A glance costing a full delay of full-size bar is the whole reason
+   * hover stopped being a blocker like the others.
+   */
+  it("folds straight back when a peek at a put-away bar ends", () => {
+    const { result, rerender } = setup({});
+    act(() => void vi.advanceTimersByTime(DELAY));
+    expect(result.current).toBe(true);
+
+    rerender({ blockers: { hovering: true } });
+    expect(result.current).toBe(false);
+
+    rerender({ blockers: { hovering: false } });
+    expect(result.current).toBe(true);
+  });
+
+  /** However long the pointer rests on it. Dwelling is still a peek. */
+  it("folds straight back after a long peek", () => {
+    const { result, rerender } = setup({});
+    act(() => void vi.advanceTimersByTime(DELAY));
+
+    rerender({ blockers: { hovering: true } });
+    act(() => void vi.advanceTimersByTime(DELAY * 10));
+    expect(result.current).toBe(false);
+
+    rerender({ blockers: { hovering: false } });
+    expect(result.current).toBe(true);
+  });
+
+  /**
+   * Hovering an open bar pauses the clock; it neither resets nor advances it.
+   *
+   * Three seconds in, the pointer arrives and stays for a while. What is owed
+   * when it leaves is the two seconds that were left, not a fresh five and not
+   * nothing at all.
+   */
+  it("banks the remaining time while the pointer rests on an open bar", () => {
+    const { result, rerender } = setup({});
+    act(() => void vi.advanceTimersByTime(3000));
+
+    rerender({ blockers: { hovering: true } });
+    act(() => void vi.advanceTimersByTime(30_000));
+    expect(result.current).toBe(false);
+
+    rerender({ blockers: { hovering: false } });
+    act(() => void vi.advanceTimersByTime(1999));
+    expect(result.current).toBe(false);
+
+    act(() => void vi.advanceTimersByTime(1));
+    expect(result.current).toBe(true);
+  });
+
+  /**
+   * A hold that lands during a peek still wins, and still resets.
+   *
+   * Someone hovering the bar when a failure arrives must get the full delay to
+   * read it after they move away — the banked remainder from before the message
+   * existed has nothing to do with it.
+   */
+  it("gives a full delay when a hold arrives during a peek", () => {
+    const { result, rerender } = setup({});
+    act(() => void vi.advanceTimersByTime(DELAY));
+
+    rerender({ blockers: { hovering: true } });
+    rerender({ blockers: { hovering: true, speaking: true } });
+    rerender({ blockers: { hovering: false, speaking: true } });
+    expect(result.current).toBe(false);
+
+    rerender({ blockers: { hovering: false, speaking: false } });
+    act(() => void vi.advanceTimersByTime(DELAY - 1));
+    expect(result.current).toBe(false);
+    act(() => void vi.advanceTimersByTime(1));
+    expect(result.current).toBe(true);
+  });
+
+  /**
+   * A click is a commitment, where a hover is a glance.
+   *
+   * Waking the bar by clicking the stroke has to survive the pointer moving off
+   * it — otherwise the bar would vanish the instant you stopped touching the
+   * thing you just deliberately brought back.
+   */
+  it("keeps a woken bar open after the pointer leaves", () => {
+    const { result, rerender } = setup({});
+    act(() => void vi.advanceTimersByTime(DELAY));
+
+    rerender({ blockers: { hovering: true }, wake: 1 });
+    rerender({ blockers: { hovering: false }, wake: 1 });
+    expect(result.current).toBe(false);
+
+    act(() => void vi.advanceTimersByTime(DELAY - 1));
+    expect(result.current).toBe(false);
     act(() => void vi.advanceTimersByTime(1));
     expect(result.current).toBe(true);
   });
