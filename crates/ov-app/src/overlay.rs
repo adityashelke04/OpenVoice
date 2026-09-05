@@ -803,6 +803,16 @@ impl Overlay {
             // thing this window exists not to do.
             ensure_noactivate(win);
         } else {
+            // Before the hide, and it has to be before: the menu is frontend
+            // state, and a bar snoozed with it open came back an hour later still
+            // wearing a 280px panel it had no way to explain. Nothing else in the
+            // app closes it — the webview cannot see the snooze, and the user who
+            // triggered it from the Hub was not looking at the bar.
+            //
+            // Safe to send to a window on its way out: the webview keeps running
+            // while hidden, so the event is processed and the shape is already
+            // right by the time the bar is shown again.
+            let _ = win.emit("overlay-menu-dismiss", ());
             let _ = win.hide();
         }
         tracing::debug!(visible, active, "overlay policy");
