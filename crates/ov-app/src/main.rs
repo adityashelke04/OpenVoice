@@ -719,6 +719,25 @@ fn overlay_set_mini(app: AppHandle, on: bool) {
     }
 }
 
+/// Tell the Windows side whether the Flow Menu is on screen.
+///
+/// The bar cannot see a click that lands anywhere else — it is
+/// `WS_EX_NOACTIVATE`, so it never has focus to lose, and `SetWindowRgn` clips it
+/// to the pill, so no click outside the pill is ever delivered to it. The only
+/// way to learn about one is a low-level mouse hook, and this is what turns that
+/// hook on and off. See `clickaway`.
+///
+/// Driven by a React effect on the menu's own state, so every route that opens or
+/// closes the menu goes through here without each of them having to remember to.
+#[tauri::command]
+fn overlay_menu_open(app: AppHandle, open: bool) {
+    if open {
+        clickaway::arm(app);
+    } else {
+        clickaway::disarm();
+    }
+}
+
 /// Turn the idle collapse on or off.
 ///
 /// Announced on its own event for the same reason `overlay-mini` is: this can be
@@ -835,6 +854,7 @@ fn main() {
             overlay_unsnooze,
             overlay_reset_position,
             overlay_set_mini,
+            overlay_menu_open,
             overlay_set_auto_collapse,
             overlay_state,
             cancel_session,

@@ -102,8 +102,6 @@ pub fn clear_region() {
 /// Answers `false` for everything when no region has been published. "Unknown"
 /// must not mean "outside", or the very first click after launch — the one that
 /// opened the menu — would close it again.
-// The hook callback is the only caller, and it arrives in the next commit.
-#[cfg_attr(not(test), allow(dead_code))]
 #[must_use]
 pub fn outside(px: i32, py: i32, origin_x: i32, origin_y: i32) -> bool {
     if !REGION_SET.load(Ordering::Relaxed) {
@@ -115,6 +113,304 @@ pub fn outside(px: i32, py: i32, origin_x: i32, origin_y: i32) -> bool {
         || x > REGION_R.load(Ordering::Relaxed)
         || y < REGION_T.load(Ordering::Relaxed)
         || y > REGION_B.load(Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
+// The hook itself. Windows-only; see the no-ops at the foot of this file.
+// ---------------------------------------------------------------------------
+
+/// Which mouse messages mean "the user has committed to something elsewhere".
+///
+/// Button-down, not button-up: a menu should close the instant the pointer is
+/// pressed somewhere else, the way every other menu on the system does. Movement
+/// and the wheel are excluded because a menu that closed when the pointer crossed
+/// it would be unusable by anyone who does not travel in a straight line.
+///
+/// Pure and public so the rule can be asserted without installing a hook.
+#[cfg(windows)]
+#[must_use]
+pub fn is_button_down(msg: u32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
+    };
+    // The non-client variants are deliberately absent: `WH_MOUSE_LL` reports
+    // screen-space button messages only and never delivers a WM_NC* form, so
+    // listing them would be a rule that reads as load-bearing and never fires.
+    matches!(
+        msg,
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+    )
+}
+
+#[cfg(windows)]
+mod imp {
+    use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+    use std::sync::{Mutex, OnceLock};
+
+    use tauri::{AppHandle, Emitter, Manager};
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowRect, PostThreadMessageW,
+        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, MSG,
+        MSLLHOOKSTRUCT, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_QUIT,
+    };
+
+    /// The overlay window, for the hit test's origin and for the emit.
+    ///
+    /// An `isize` in an atomic rather than an `HWND` behind a lock, because the
+    /// callback reads it on the critical path of the user's mouse.
+    static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
+
+    /// The pumped thread's id, so `disarm` can post it a `WM_QUIT`.
+    ///
+    /// Zero when nothing is armed. Guarded by [`ARM_LOCK`] on the write side; the
+    /// read side is the callback's and is allowed to be a plain load.
+    static THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+    /// Serialises `arm` against `disarm`.
+    ///
+    /// The frontend drives both from a React effect, and effects re-run for
+    /// reasons unrelated to the menu. Without this, a fast open/close/open could
+    /// leave two hook threads alive with one of them holding the only handle that
+    /// could remove the other's hook.
+    static ARM_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Where the callback posts. `OnceLock` because a hook procedure is an
+    /// `extern "system" fn` and cannot capture.
+    ///
+    /// The channel exists so the callback never touches Tauri: emitting an event
+    /// allocates, serialises, and crosses a process boundary, all of which are
+    /// forbidden on the hook's critical path (rule 1). It sends a unit and returns.
+    static TX: OnceLock<std::sync::mpsc::Sender<()>> = OnceLock::new();
+
+    /// Whether a hook is currently installed.
+    ///
+    /// Test-only in production terms, and deliberately so: nothing in the app
+    /// gates behaviour on this. Escape and the hide path emit their dismissal
+    /// unconditionally, because a gate on "did the hook install" would make the
+    /// backstops depend on the very thing they are backing up.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn is_armed() -> bool {
+        THREAD_ID.load(Ordering::Relaxed) != 0
+    }
+
+    /// Start the dispatcher, once, for the life of the process.
+    ///
+    /// Its job is to be the slow half. Emitting a Tauri event allocates and
+    /// crosses a process boundary, and doing that on the hook thread would risk
+    /// the eviction that rule 1 exists to prevent.
+    fn dispatcher(app: &AppHandle) -> &'static std::sync::mpsc::Sender<()> {
+        TX.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            let app = app.clone();
+            std::thread::Builder::new()
+                .name("ov-clickaway-dispatch".into())
+                .spawn(move || {
+                    while rx.recv().is_ok() {
+                        if let Some(win) = app.get_webview_window("overlay") {
+                            let _ = win.emit("overlay-menu-dismiss", ());
+                        }
+                    }
+                })
+                .expect("clickaway dispatch thread");
+            tx
+        })
+    }
+
+    /// Install the hooks. Idempotent.
+    pub fn arm(app: AppHandle) {
+        let _guard = ARM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if THREAD_ID.load(Ordering::Relaxed) != 0 {
+            return;
+        }
+        let Some(win) = app.get_webview_window("overlay") else {
+            tracing::warn!("no overlay window to watch for click-away");
+            return;
+        };
+        let Ok(raw) = win.hwnd() else {
+            tracing::warn!("overlay window has no HWND; click-away disabled");
+            return;
+        };
+        OVERLAY_HWND.store(raw.0 as isize, Ordering::Relaxed);
+        dispatcher(&app);
+
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<u32>();
+        std::thread::Builder::new()
+            .name("ov-clickaway".into())
+            .spawn(move || {
+                // SAFETY: `mouse_proc` is a valid `extern "system"` callback with
+                // the signature Windows expects. A null module handle with a zero
+                // thread id installs a global low-level hook owned by this
+                // thread, which is the documented contract for `WH_MOUSE_LL`.
+                let hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0) };
+                let Ok(hook) = hook else {
+                    tracing::warn!("could not install the click-away mouse hook");
+                    let _ = ready_tx.send(0);
+                    return;
+                };
+                // SAFETY: out-of-context WinEvent hooks take a callback with this
+                // signature and are delivered to this thread's message queue.
+                let winevent = unsafe {
+                    SetWinEventHook(
+                        EVENT_SYSTEM_FOREGROUND,
+                        EVENT_SYSTEM_FOREGROUND,
+                        None,
+                        Some(winevent_proc),
+                        0,
+                        0,
+                        WINEVENT_OUTOFCONTEXT,
+                    )
+                };
+
+                // SAFETY: no preconditions; returns this thread's own id.
+                let tid = unsafe { GetCurrentThreadId() };
+                let _ = ready_tx.send(tid);
+
+                pump();
+
+                // SAFETY: both handles came from successful installs on this
+                // thread and are unhooked exactly once, here, as the thread ends.
+                unsafe {
+                    let _ = UnhookWindowsHookEx(hook);
+                    if !winevent.is_invalid() {
+                        let _ = UnhookWinEvent(winevent);
+                    }
+                }
+            })
+            .expect("clickaway hook thread");
+
+        match ready_rx.recv() {
+            Ok(0) | Err(_) => tracing::warn!("click-away hook did not start"),
+            Ok(tid) => THREAD_ID.store(tid, Ordering::Relaxed),
+        }
+    }
+
+    /// Remove the hooks. Idempotent.
+    ///
+    /// `WM_QUIT` rather than a flag, because the thread is blocked in
+    /// `GetMessageW` and a flag it never wakes to read would leave the hook
+    /// installed for the life of the process — which is exactly the standing
+    /// capability this module is arranged to avoid.
+    pub fn disarm() {
+        let _guard = ARM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tid = THREAD_ID.swap(0, Ordering::Relaxed);
+        if tid == 0 {
+            return;
+        }
+        // SAFETY: posting to a thread id this module created. A failed post means
+        // the thread has already gone, which is the state we wanted anyway.
+        unsafe {
+            let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    /// Message pump for the hook thread.
+    ///
+    /// Low-level hooks are dispatched through the installing thread's message
+    /// queue. Without this loop the callback is never invoked at all — which
+    /// presents as "the menu still does not close", with nothing to go on.
+    fn pump() {
+        let mut msg = MSG::default();
+        // SAFETY: `msg` is valid for the duration of each call; a null HWND asks
+        // for messages belonging to this thread, which is where `WM_QUIT` lands.
+        unsafe {
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    /// The mouse callback. Runs on every mouse event system-wide while a menu is
+    /// open. See the module's rules: four comparisons, one non-blocking
+    /// `GetWindowRect`, one unit send, and never a swallowed event.
+    unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code < 0 {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+        if !super::is_button_down(wparam.0 as u32) {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+
+        let raw = OVERLAY_HWND.load(Ordering::Relaxed);
+        if raw == 0 {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+
+        // SAFETY: for code >= 0 in a WH_MOUSE_LL hook, Windows guarantees lparam
+        // points to a valid MSLLHOOKSTRUCT for the duration of this call.
+        let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+        let POINT { x, y } = info.pt;
+
+        // `GetWindowRect` sends no messages and cannot block on another process,
+        // which is why it is here and `WindowFromPoint` is not.
+        let mut r = RECT::default();
+        // SAFETY: `raw` is a live window handle owned by this process.
+        if unsafe { GetWindowRect(HWND(raw as *mut _), &mut r) }.is_err() {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+
+        if super::outside(x, y, r.left, r.top) {
+            if let Some(tx) = TX.get() {
+                let _ = tx.send(());
+            }
+        }
+
+        // Always. The click belongs to whatever the user aimed it at.
+        unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    }
+
+    /// Another application came forward: alt-tab, the Win key, a notification.
+    ///
+    /// A click is not the only way to walk away from a menu, and the mouse hook
+    /// cannot see any of these.
+    unsafe extern "system" fn winevent_proc(
+        _hook: HWINEVENTHOOK,
+        _event: u32,
+        hwnd: HWND,
+        _obj: i32,
+        _child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        // Our own window coming forward is not somebody else's. It should not be
+        // able to happen -- the bar is WS_EX_NOACTIVATE -- but a foreground event
+        // naming it would close the menu the user just opened.
+        if hwnd.0 as isize == OVERLAY_HWND.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Some(tx) = TX.get() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+#[cfg(all(windows, test))]
+pub use imp::is_armed;
+#[cfg(windows)]
+pub use imp::{arm, disarm};
+
+// -- The bar is Windows-only today. These keep the crate compiling elsewhere
+//    without scattering `cfg` through the call sites, exactly as `topmost` does.
+
+#[cfg(not(windows))]
+pub fn arm(_app: tauri::AppHandle) {}
+
+#[cfg(not(windows))]
+pub fn disarm() {}
+
+#[cfg(all(not(windows), test))]
+#[must_use]
+pub fn is_armed() -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+#[must_use]
+pub fn is_button_down(_msg: u32) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -188,5 +484,42 @@ mod tests {
         clear_region();
         assert!(!outside(0, 0, 0, 0));
         assert!(!outside(9999, 9999, 0, 0));
+    }
+
+    /// Arming twice must not install two hooks or leak a thread. The frontend
+    /// drives this from a React effect, and effects re-run for reasons that have
+    /// nothing to do with the menu.
+    #[test]
+    fn arming_is_idempotent_and_disarming_is_safe_when_idle() {
+        let _g = guard();
+        // Nothing is armed at rest.
+        assert!(!is_armed());
+        // Disarming an idle module is a no-op, not a panic. The frontend's
+        // cleanup runs on unmount whether or not the menu was ever opened.
+        disarm();
+        assert!(!is_armed());
+    }
+
+    /// The buttons that dismiss a menu are the ones that go *down*. A mouse move
+    /// across the screen must not close it, or the menu would be unusable for
+    /// anyone who does not travel in a straight line.
+    #[cfg(windows)]
+    #[test]
+    fn only_button_down_messages_dismiss() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+            WM_RBUTTONDOWN, WM_XBUTTONDOWN,
+        };
+        for m in [
+            WM_LBUTTONDOWN,
+            WM_RBUTTONDOWN,
+            WM_MBUTTONDOWN,
+            WM_XBUTTONDOWN,
+        ] {
+            assert!(is_button_down(m), "{m:#x} should dismiss");
+        }
+        for m in [WM_MOUSEMOVE, WM_LBUTTONUP, WM_MOUSEWHEEL] {
+            assert!(!is_button_down(m), "{m:#x} must not dismiss");
+        }
     }
 }
