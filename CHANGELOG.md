@@ -22,6 +22,11 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-05
+
+The Flow Bar gets out of your way when you are not using it — and stops
+disappearing when you are.
+
 ### Added
 
 - The Flow Bar puts itself away. After five seconds of quiet it folds down to a
@@ -811,7 +816,9 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.4...v0.6.0
 [0.4.4]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.1...v0.4.2
