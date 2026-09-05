@@ -22,8 +22,30 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-05
+
+A way back to the middle, and a bar whose edges survive being clipped.
+
+### Added
+
+- **Back to center.** Right-clicking the Flow Bar now offers a way to put it
+  back where it started. Dragging the bar somewhere awkward used to be a
+  one-way trip unless you found the tray icon, which is not where anyone looks
+  when the thing they want to move is on screen in front of them.
+- The default resting place is now measured from the usable screen rather than
+  from the glass. On a 1080p display with Windows 11's 48px taskbar the bar used
+  to leave 48px of dead air beneath it; with the taskbar set to auto-hide it
+  floated 96px too high, and docked to the left or top it was wrong the other
+  way. It now sits a consistent gap above whatever the desktop actually ends at.
+
 ### Fixed
 
+- **The Flow Bar's rounded ends are no longer pixelated.** The window is clipped
+  to the bar's silhouette, and that clip could only round corners to whole
+  pixels — so it cut into the smooth edge underneath and left a visible
+  staircase at both ends. It was worst on the yellow bar shown while the speech
+  engine starts and when no audio is detected, because those are the only states
+  that draw the outline in a colour bright enough to see it against the pill.
 - **The Flow Menu now closes when you click somewhere else.** Right-clicking the
   bar opened a menu that nothing could dismiss but a second right-click on the
   bar itself — so a menu opened by accident sat over your work until you found
@@ -828,7 +850,8 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.4...v0.6.0
 [0.4.4]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.3...v0.4.4
