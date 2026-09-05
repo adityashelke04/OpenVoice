@@ -72,6 +72,23 @@ impl engine::Shell for TauriShell {
             let _ = win.emit("overlay-latched", latched);
         }
     }
+
+    /// Escape closes the Flow Menu.
+    ///
+    /// Routed through Rust because the bar is `WS_EX_NOACTIVATE` and never has
+    /// keyboard focus, so its webview receives no key events at all. The global
+    /// hook in `ov-input` is the only thing in the process that sees the
+    /// keystroke.
+    ///
+    /// Sent unconditionally rather than gated on `clickaway::is_armed()`. The
+    /// event is a no-op in a webview whose menu is already closed, and a gate
+    /// would make Escape depend on the mouse hook having installed successfully
+    /// — which is precisely the failure this is a backstop for.
+    fn on_cancel_key(&self) {
+        if let Some(win) = overlay::window(&self.app) {
+            let _ = win.emit("overlay-menu-dismiss", ());
+        }
+    }
 }
 
 /// Engine lifecycle as the UI sees it.
