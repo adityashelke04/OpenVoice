@@ -1260,6 +1260,95 @@ fn css_to_physical(win: &WebviewWindow, view_w: f64) -> f64 {
     f64::from(size.width) / view_w
 }
 
+/// How far a rounded box's edge is inset from its own side anywhere in the pixel
+/// row `y` — the *smallest* inset the row contains.
+///
+/// Smallest, not the inset at the row's centre, because the span built from it
+/// has to cover every pixel the arc touches anywhere in the row. Inside a corner
+/// the arc is widest at the end of the row nearest the corner circle's centre, so
+/// that is the point measured.
+#[cfg(windows)]
+fn corner_inset(y: i32, top: f64, bottom: f64, radius: f64) -> f64 {
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    let (row_top, row_bottom) = (f64::from(y), f64::from(y) + 1.0);
+    // A row that straddles a corner circle's centre line contains the box's full
+    // width, so it has no inset at all.
+    let dy = if row_bottom <= top + radius {
+        (top + radius) - row_bottom
+    } else if row_top >= bottom - radius {
+        row_top - (bottom - radius)
+    } else {
+        return 0.0;
+    };
+    let dy = dy.clamp(0.0, radius);
+    radius - (radius * radius - dy * dy).sqrt()
+}
+
+/// A rounded box as horizontal bands, one per run of identical rows.
+///
+/// # Why not `CreateRoundRectRgn`
+///
+/// Because its arc is rasterised *inside* the curve, and the region is a clip.
+///
+/// A region is aliased — a pixel is in it or it is not — while the pill's edge is
+/// painted antialiased. The two can only coexist if the region contains the
+/// paint: then its staircase falls on pixels the paint left transparent and
+/// nobody sees it. Cut the other way and the region's staircase *becomes* the
+/// edge, because every pixel of the arc's outer falloff is clipped away and what
+/// remains is a hard step of half-lit border.
+///
+/// That is what `CreateRoundRectRgn` was doing. Measured on the running app, a
+/// 204x40 pill at 100%: the region's top row began at window x 119 where the
+/// ideal arc begins at 115.6, so three columns of border went missing on that row
+/// alone, and the rows below it stepped a whole pixel at a time. It had always
+/// been that way; it only became visible when the loading and notice states
+/// painted the border `--warn` yellow instead of the near-black `#34343c` that
+/// had been hiding it against a dark desktop. The listening state escapes it for
+/// a different reason — `GLOW_MARGIN` pushes the region 22px clear of the pill,
+/// so its arc never touches the paint.
+///
+/// So the arc is computed here instead, per row, rounded outward: `floor` on the
+/// left, `ceil` on the right. The region is then at most one pixel wider than the
+/// paint anywhere, and never narrower.
+///
+/// One pixel of region the paint does not reach is safe, which is worth stating
+/// because the note above [`apply_region`] says the opposite about the eight the
+/// square corners used to leave. Measured on the running window rather than
+/// assumed: in the collapsed bar, the sixteen rows of region above and below the
+/// 8px stroke read exactly the desktop behind them, and with the Flow Menu open
+/// its top-left corner went desktop (0x1B1B1B) straight into the menu's
+/// antialiased hairline with nothing light in between. Whatever filled the old
+/// notches, a one-pixel skirt does not reproduce it.
+///
+/// Rows that share a span are merged into one band, which is what keeps this
+/// cheap: a 40px pill is about twenty bands rather than forty, and the straight
+/// middle of the Flow Menu is a single one.
+#[cfg(windows)]
+fn scanlines((l, t, r, b): (i32, i32, i32, i32), radius: f64) -> Vec<(i32, i32, i32, i32)> {
+    if r <= l || b <= t {
+        return Vec::new();
+    }
+    let (lf, tf, rf, bf) = (f64::from(l), f64::from(t), f64::from(r), f64::from(b));
+    // The clamp CSS applies to `border-radius: 999px`. See `full_radius`.
+    let radius = radius.clamp(0.0, ((rf - lf) / 2.0).min((bf - tf) / 2.0));
+
+    let mut bands: Vec<(i32, i32, i32, i32)> = Vec::new();
+    for y in t..b {
+        let inset = corner_inset(y, tf, bf, radius);
+        let (xl, xr) = ((lf + inset).floor() as i32, (rf - inset).ceil() as i32);
+        if xr <= xl {
+            continue;
+        }
+        match bands.last_mut() {
+            Some(last) if (last.0, last.2, last.3) == (xl, xr, y) => last.3 = y + 1,
+            _ => bands.push((xl, y, xr, y + 1)),
+        }
+    }
+    bands
+}
+
 /// Clip the window to a rectangle, so the rest of it neither paints nor takes
 /// clicks.
 ///
@@ -1298,7 +1387,7 @@ fn css_to_physical(win: &WebviewWindow, view_w: f64) -> f64 {
 fn apply_region(win: &WebviewWindow, parts: &[Part], css_to_phys: f64) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Gdi::{
-        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ, RGN_OR,
+        CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ, RGN_OR,
     };
 
     let Ok(handle) = win.hwnd() else {
@@ -1328,27 +1417,20 @@ fn apply_region(win: &WebviewWindow, parts: &[Part], css_to_phys: f64) {
             return;
         }
         for (rect, radius) in parts {
-            let (l, t, r, b) = region_box(*rect, css_to_phys);
-            // `CreateRoundRectRgn` takes the full width and height of the corner
-            // ellipse, which is twice the CSS radius. Rounded outward with the box
-            // itself, so the region never cuts inside a painted edge.
-            let d = ((radius * css_to_phys).round() as i32 * 2).max(0);
-            let part = if d == 0 {
-                CreateRectRgn(l, t, r, b)
-            } else {
-                // +1 on the far edges: `CreateRoundRectRgn` treats them as
-                // exclusive, the same convention `CreateRectRgn` uses, and losing
-                // the last row and column would expose a one-pixel line of the
-                // window's own surface along two sides of every box.
-                CreateRoundRectRgn(l, t, r + 1, b + 1, d, d)
-            };
-            if part.is_invalid() {
-                let _ = DeleteObject(HGDIOBJ(total.0));
-                tracing::warn!(l, t, r, b, "overlay could not create a region part");
-                return;
+            // Bands rather than one `CreateRoundRectRgn`, because that function's
+            // arc falls inside the painted one and clipping an antialiased edge
+            // with an aliased region is what made the bar's ends a staircase. See
+            // the note on `scanlines`.
+            for (l, t, r, b) in scanlines(region_box(*rect, css_to_phys), radius * css_to_phys) {
+                let part = CreateRectRgn(l, t, r, b);
+                if part.is_invalid() {
+                    let _ = DeleteObject(HGDIOBJ(total.0));
+                    tracing::warn!(l, t, r, b, "overlay could not create a region part");
+                    return;
+                }
+                CombineRgn(total, total, part, RGN_OR);
+                let _ = DeleteObject(HGDIOBJ(part.0));
             }
-            CombineRgn(total, total, part, RGN_OR);
-            let _ = DeleteObject(HGDIOBJ(part.0));
         }
         if SetWindowRgn(hwnd, total, false) == 0 {
             let _ = DeleteObject(HGDIOBJ(total.0));
@@ -1878,6 +1960,215 @@ mod region_tests {
                 assert!(r > l && b > t, "inverted at {scale} for {w}+{m}");
             }
         }
+    }
+
+    // -- The arc ---------------------------------------------------------
+    //
+    // The region is the window's clip and it is aliased: a pixel is in it or it
+    // is not. The paint is antialiased. So the only safe relationship between
+    // them is containment — every pixel the paint touches, however faintly, has
+    // to be in the region, or the region's own staircase becomes the edge the
+    // user sees. See the note on `scanlines`.
+
+    /// Whether a point is inside a rounded box.
+    ///
+    /// The oracle the tests below are measured against, written out longhand
+    /// rather than shared with `scanlines`: a test that computes the answer the
+    /// same way the code does cannot catch the code being wrong.
+    fn inside(x: f64, y: f64, (l, t, r, b): (f64, f64, f64, f64), radius: f64) -> bool {
+        if x < l || x > r || y < t || y > b {
+            return false;
+        }
+        let cx = if x < l + radius {
+            l + radius
+        } else if x > r - radius {
+            r - radius
+        } else {
+            return true;
+        };
+        let cy = if y < t + radius {
+            t + radius
+        } else if y > b - radius {
+            b - radius
+        } else {
+            return true;
+        };
+        (x - cx).powi(2) + (y - cy).powi(2) <= radius * radius
+    }
+
+    /// Whether the pixel square at `(x, y)`, grown by `slack` on every side,
+    /// covers any of the rounded box. Sampled rather than solved, because the
+    /// oracle's job is to be obviously right rather than fast.
+    ///
+    /// Cell centres, not a grid including the square's own boundary: a pixel
+    /// whose corner the curve passes exactly through has no area inside it, and
+    /// no rasteriser lights it. Sampling the boundary would demand the region
+    /// include pixels the paint never touches.
+    fn touches(x: i32, y: i32, boxed: (f64, f64, f64, f64), radius: f64, slack: f64) -> bool {
+        const N: i32 = 24;
+        let span = 1.0 + slack * 2.0;
+        for i in 0..N {
+            for j in 0..N {
+                let step = |k: i32| span * (f64::from(k) + 0.5) / f64::from(N);
+                let (px, py) = (
+                    f64::from(x) - slack + step(i),
+                    f64::from(y) - slack + step(j),
+                );
+                if inside(px, py, boxed, radius) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// The bands as one span per row: `(left, right)` indexed from the top.
+    fn rows(bands: &[(i32, i32, i32, i32)], top: i32, bottom: i32) -> Vec<Option<(i32, i32)>> {
+        let mut out = vec![None; (bottom - top) as usize];
+        for (l, t, r, b) in bands {
+            for y in *t..*b {
+                out[(y - top) as usize] = Some((*l, *r));
+            }
+        }
+        out
+    }
+
+    /// Every shape the bar actually takes, in physical pixels, with the radius
+    /// CSS rounds it by. The last two are the boxes `region_box` produces when
+    /// the pill does not land on a physical pixel at 125%: a box one pixel taller
+    /// than twice its radius, which is the case a formula written for the tidy
+    /// numbers gets wrong.
+    const SHAPES: [((i32, i32, i32, i32), f64); 7] = [
+        ((100, 300, 304, 340), 20.0), // the loading pill, 204x40 at 100%
+        ((154, 300, 250, 324), 12.0), // the collapsed stroke, 96x24
+        ((115, 300, 289, 340), 20.0), // the idle pill, 174x40
+        ((62, 340, 342, 536), 8.0),   // the Flow Menu, 280x196, --r-lg
+        ((125, 375, 380, 426), 25.0), // a pill at 125%
+        ((125, 375, 380, 427), 25.0), // the same, rounded outward by a row
+        ((0, 0, 40, 40), 20.0),       // the dot: a circle
+    ];
+
+    /// The bug behind the pixelated ends.
+    ///
+    /// `CreateRoundRectRgn` rasterises its arc *inside* the ideal curve: measured
+    /// on the running app, a 204x40 pill's region began at window x 119 on its
+    /// top row where the paint began at 115.6, so the outermost three columns of
+    /// the border were clipped away and what was left was a staircase of
+    /// half-lit pixels. Invisible while the border was `#34343c`; unmissable the
+    /// moment the loading and notice states painted it `--warn` yellow.
+    #[test]
+    fn every_painted_pixel_is_inside_the_region() {
+        for (boxed, radius) in SHAPES {
+            let (l, t, r, b) = boxed;
+            let bands = scanlines(boxed, radius);
+            let spans = rows(&bands, t, b);
+            let f = (f64::from(l), f64::from(t), f64::from(r), f64::from(b));
+            for y in t..b {
+                for x in l..r {
+                    if !touches(x, y, f, radius, 0.0) {
+                        continue;
+                    }
+                    let span = spans[(y - t) as usize];
+                    assert!(
+                        span.is_some_and(|(sl, sr)| x >= sl && x < sr),
+                        "{boxed:?} r{radius}: paint at ({x},{y}) is outside the region {span:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// And no wider than it has to be. A region larger than the paint leaves
+    /// pixels inside the window that nothing draws; they are transparent, but a
+    /// band of them would still swallow clicks meant for whatever is behind.
+    #[test]
+    fn no_region_pixel_sits_more_than_a_pixel_outside_the_paint() {
+        for (boxed, radius) in SHAPES {
+            let (l, t, r, b) = boxed;
+            let f = (f64::from(l), f64::from(t), f64::from(r), f64::from(b));
+            for (bl, bt, br, bb) in scanlines(boxed, radius) {
+                assert!(
+                    bl >= l && br <= r && bt >= t && bb <= b,
+                    "{boxed:?}: band escapes the box"
+                );
+                for y in bt..bb {
+                    for x in [bl, br - 1] {
+                        assert!(
+                            touches(x, y, f, radius, 1.0),
+                            "{boxed:?} r{radius}: region pixel ({x},{y}) is nowhere near the paint"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// One band per run of identical rows, covering the box top to bottom with
+    /// no row described twice. Bands are OR-ed into a GDI region one at a time,
+    /// so a duplicate row is wasted work and a missing one is a slit.
+    #[test]
+    fn bands_tile_the_box_top_to_bottom() {
+        for (boxed, radius) in SHAPES {
+            let (_, t, _, b) = boxed;
+            let bands = scanlines(boxed, radius);
+            let mut y = t;
+            for (i, (bl, bt, br, bb)) in bands.iter().enumerate() {
+                assert_eq!(
+                    *bt, y,
+                    "{boxed:?}: band {i} does not start where the last ended"
+                );
+                assert!(bb > bt && br > bl, "{boxed:?}: band {i} is empty");
+                if let Some((pl, _, pr, _)) = bands.get(i.wrapping_sub(1)) {
+                    assert!(
+                        (pl, pr) != (bl, br),
+                        "{boxed:?}: band {i} repeats the span before it"
+                    );
+                }
+                y = *bb;
+            }
+            assert_eq!(y, b, "{boxed:?}: the bands stop short of the box");
+        }
+    }
+
+    /// A pill's ends are round: the top row is narrower than the middle, and the
+    /// two are symmetric about the centre line.
+    #[test]
+    fn a_pill_keeps_its_ends_round() {
+        let boxed = (100, 300, 304, 340);
+        let bands = scanlines(boxed, 20.0);
+        let spans = rows(&bands, 300, 340);
+        let top = spans[0].expect("top row");
+        let middle = spans[20].expect("middle row");
+        assert!(
+            top.1 - top.0 < middle.1 - middle.0,
+            "the top row is as wide as the middle: the ends are square"
+        );
+        assert_eq!(middle, (100, 304), "the middle row is the full width");
+        for y in 0..20 {
+            assert_eq!(spans[y], spans[39 - y], "row {y} is not mirrored");
+        }
+    }
+
+    /// No radius, no arc: one band, the whole box.
+    #[test]
+    fn a_square_box_is_one_band() {
+        assert_eq!(
+            scanlines((10, 20, 30, 40), 0.0),
+            vec![(10, 20, 30, 40)],
+            "a square box should not be described row by row"
+        );
+    }
+
+    /// A radius larger than the box is what `border-radius: 999px` asks for, and
+    /// CSS clamps it to half the shorter side. So does this, rather than
+    /// producing an arc that folds through itself.
+    #[test]
+    fn an_overlarge_radius_is_clamped_like_css() {
+        assert_eq!(
+            scanlines((0, 0, 40, 40), 999.0),
+            scanlines((0, 0, 40, 40), 20.0),
+            "999px should round the box fully, exactly as half its side does"
+        );
     }
 }
 
