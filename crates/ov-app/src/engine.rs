@@ -56,6 +56,18 @@ pub trait Shell: Send + Sync + 'static {
     /// your hand off the keyboard. A bar that cannot say which it is showing is
     /// a bar that lets people walk away from an open microphone.
     fn set_latched(&self, latched: bool);
+    /// The user pressed the cancel key.
+    ///
+    /// Distinct from a session being cancelled, and that is the whole point: the
+    /// key is pressed just as often when nothing is running, and the shell has
+    /// something to do about it that the session machine does not know or care
+    /// about. Today that is closing the Flow Menu, which cannot hear the
+    /// keystroke itself — the bar has no focus, so no key event ever reaches its
+    /// webview.
+    ///
+    /// Defaulted to nothing so the test shells in this crate do not each have to
+    /// grow an empty body for a concern they have no opinion on.
+    fn on_cancel_key(&self) {}
 }
 
 /// Profiles and their compiled formatters, replaced as a unit.
@@ -589,6 +601,10 @@ pub fn start(
                         let _ = tx.send(Input::HotkeyReleased { at });
                     }
                     HotkeyEvent::Cancelled => {
+                        // Before the session work, and unconditional: Escape
+                        // means "back out of whatever this is", and when nothing
+                        // is recording the thing to back out of is the open menu.
+                        e.shell.on_cancel_key();
                         e.latch.lock().expect("latch").forget();
                         e.shell.set_latched(false);
                         let _ = tx.send(Input::Cancelled { at });

@@ -17,8 +17,18 @@ use tauri::{Emitter, LogicalPosition, Manager, WebviewWindow};
 
 /// Distance from a screen edge within which the bar snaps flush to it.
 const SNAP_PX: f64 = 28.0;
-/// Clearance left below the bar when it is auto-placed, enough for a taskbar.
-const BOTTOM_GAP: f64 = 96.0;
+/// Clearance left below the bar between it and the bottom of the *work area*.
+///
+/// This used to be 96 and used to be measured from the bottom of the screen,
+/// where it was standing in for the height of a taskbar nobody had measured. On
+/// a 1080p display with Windows 11's 48px taskbar that left the pill's bottom at
+/// 984 with 48px of dead air under it; with the taskbar set to auto-hide it left
+/// the bar floating 96px up for no reason at all; and with the taskbar docked
+/// left or top it was wrong in the other direction. The work area already knows
+/// where the usable space ends, so this is only the gap — small enough to read as
+/// "just above the taskbar", large enough that the glow margin while dictating
+/// does not touch it.
+const BOTTOM_GAP: f64 = 16.0;
 
 // The window is a fixed size, and the pill moves inside it. See ADR 0007.
 //
@@ -318,7 +328,15 @@ pub struct Overlay {
     commanded: Mutex<VecDeque<(f64, f64)>>,
     /// The exact region the window should currently be clipped to, in logical
     /// window coordinates. `None` until the first shape arrives.
-    shape: Mutex<Option<Rect>>,
+    shape: Mutex<Option<Vec<Part>>>,
+    /// The last exact region that did **not** include the Flow Menu.
+    ///
+    /// The base for the grow-now union whenever the menu is not on screen. Kept
+    /// separately from `shape` because the menu is the one thing in this window
+    /// that vanishes rather than morphs: unioning a new pill shape against a
+    /// region that still spanned the menu left half a second of clipped-but-
+    /// unpainted window every time the menu closed, which is a white panel.
+    pill_shape: Mutex<Option<Vec<Part>>>,
     /// Bumped by every shape. A deferred shrink that wakes to find this changed
     /// has been superseded and does nothing.
     shape_gen: Arc<AtomicU64>,
@@ -333,6 +351,61 @@ pub struct Overlay {
 
 /// A rectangle in logical window coordinates: left, top, right, bottom.
 type Rect = (f64, f64, f64, f64);
+
+/// One painted box and the corner radius CSS rounds it by.
+///
+/// The window's region is built from these rather than from a single rectangle,
+/// because a rectangle around a rounded box leaves four corner notches that
+/// nothing paints — and an unpainted pixel inside the region is not transparent.
+/// It keeps whatever the webview's surface had there, which is white, and it
+/// keeps it for as long as the region does, because nothing ever repaints a
+/// pixel no element covers.
+///
+/// That is the "two tiny white shapes" at the top of the Flow Menu: the only
+/// unpainted corners in the whole silhouette that the menu's own drop shadow —
+/// offset downward — does not happen to cover.
+type Part = (Rect, f64);
+
+/// The corner radius of the Flow Menu, matching `--r-lg` in `tokens.css`.
+///
+/// One of the numbers this file shares with the stylesheet by hand. It is here
+/// rather than measured because the region has to be right on the first frame,
+/// before anything has been laid out — and unlike the menu's *height*, which
+/// depends on fonts and content and therefore had to become a measurement, a
+/// corner radius is a constant the design owns. If `--r-lg` changes, change this.
+const MENU_RADIUS: f64 = 8.0;
+
+/// What the frontend is asking the window to be clipped to.
+///
+/// One struct rather than six positional arguments, because four of them are
+/// `f64` and two are `bool`, and a call site that transposes any pair still
+/// compiles. The fields are the whole of the shape protocol; see [`Overlay::set_shape`].
+#[derive(Debug, Clone, Copy)]
+pub struct Shape {
+    /// The layout viewport the pill was centred in, in CSS pixels.
+    pub view: (f64, f64),
+    /// The pill's painted width.
+    pub pill_w: f64,
+    /// The pill's own painted height, never including the menu.
+    pub pill_h: f64,
+    /// The measured height of the Flow Menu, or `0.0` when none is open.
+    ///
+    /// Measured in the webview off the mounted element, not modelled here: the
+    /// menu's height depends on fonts, content and padding that only CSS knows.
+    /// See `useMenuHeight` in the frontend.
+    pub menu_h: f64,
+    /// Space reserved around the pill for its glow.
+    pub margin: f64,
+    /// Whether the menu opens upward, which decides which side of the pill the
+    /// extra height is taken from.
+    pub above: bool,
+    /// Whether the Flow Menu is part of this shape.
+    ///
+    /// Not derivable from `above`: a menu opening downward sets `above: false`
+    /// and is otherwise indistinguishable from a bare pill. See `set_shape` for
+    /// what turns on it.
+    pub menu: bool,
+}
 
 /// How long to leave the window clipped to the union of the old and new shapes
 /// before tightening to the new one.
@@ -366,44 +439,88 @@ pub fn scale_desyncs() -> u64 {
     SCALE_DESYNCS.load(Ordering::Relaxed)
 }
 
-/// The pill's rectangle **in the webview's own CSS pixels**, including the margin
-/// its glow paints into.
-///
-/// `view` is the layout viewport the frontend measured, not `OVERLAY_W`/`OVERLAY_H`.
-/// Those two are normally the same number and were assumed to be for months. They
-/// are not the same number, and the day they differ this window disappears — see
-/// [`css_to_physical`] for the failure and the evidence.
-///
-/// The rule this reproduces is the one `overlay.css` actually applies: the pill is
-/// centred in the layout viewport, and its top edge is pinned at `PILL_TOP` CSS
-/// pixels from the top of it. Both terms have to come from the same viewport the
-/// stylesheet used, or the region and the paint describe different rectangles.
-fn shape_rect(view: (f64, f64), pill_w: f64, pill_h: f64, margin: f64, above: bool) -> Rect {
-    let (view_w, view_h) = view;
-    let left = (view_w - pill_w) / 2.0 - margin;
-    let right = left + pill_w + margin * 2.0;
-    let (top, bottom) = if above {
-        let top = PILL_TOP - (pill_h - PILL_H).max(0.0) - margin;
-        let bottom = PILL_TOP + PILL_H + margin;
-        (top, bottom)
-    } else {
-        let top = PILL_TOP - margin;
-        let bottom = top + pill_h + margin * 2.0;
-        (top, bottom)
-    };
-    // Clamped to the window, so a pill that somehow outgrew it produces a region
-    // that is merely the whole window rather than one hanging off the edge. The
-    // tests assert no real state gets near this.
-    (
-        left.max(0.0),
-        top.max(0.0),
-        right.min(view_w),
-        bottom.min(view_h),
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))
+}
+
+/// The box that contains every part. Used for the click-away hit test and for
+/// deciding whether a new shape is a growth or a shrink.
+fn bounds_of(parts: &[Part]) -> Rect {
+    parts.iter().skip(1).fold(
+        parts.first().map_or((0.0, 0.0, 0.0, 0.0), |p| p.0),
+        |acc, (r, _)| union_rect(acc, *r),
     )
 }
 
-fn union_rect(a: Rect, b: Rect) -> Rect {
-    (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))
+/// A box's own corner radius, for a CSS `border-radius` large enough to round it
+/// fully.
+///
+/// `.flowbar` asks for `999px`, which CSS clamps to half the shorter side — a pill
+/// at 40px tall, a circle when the bar is a dot, a rounded stroke when it has
+/// collapsed to a line. Reproducing the clamp here keeps the region's ends the
+/// same shape as the paint's at every size the bar takes.
+fn full_radius((l, t, r, b): Rect) -> f64 {
+    ((r - l).min(b - t) / 2.0).max(0.0)
+}
+
+/// The boxes that actually paint, and how each is rounded.
+///
+/// This is the region, and it is deliberately not one rectangle. The bar is one
+/// or two rounded boxes — the pill, and the menu flush above or below it — and
+/// every pixel of the window outside those boxes has to be outside the region
+/// too, or it shows the webview's surface instead of the user's desktop.
+///
+/// The menu and the pill stay separate parts rather than being merged into one
+/// rounded rectangle because they are rounded by different amounts: 8px for the
+/// menu, half its height for the pill. A single rectangle rounded either way
+/// would leave notches at the other end.
+fn silhouette(
+    view: (f64, f64),
+    pill_w: f64,
+    pill_h: f64,
+    menu_h: f64,
+    margin: f64,
+    above: bool,
+) -> Vec<Part> {
+    let (view_w, _) = view;
+    let left = (view_w - pill_w) / 2.0;
+    let right = left + pill_w;
+
+    // The pill, plus the margin its glow paints into. The margin grows the box on
+    // every side, so the radius grows with it or the corners would tighten as the
+    // glow appeared.
+    let pill: Rect = (
+        left - margin,
+        PILL_TOP - margin,
+        right + margin,
+        PILL_TOP + pill_h + margin,
+    );
+    let mut parts = vec![(pill, full_radius(pill))];
+
+    if menu_h > 0.0 {
+        // Flush against the pill: the menu's edge and the pill's edge are the same
+        // line, so the two rounded boxes touch and the region has no seam between
+        // them. See the note on `.overlay-menu` in overlay.css.
+        let menu: Rect = if above {
+            (left, PILL_TOP - menu_h, right, PILL_TOP)
+        } else {
+            (left, PILL_TOP + pill_h, right, PILL_TOP + pill_h + menu_h)
+        };
+        parts.push((menu, MENU_RADIUS.min(full_radius(menu))));
+    }
+
+    // Clamped to the window: a box that
+    // somehow outgrew the window should produce a region that is merely the whole
+    // window rather than one hanging off the edge.
+    parts
+        .into_iter()
+        .map(|((l, t, r, b), radius)| {
+            (
+                (l.max(0.0), t.max(0.0), r.min(view.0), b.min(view.1)),
+                radius,
+            )
+        })
+        .collect()
 }
 
 /// How many commanded positions to keep for echo detection. Enough to cover a
@@ -418,6 +535,7 @@ impl Overlay {
             active: Mutex::new(false),
             commanded: Mutex::new(VecDeque::new()),
             shape: Mutex::new(None),
+            pill_shape: Mutex::new(None),
             shape_gen: Arc::new(AtomicU64::new(0)),
             // Nominal until the frontend measures itself. These are what the
             // window is supposed to be, so a state read before the first shape
@@ -514,15 +632,27 @@ impl Overlay {
     /// painted in the area being uncovered; shrinking early would clip a pill that
     /// is still painted at its previous, larger size. The delay is cancelled by
     /// any newer shape, so a burst of state changes settles once.
-    pub fn set_shape(
-        &self,
-        win: &WebviewWindow,
-        view: (f64, f64),
-        pill_w: f64,
-        pill_h: f64,
-        margin: f64,
-        above: bool,
-    ) {
+    ///
+    /// **Except across the menu closing.** That rule assumes the old shape is
+    /// still being painted while the new one arrives, which is true of the pill —
+    /// it morphs between sizes over a CSS transition — and false of the menu,
+    /// which is unmounted in the same frame it is dismissed. Unioning against it
+    /// held the region open over a menu that no longer existed for the whole
+    /// `SHAPE_SETTLE_MS`, and an unpainted region is not transparent: it is the
+    /// webview's background, so closing the menu flashed a white panel where the
+    /// menu had been. `menu` says which kind of shape this is, and a shape with no
+    /// menu unions against the last shape that also had no menu — so the pill's
+    /// own morph is still protected and the dead menu box is not.
+    pub fn set_shape(&self, win: &WebviewWindow, s: Shape) {
+        let Shape {
+            view,
+            pill_w,
+            pill_h,
+            menu_h,
+            margin,
+            above,
+            menu,
+        } = s;
         // Bumped for *every* shape, including the ones that need no settle.
         //
         // It used to be bumped only on the path that spawns one, which meant a
@@ -536,17 +666,41 @@ impl Overlay {
         let css_to_phys = css_to_physical(win, view.0);
         self.note_scale(win, view, css_to_phys);
 
-        let next = shape_rect(view, pill_w, pill_h, margin, above);
-        let now = {
+        let next = silhouette(view, pill_w, pill_h, menu_h, margin, above);
+        let next_bounds = bounds_of(&next);
+        // Grow now, shrink late: the region applied immediately is every part of
+        // the old shape *and* every part of the new one, so nothing still being
+        // painted is clipped. Each part keeps its own rounding, so growing does
+        // not reintroduce the square corners this shape exists to avoid.
+        let (now, settle) = {
             let mut cur = self.shape.lock().expect("shape");
-            let union = cur.map_or(next, |c| union_rect(c, next));
-            *cur = Some(next);
-            union
+            let mut pill_only = self.pill_shape.lock().expect("pill shape");
+            // A menu-less shape unions against the last menu-less shape, so a menu
+            // that has just been unmounted cannot hold the region open over an
+            // area nothing paints. See the note above.
+            let base = if menu { cur.clone() } else { pill_only.clone() };
+            cur.clone_from(&Some(next.clone()));
+            if !menu {
+                pill_only.clone_from(&Some(next.clone()));
+            }
+            match base {
+                // The old shape is already inside the new one, so there is nothing
+                // to shrink back from and no settle to schedule.
+                Some(b) if union_rect(bounds_of(&b), next_bounds) == next_bounds => {
+                    (next.clone(), false)
+                }
+                Some(b) => {
+                    let mut both = b;
+                    both.extend_from_slice(&next);
+                    (both, true)
+                }
+                None => (next.clone(), false),
+            }
         };
 
-        apply_region(win, now, css_to_phys);
+        apply_region(win, &now, css_to_phys);
 
-        if now == next {
+        if !settle {
             return;
         }
 
@@ -573,7 +727,7 @@ impl Overlay {
                 // second later, and the whole reason it exists is that the
                 // webview's scale is a thing that changes without warning.
                 let phys = css_to_physical(&target, view.0);
-                apply_region(&target, next, phys);
+                apply_region(&target, &next, phys);
             });
         });
     }
@@ -803,6 +957,16 @@ impl Overlay {
             // thing this window exists not to do.
             ensure_noactivate(win);
         } else {
+            // Before the hide, and it has to be before: the menu is frontend
+            // state, and a bar snoozed with it open came back an hour later still
+            // wearing a 280px panel it had no way to explain. Nothing else in the
+            // app closes it — the webview cannot see the snooze, and the user who
+            // triggered it from the Hub was not looking at the bar.
+            //
+            // Safe to send to a window on its way out: the webview keeps running
+            // while hidden, so the event is processed and the shape is already
+            // right by the time the bar is shown again.
+            let _ = win.emit("overlay-menu-dismiss", ());
             let _ = win.hide();
         }
         tracing::debug!(visible, active, "overlay policy");
@@ -817,16 +981,10 @@ impl Overlay {
             return;
         }
 
-        let Some((origin, area)) = monitor_logical(win) else {
+        let Some((origin, area)) = work_area_logical(win) else {
             return;
         };
-        // Placed by where the *pill* goes, not the window. Both terms are
-        // independent of the pill's width, so auto-placement no longer depends on
-        // which state the bar happens to be in when it runs — which is what made
-        // a bar parked during startup and a bar parked later land tens of pixels
-        // apart.
-        let cx = origin.0 + area.0 / 2.0;
-        let top = origin.1 + area.1 - BOTTOM_GAP - PILL_H;
+        let (cx, top) = center_anchor(origin, area);
         self.command(win, cx, top);
         tracing::debug!(cx, top, "overlay auto-placed");
     }
@@ -871,6 +1029,56 @@ impl Overlay {
         }
         q.push_back((x, y));
     }
+}
+
+/// The pill's anchor for a bar that has nowhere it remembers being: centred
+/// along the bottom of the space the user can actually see.
+///
+/// Pure, and takes the work area rather than reading a monitor, because every
+/// interesting case is a display this machine does not have — an auto-hidden
+/// taskbar, one docked to the left, a second monitor at a negative origin — and
+/// the only way to assert against those is to hand them in.
+///
+/// Both terms are relative to the work area's own origin, so nothing here knows
+/// or cares which monitor it is describing. Centring on `width / 2` alone would
+/// put a bar that lives on the left-hand display onto the right-hand one.
+///
+/// Expressed as the *pill's* anchor, not the window's origin, for the reason
+/// stated on [`origin_for`]: the window is a fixed rectangle around the pill, so
+/// neither term depends on which state the bar happens to be in when this runs.
+fn center_anchor((ox, oy): (f64, f64), (w, h): (f64, f64)) -> (f64, f64) {
+    (ox + w / 2.0, oy + h - BOTTOM_GAP - PILL_H)
+}
+
+/// The monitor's *work area* in logical pixels: origin and size, taskbar excluded.
+///
+/// The distinction from [`monitor_logical`] is the point. A monitor's
+/// `size` is the glass; its work area is what is left once the shell has taken
+/// its share, and the shell's share is not a constant — it moves with the
+/// taskbar's edge, its height, and whether it auto-hides. Placing the bar against
+/// the glass and subtracting a guess is how the bar came to sit 48px above the
+/// taskbar on one machine and behind it on another.
+///
+/// Falls back to the full monitor when a work area is unavailable, which keeps a
+/// platform that does not report one behaving exactly as it did before rather
+/// than dropping the bar into a corner.
+fn work_area_logical(win: &WebviewWindow) -> Option<((f64, f64), (f64, f64))> {
+    let m = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten())?;
+    let scale = m.scale_factor();
+    let area = m.work_area();
+    let size = area.size.to_logical::<f64>(scale);
+    // A zero-sized work area is not a screen with no room on it; it is a monitor
+    // that did not answer. Treating it as real would stack the bar's whole height
+    // above the origin and park it off the top of the display.
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return monitor_logical(win);
+    }
+    let pos = area.position.to_logical::<f64>(scale);
+    Some(((pos.x, pos.y), (size.width, size.height)))
 }
 
 fn monitor_logical(win: &WebviewWindow) -> Option<((f64, f64), (f64, f64))> {
@@ -938,7 +1146,13 @@ fn edge_at(origin_x: f64, width: f64, pill_w: f64, x: f64) -> Edge {
 }
 
 fn snap_box(win: &WebviewWindow, x: f64, y: f64, (w, h): (f64, f64)) -> (f64, f64) {
-    let Some((origin, area)) = monitor_logical(win) else {
+    // The work area, not the monitor, and for the same reason `park` uses it: the
+    // home line a drag snaps to and the home line "Back to center" jumps to have
+    // to be the same line. Measured from the screen instead, `bottom -
+    // BOTTOM_GAP` would sit behind the taskbar, and the bar would have two
+    // different ideas of where the middle of the bottom of the screen is
+    // depending on how it got there.
+    let Some((origin, area)) = work_area_logical(win) else {
         return (x, y);
     };
     let (mut nx, mut ny) = (x, y);
@@ -1046,6 +1260,95 @@ fn css_to_physical(win: &WebviewWindow, view_w: f64) -> f64 {
     f64::from(size.width) / view_w
 }
 
+/// How far a rounded box's edge is inset from its own side anywhere in the pixel
+/// row `y` — the *smallest* inset the row contains.
+///
+/// Smallest, not the inset at the row's centre, because the span built from it
+/// has to cover every pixel the arc touches anywhere in the row. Inside a corner
+/// the arc is widest at the end of the row nearest the corner circle's centre, so
+/// that is the point measured.
+#[cfg(windows)]
+fn corner_inset(y: i32, top: f64, bottom: f64, radius: f64) -> f64 {
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    let (row_top, row_bottom) = (f64::from(y), f64::from(y) + 1.0);
+    // A row that straddles a corner circle's centre line contains the box's full
+    // width, so it has no inset at all.
+    let dy = if row_bottom <= top + radius {
+        (top + radius) - row_bottom
+    } else if row_top >= bottom - radius {
+        row_top - (bottom - radius)
+    } else {
+        return 0.0;
+    };
+    let dy = dy.clamp(0.0, radius);
+    radius - (radius * radius - dy * dy).sqrt()
+}
+
+/// A rounded box as horizontal bands, one per run of identical rows.
+///
+/// # Why not `CreateRoundRectRgn`
+///
+/// Because its arc is rasterised *inside* the curve, and the region is a clip.
+///
+/// A region is aliased — a pixel is in it or it is not — while the pill's edge is
+/// painted antialiased. The two can only coexist if the region contains the
+/// paint: then its staircase falls on pixels the paint left transparent and
+/// nobody sees it. Cut the other way and the region's staircase *becomes* the
+/// edge, because every pixel of the arc's outer falloff is clipped away and what
+/// remains is a hard step of half-lit border.
+///
+/// That is what `CreateRoundRectRgn` was doing. Measured on the running app, a
+/// 204x40 pill at 100%: the region's top row began at window x 119 where the
+/// ideal arc begins at 115.6, so three columns of border went missing on that row
+/// alone, and the rows below it stepped a whole pixel at a time. It had always
+/// been that way; it only became visible when the loading and notice states
+/// painted the border `--warn` yellow instead of the near-black `#34343c` that
+/// had been hiding it against a dark desktop. The listening state escapes it for
+/// a different reason — `GLOW_MARGIN` pushes the region 22px clear of the pill,
+/// so its arc never touches the paint.
+///
+/// So the arc is computed here instead, per row, rounded outward: `floor` on the
+/// left, `ceil` on the right. The region is then at most one pixel wider than the
+/// paint anywhere, and never narrower.
+///
+/// One pixel of region the paint does not reach is safe, which is worth stating
+/// because the note above [`apply_region`] says the opposite about the eight the
+/// square corners used to leave. Measured on the running window rather than
+/// assumed: in the collapsed bar, the sixteen rows of region above and below the
+/// 8px stroke read exactly the desktop behind them, and with the Flow Menu open
+/// its top-left corner went desktop (0x1B1B1B) straight into the menu's
+/// antialiased hairline with nothing light in between. Whatever filled the old
+/// notches, a one-pixel skirt does not reproduce it.
+///
+/// Rows that share a span are merged into one band, which is what keeps this
+/// cheap: a 40px pill is about twenty bands rather than forty, and the straight
+/// middle of the Flow Menu is a single one.
+#[cfg(windows)]
+fn scanlines((l, t, r, b): (i32, i32, i32, i32), radius: f64) -> Vec<(i32, i32, i32, i32)> {
+    if r <= l || b <= t {
+        return Vec::new();
+    }
+    let (lf, tf, rf, bf) = (f64::from(l), f64::from(t), f64::from(r), f64::from(b));
+    // The clamp CSS applies to `border-radius: 999px`. See `full_radius`.
+    let radius = radius.clamp(0.0, ((rf - lf) / 2.0).min((bf - tf) / 2.0));
+
+    let mut bands: Vec<(i32, i32, i32, i32)> = Vec::new();
+    for y in t..b {
+        let inset = corner_inset(y, tf, bf, radius);
+        let (xl, xr) = ((lf + inset).floor() as i32, (rf - inset).ceil() as i32);
+        if xr <= xl {
+            continue;
+        }
+        match bands.last_mut() {
+            Some(last) if (last.0, last.2, last.3) == (xl, xr, y) => last.3 = y + 1,
+            _ => bands.push((xl, y, xr, y + 1)),
+        }
+    }
+    bands
+}
+
 /// Clip the window to a rectangle, so the rest of it neither paints nor takes
 /// clicks.
 ///
@@ -1067,41 +1370,94 @@ fn css_to_physical(win: &WebviewWindow, view_w: f64) -> f64 {
 ///
 /// The system takes ownership of the region on success and must not be asked to
 /// free it; on failure it is ours to delete.
+/// # Why the region is rounded, and built from parts
+///
+/// A rectangle around a rounded box leaves four corner notches that no element
+/// paints. Inside the region those pixels are not transparent: they keep whatever
+/// the webview's surface holds, and nothing ever repaints a pixel no element
+/// covers, so they stay. On a dark desktop they read as small white marks at the
+/// corners of the Flow Menu — the only ones visible, because the menu's own drop
+/// shadow is offset downward and happens to cover every other notch in the
+/// silhouette.
+///
+/// Rounding the region to match the paint removes the pixels from the window
+/// altogether, which is the one fix that does not depend on knowing why the
+/// compositor filled them.
 #[cfg(windows)]
-fn apply_region(win: &WebviewWindow, rect: Rect, css_to_phys: f64) {
+fn apply_region(win: &WebviewWindow, parts: &[Part], css_to_phys: f64) {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
+    use windows::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ, RGN_OR,
+    };
 
     let Ok(handle) = win.hwnd() else {
         return;
     };
-    let (l, t, r, b) = region_box(rect, css_to_phys);
+    let Some(first) = parts.first() else {
+        return;
+    };
     let hwnd = HWND(handle.0 as _);
 
-    // SAFETY: `hwnd` is a live window handle owned by this process. The region is
-    // handed to the system on success and deleted by us only when it was refused.
+    // The union of the parts, for the click-away hit test and the log line. The
+    // notches the rounding removes are a rounding error against a whole window and
+    // are not worth a second hit-test shape.
+    let bounds = parts
+        .iter()
+        .skip(1)
+        .fold(first.0, |acc, (r, _)| union_rect(acc, *r));
+    let (bl, bt, br, bb) = region_box(bounds, css_to_phys);
+
+    // SAFETY: every region below is created by this function and either combined
+    // into `total` and then deleted, or handed to `SetWindowRgn`, which takes
+    // ownership on success. On failure the caller-owned handle is deleted here.
     unsafe {
-        let rgn = CreateRectRgn(l, t, r, b);
-        if rgn.is_invalid() {
-            tracing::warn!(l, t, r, b, "overlay could not create a window region");
+        let total = CreateRectRgn(0, 0, 0, 0);
+        if total.is_invalid() {
+            tracing::warn!("overlay could not create a window region");
             return;
         }
-        if SetWindowRgn(hwnd, rgn, false) == 0 {
-            let _ = DeleteObject(windows::Win32::Graphics::Gdi::HGDIOBJ(rgn.0));
-            tracing::warn!(l, t, r, b, "overlay SetWindowRgn was refused");
+        for (rect, radius) in parts {
+            // Bands rather than one `CreateRoundRectRgn`, because that function's
+            // arc falls inside the painted one and clipping an antialiased edge
+            // with an aliased region is what made the bar's ends a staircase. See
+            // the note on `scanlines`.
+            for (l, t, r, b) in scanlines(region_box(*rect, css_to_phys), radius * css_to_phys) {
+                let part = CreateRectRgn(l, t, r, b);
+                if part.is_invalid() {
+                    let _ = DeleteObject(HGDIOBJ(total.0));
+                    tracing::warn!(l, t, r, b, "overlay could not create a region part");
+                    return;
+                }
+                CombineRgn(total, total, part, RGN_OR);
+                let _ = DeleteObject(HGDIOBJ(part.0));
+            }
+        }
+        if SetWindowRgn(hwnd, total, false) == 0 {
+            let _ = DeleteObject(HGDIOBJ(total.0));
+            tracing::warn!("overlay SetWindowRgn was refused");
             return;
         }
     }
+    let (l, t, r, b) = (bl, bt, br, bb);
+    // The click-away hook needs the same box, and this is the one place that
+    // computes it. Publishing here rather than letting the hook ask GDI keeps a
+    // syscall off the critical path of every mouse button in the system -- see
+    // `clickaway`'s rule 1.
+    //
+    // After the `SetWindowRgn`, not before: both paths above return without
+    // having changed the window's shape, and a published region the system
+    // refused would put the hit test somewhere the bar is not.
+    crate::clickaway::set_region(l, t, r, b);
     tracing::debug!(
         css_to_phys,
-        css = ?rect,
+        parts = parts.len(),
         physical = ?(l, t, r, b),
         "overlay set_shape"
     );
 }
 
 #[cfg(not(windows))]
-fn apply_region(_win: &WebviewWindow, _rect: Rect, _css_to_phys: f64) {}
+fn apply_region(_win: &WebviewWindow, _parts: &[Part], _css_to_phys: f64) {}
 
 /// Put `WS_EX_NOACTIVATE` and `WS_EX_TOOLWINDOW` back on the overlay.
 ///
@@ -1168,6 +1524,14 @@ pub fn window(app: &tauri::AppHandle) -> Option<WebviewWindow> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The bounding box of the real silhouette, so these invariants are asserted
+    /// against the code that actually builds the region rather than a parallel
+    /// copy of its arithmetic. Takes the pill's own height plus a menu height,
+    /// which is how `Shape` carries them.
+    fn bounds(view: (f64, f64), w: f64, pill_h: f64, menu_h: f64, m: f64, above: bool) -> Rect {
+        bounds_of(&silhouette(view, w, pill_h, menu_h, m, above))
+    }
 
     // -- Docking ---------------------------------------------------------
 
@@ -1290,7 +1654,7 @@ mod tests {
                 (240.0, PILL_H, 22.0),
                 (170.0, PILL_H, 0.0),
             ] {
-                let r = shape_rect(view, w, h, m, false);
+                let r = bounds(view, w, h, 0.0, m, false);
                 let p = painted_rect(view.0, w, h);
                 assert!(
                     r.0 <= p.0 && r.1 <= p.1 && r.2 >= p.2 && r.3 >= p.3,
@@ -1305,10 +1669,10 @@ mod tests {
     /// pill's position depends on its width.
     #[test]
     fn pill_top_is_constant_across_states() {
-        let idle = shape_rect(NOMINAL, 150.0, PILL_H, 0.0, false);
-        let listening = shape_rect(NOMINAL, 240.0, PILL_H, 22.0, false);
-        let working = shape_rect(NOMINAL, 170.0, PILL_H, 0.0, false);
-        let alert = shape_rect(NOMINAL, 360.0, PILL_H, 0.0, false);
+        let idle = bounds(NOMINAL, 150.0, PILL_H, 0.0, 0.0, false);
+        let listening = bounds(NOMINAL, 240.0, PILL_H, 0.0, 22.0, false);
+        let working = bounds(NOMINAL, 170.0, PILL_H, 0.0, 0.0, false);
+        let alert = bounds(NOMINAL, 360.0, PILL_H, 0.0, 0.0, false);
 
         assert_eq!(idle.1, PILL_TOP);
         assert_eq!(working.1, PILL_TOP);
@@ -1336,7 +1700,7 @@ mod tests {
             (280.0, 302.0, 0.0, false),
             (280.0, 302.0, 0.0, true),
         ] {
-            let (l, t, r, b) = shape_rect(NOMINAL, w, h, m, above);
+            let (l, t, r, b) = bounds(NOMINAL, w, h, 0.0, m, above);
             assert!(
                 l >= 0.0,
                 "{w}x{h}+{m} (above={above}) overflows the left edge: {l}"
@@ -1362,12 +1726,12 @@ mod tests {
     #[test]
     fn union_is_a_superset_both_ways() {
         let states = [
-            shape_rect(NOMINAL, 150.0, PILL_H, 0.0, false),
-            shape_rect(NOMINAL, 240.0, PILL_H, 22.0, false),
-            shape_rect(NOMINAL, 170.0, PILL_H, 0.0, false),
-            shape_rect(NOMINAL, 360.0, PILL_H, 0.0, false),
-            shape_rect(NOMINAL, 280.0, 302.0, 0.0, false),
-            shape_rect(NOMINAL, 280.0, 302.0, 0.0, true),
+            bounds(NOMINAL, 150.0, PILL_H, 0.0, 0.0, false),
+            bounds(NOMINAL, 240.0, PILL_H, 0.0, 22.0, false),
+            bounds(NOMINAL, 170.0, PILL_H, 0.0, 0.0, false),
+            bounds(NOMINAL, 360.0, PILL_H, 0.0, 0.0, false),
+            bounds(NOMINAL, 280.0, PILL_H, 302.0 - PILL_H, 0.0, false),
+            bounds(NOMINAL, 280.0, PILL_H, 302.0 - PILL_H, 0.0, true),
         ];
         for a in states {
             for b in states {
@@ -1382,16 +1746,128 @@ mod tests {
     /// Snap lines are computed against the pill, so a bar released at the bottom
     /// of the screen puts the *pill* on the edge, not the window.
     #[test]
-    fn shape_rect_is_the_pill_plus_its_margin() {
-        let (l, t, r, b) = shape_rect(NOMINAL, 240.0, PILL_H, 22.0, false);
+    fn the_silhouette_is_the_pill_plus_its_margin() {
+        let (l, t, r, b) = bounds(NOMINAL, 240.0, PILL_H, 0.0, 22.0, false);
         assert_eq!(r - l, 240.0 + 44.0);
         assert_eq!(b - t, PILL_H + 44.0);
+    }
+
+    /// The region is the painted boxes, each rounded the way CSS rounds it.
+    ///
+    /// The bug: a rectangular region around a rounded box leaves corner notches
+    /// that no element paints, and an unpainted pixel inside the region keeps
+    /// whatever the webview's surface holds — white — because nothing ever
+    /// repaints a pixel no element covers. Two of them showed at the top of the
+    /// Flow Menu, the only notches the menu's downward drop shadow misses.
+    #[test]
+    fn the_region_is_two_rounded_boxes_when_the_menu_is_open() {
+        let parts = silhouette(NOMINAL, 280.0, PILL_H, 280.0, 0.0, true);
+        assert_eq!(
+            parts.len(),
+            2,
+            "the pill and the menu are rounded differently"
+        );
+
+        let (pill, pill_r) = parts[0];
+        assert_eq!(pill, (62.0, PILL_TOP, 342.0, PILL_TOP + PILL_H));
+        assert_eq!(
+            pill_r,
+            PILL_H / 2.0,
+            "999px clamps to half the shorter side"
+        );
+
+        let (menu, menu_r) = parts[1];
+        assert_eq!(menu, (62.0, PILL_TOP - 280.0, 342.0, PILL_TOP));
+        assert_eq!(menu_r, MENU_RADIUS, "the menu keeps --r-lg");
+
+        // Flush: the menu's bottom edge is the pill's top edge, so the two rounded
+        // boxes touch and the region has no seam between them.
+        assert_eq!(menu.3, pill.1);
+    }
+
+    /// With no menu there is one box, and it is still rounded.
+    #[test]
+    fn a_bare_pill_is_one_rounded_box() {
+        let parts = silhouette(NOMINAL, 173.0, PILL_H, 0.0, 0.0, false);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].1, PILL_H / 2.0);
+    }
+
+    /// The glow's margin grows the box on every side, so the radius has to grow
+    /// with it — a radius left at the un-inflated value would square the corners
+    /// off exactly when the bar is most visible.
+    #[test]
+    fn the_glow_margin_keeps_the_ends_round() {
+        let parts = silhouette(NOMINAL, 240.0, PILL_H, 0.0, 22.0, false);
+        let ((l, t, r, b), radius) = parts[0];
+        assert_eq!((r - l, b - t), (240.0 + 44.0, PILL_H + 44.0));
+        assert_eq!(radius, (PILL_H + 44.0) / 2.0);
+    }
+
+    /// A menu shape's top edge is exactly the top of the menu.
+    ///
+    /// The frontend sends `pill_h` as the pill plus the *measured* menu, and the
+    /// menu is laid out flush against the pill, so this arithmetic has to put the
+    /// region's top edge exactly where the menu starts painting. It used to be
+    /// handed a modelled height that overshot by 6px, and every one of those
+    /// pixels was region with nothing painted in it.
+    #[test]
+    fn a_menu_shape_starts_where_the_menu_starts() {
+        // 280 tall menu sitting flush on a 40px pill: 320 total.
+        let (_, t, _, b) = bounds(NOMINAL, 280.0, PILL_H, 280.0, 0.0, true);
+        assert_eq!(
+            t,
+            PILL_TOP - 280.0,
+            "the region must start at the menu's top"
+        );
+        assert_eq!(b, PILL_TOP + PILL_H, "and end at the pill's bottom");
+    }
+
+    /// Closing the menu must not leave the region spanning where it used to be.
+    ///
+    /// `union_rect` is the grow-now half of "grow now, shrink late", and it is
+    /// right for the pill, which morphs between sizes while still painted. The
+    /// menu does not morph: it is unmounted in the frame it is dismissed. Unioning
+    /// against it held a region open over nothing for `SHAPE_SETTLE_MS`, which is
+    /// half a second of unpainted window. `set_shape` therefore unions a
+    /// menu-less shape against the last menu-less shape, and this is that rule.
+    #[test]
+    fn a_closing_menu_does_not_drag_its_region_along() {
+        let wide_pill = bounds(NOMINAL, 280.0, PILL_H, 0.0, 0.0, false);
+        let with_menu = bounds(NOMINAL, 280.0, PILL_H, 280.0, 0.0, true);
+        let narrow_pill = bounds(NOMINAL, 173.0, PILL_H, 0.0, 0.0, false);
+
+        // What the old rule did: union the dead menu box into the new pill shape.
+        let old = union_rect(with_menu, narrow_pill);
+        assert!(
+            old.1 < PILL_TOP,
+            "the bug: unioning against the menu keeps the region above the pill"
+        );
+
+        // What the new rule does: union against the last shape that had no menu.
+        let new = union_rect(wide_pill, narrow_pill);
+        assert_eq!(
+            new.1, PILL_TOP,
+            "the region starts at the pill, not the menu"
+        );
+        assert_eq!(new.3, PILL_TOP + PILL_H);
+        // The pill's own width morph is still protected.
+        assert_eq!(new.0, wide_pill.0.min(narrow_pill.0));
+        assert_eq!(new.2, wide_pill.2.max(narrow_pill.2));
     }
 }
 
 #[cfg(all(test, windows))]
 mod region_tests {
     use super::*;
+
+    /// The bounding box of the real silhouette, so these invariants are asserted
+    /// against the code that actually builds the region rather than a parallel
+    /// copy of its arithmetic. Takes the pill's own height plus a menu height,
+    /// which is how `Shape` carries them.
+    fn bounds(view: (f64, f64), w: f64, pill_h: f64, menu_h: f64, m: f64, above: bool) -> Rect {
+        bounds_of(&silhouette(view, w, pill_h, menu_h, m, above))
+    }
 
     /// The layout viewport a healthy webview reports. See `tests::NOMINAL`.
     const NOMINAL: (f64, f64) = (OVERLAY_W, OVERLAY_H);
@@ -1451,7 +1927,7 @@ mod region_tests {
             (150.0, PILL_H, 0.0),
             (240.0, PILL_H, 22.0),
         ] {
-            let (l, t, r, b) = region_box(shape_rect(view, w, h, m, false), css_to_phys);
+            let (l, t, r, b) = region_box(bounds(view, w, h, 0.0, m, false), css_to_phys);
             // Where the bar is painted, in the same physical pixels.
             let left = ((view.0 - w) / 2.0) as i32;
             let (pl, pt, pr, pb) = (
@@ -1467,7 +1943,7 @@ mod region_tests {
         }
 
         // And the shape the old code produced, kept as the thing being ruled out.
-        let old_way = region_box(shape_rect(NOMINAL, 96.0, 24.0, 0.0, false), 1.25);
+        let old_way = region_box(bounds(NOMINAL, 96.0, 24.0, 0.0, 0.0, false), 1.25);
         assert_eq!(old_way, (192, 375, 313, 405));
         assert!(
             old_way.1 > (PILL_TOP + 24.0) as i32,
@@ -1480,10 +1956,219 @@ mod region_tests {
     fn stays_well_formed_at_every_scale() {
         for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
             for (w, m) in [(150.0, 0.0), (240.0, 22.0), (170.0, 0.0), (360.0, 0.0)] {
-                let (l, t, r, b) = region_box(shape_rect(NOMINAL, w, PILL_H, m, false), scale);
+                let (l, t, r, b) = region_box(bounds(NOMINAL, w, PILL_H, 0.0, m, false), scale);
                 assert!(r > l && b > t, "inverted at {scale} for {w}+{m}");
             }
         }
+    }
+
+    // -- The arc ---------------------------------------------------------
+    //
+    // The region is the window's clip and it is aliased: a pixel is in it or it
+    // is not. The paint is antialiased. So the only safe relationship between
+    // them is containment — every pixel the paint touches, however faintly, has
+    // to be in the region, or the region's own staircase becomes the edge the
+    // user sees. See the note on `scanlines`.
+
+    /// Whether a point is inside a rounded box.
+    ///
+    /// The oracle the tests below are measured against, written out longhand
+    /// rather than shared with `scanlines`: a test that computes the answer the
+    /// same way the code does cannot catch the code being wrong.
+    fn inside(x: f64, y: f64, (l, t, r, b): (f64, f64, f64, f64), radius: f64) -> bool {
+        if x < l || x > r || y < t || y > b {
+            return false;
+        }
+        let cx = if x < l + radius {
+            l + radius
+        } else if x > r - radius {
+            r - radius
+        } else {
+            return true;
+        };
+        let cy = if y < t + radius {
+            t + radius
+        } else if y > b - radius {
+            b - radius
+        } else {
+            return true;
+        };
+        (x - cx).powi(2) + (y - cy).powi(2) <= radius * radius
+    }
+
+    /// Whether the pixel square at `(x, y)`, grown by `slack` on every side,
+    /// covers any of the rounded box. Sampled rather than solved, because the
+    /// oracle's job is to be obviously right rather than fast.
+    ///
+    /// Cell centres, not a grid including the square's own boundary: a pixel
+    /// whose corner the curve passes exactly through has no area inside it, and
+    /// no rasteriser lights it. Sampling the boundary would demand the region
+    /// include pixels the paint never touches.
+    fn touches(x: i32, y: i32, boxed: (f64, f64, f64, f64), radius: f64, slack: f64) -> bool {
+        const N: i32 = 24;
+        let span = 1.0 + slack * 2.0;
+        for i in 0..N {
+            for j in 0..N {
+                let step = |k: i32| span * (f64::from(k) + 0.5) / f64::from(N);
+                let (px, py) = (
+                    f64::from(x) - slack + step(i),
+                    f64::from(y) - slack + step(j),
+                );
+                if inside(px, py, boxed, radius) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// The bands as one span per row: `(left, right)` indexed from the top.
+    fn rows(bands: &[(i32, i32, i32, i32)], top: i32, bottom: i32) -> Vec<Option<(i32, i32)>> {
+        let mut out = vec![None; (bottom - top) as usize];
+        for (l, t, r, b) in bands {
+            for y in *t..*b {
+                out[(y - top) as usize] = Some((*l, *r));
+            }
+        }
+        out
+    }
+
+    /// Every shape the bar actually takes, in physical pixels, with the radius
+    /// CSS rounds it by. The last two are the boxes `region_box` produces when
+    /// the pill does not land on a physical pixel at 125%: a box one pixel taller
+    /// than twice its radius, which is the case a formula written for the tidy
+    /// numbers gets wrong.
+    const SHAPES: [((i32, i32, i32, i32), f64); 7] = [
+        ((100, 300, 304, 340), 20.0), // the loading pill, 204x40 at 100%
+        ((154, 300, 250, 324), 12.0), // the collapsed stroke, 96x24
+        ((115, 300, 289, 340), 20.0), // the idle pill, 174x40
+        ((62, 340, 342, 536), 8.0),   // the Flow Menu, 280x196, --r-lg
+        ((125, 375, 380, 426), 25.0), // a pill at 125%
+        ((125, 375, 380, 427), 25.0), // the same, rounded outward by a row
+        ((0, 0, 40, 40), 20.0),       // the dot: a circle
+    ];
+
+    /// The bug behind the pixelated ends.
+    ///
+    /// `CreateRoundRectRgn` rasterises its arc *inside* the ideal curve: measured
+    /// on the running app, a 204x40 pill's region began at window x 119 on its
+    /// top row where the paint began at 115.6, so the outermost three columns of
+    /// the border were clipped away and what was left was a staircase of
+    /// half-lit pixels. Invisible while the border was `#34343c`; unmissable the
+    /// moment the loading and notice states painted it `--warn` yellow.
+    #[test]
+    fn every_painted_pixel_is_inside_the_region() {
+        for (boxed, radius) in SHAPES {
+            let (l, t, r, b) = boxed;
+            let bands = scanlines(boxed, radius);
+            let spans = rows(&bands, t, b);
+            let f = (f64::from(l), f64::from(t), f64::from(r), f64::from(b));
+            for y in t..b {
+                for x in l..r {
+                    if !touches(x, y, f, radius, 0.0) {
+                        continue;
+                    }
+                    let span = spans[(y - t) as usize];
+                    assert!(
+                        span.is_some_and(|(sl, sr)| x >= sl && x < sr),
+                        "{boxed:?} r{radius}: paint at ({x},{y}) is outside the region {span:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// And no wider than it has to be. A region larger than the paint leaves
+    /// pixels inside the window that nothing draws; they are transparent, but a
+    /// band of them would still swallow clicks meant for whatever is behind.
+    #[test]
+    fn no_region_pixel_sits_more_than_a_pixel_outside_the_paint() {
+        for (boxed, radius) in SHAPES {
+            let (l, t, r, b) = boxed;
+            let f = (f64::from(l), f64::from(t), f64::from(r), f64::from(b));
+            for (bl, bt, br, bb) in scanlines(boxed, radius) {
+                assert!(
+                    bl >= l && br <= r && bt >= t && bb <= b,
+                    "{boxed:?}: band escapes the box"
+                );
+                for y in bt..bb {
+                    for x in [bl, br - 1] {
+                        assert!(
+                            touches(x, y, f, radius, 1.0),
+                            "{boxed:?} r{radius}: region pixel ({x},{y}) is nowhere near the paint"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// One band per run of identical rows, covering the box top to bottom with
+    /// no row described twice. Bands are OR-ed into a GDI region one at a time,
+    /// so a duplicate row is wasted work and a missing one is a slit.
+    #[test]
+    fn bands_tile_the_box_top_to_bottom() {
+        for (boxed, radius) in SHAPES {
+            let (_, t, _, b) = boxed;
+            let bands = scanlines(boxed, radius);
+            let mut y = t;
+            for (i, (bl, bt, br, bb)) in bands.iter().enumerate() {
+                assert_eq!(
+                    *bt, y,
+                    "{boxed:?}: band {i} does not start where the last ended"
+                );
+                assert!(bb > bt && br > bl, "{boxed:?}: band {i} is empty");
+                if let Some((pl, _, pr, _)) = bands.get(i.wrapping_sub(1)) {
+                    assert!(
+                        (pl, pr) != (bl, br),
+                        "{boxed:?}: band {i} repeats the span before it"
+                    );
+                }
+                y = *bb;
+            }
+            assert_eq!(y, b, "{boxed:?}: the bands stop short of the box");
+        }
+    }
+
+    /// A pill's ends are round: the top row is narrower than the middle, and the
+    /// two are symmetric about the centre line.
+    #[test]
+    fn a_pill_keeps_its_ends_round() {
+        let boxed = (100, 300, 304, 340);
+        let bands = scanlines(boxed, 20.0);
+        let spans = rows(&bands, 300, 340);
+        let top = spans[0].expect("top row");
+        let middle = spans[20].expect("middle row");
+        assert!(
+            top.1 - top.0 < middle.1 - middle.0,
+            "the top row is as wide as the middle: the ends are square"
+        );
+        assert_eq!(middle, (100, 304), "the middle row is the full width");
+        for y in 0..20 {
+            assert_eq!(spans[y], spans[39 - y], "row {y} is not mirrored");
+        }
+    }
+
+    /// No radius, no arc: one band, the whole box.
+    #[test]
+    fn a_square_box_is_one_band() {
+        assert_eq!(
+            scanlines((10, 20, 30, 40), 0.0),
+            vec![(10, 20, 30, 40)],
+            "a square box should not be described row by row"
+        );
+    }
+
+    /// A radius larger than the box is what `border-radius: 999px` asks for, and
+    /// CSS clamps it to half the shorter side. So does this, rather than
+    /// producing an arc that folds through itself.
+    #[test]
+    fn an_overlarge_radius_is_clamped_like_css() {
+        assert_eq!(
+            scanlines((0, 0, 40, 40), 999.0),
+            scanlines((0, 0, 40, 40), 20.0),
+            "999px should round the box fully, exactly as half its side does"
+        );
     }
 }
 
@@ -1578,5 +2263,76 @@ mod collapse_tests {
         assert_eq!(back.hidden_until, 42, "the snooze was lost");
         assert!(back.mini, "the pinned-small preference was lost");
         assert!(back.cx.is_nan(), "still unplaced");
+    }
+}
+
+/// Where the bar goes when it has no remembered position — and when the user
+/// asks for it back.
+///
+/// Split from `tests` above because those assert the *shape* of the pill and
+/// share the viewport fixtures; these assert where the pill is *put*, against a
+/// monitor's work area, and share nothing with them.
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    /// The primary display on the machine this was written on: 1920x1080 with a
+    /// 48px taskbar along the bottom, so the work area is 1920x1032.
+    const WORK: ((f64, f64), (f64, f64)) = ((0.0, 0.0), (1920.0, 1032.0));
+
+    /// Horizontally centred in the work area, not merely somewhere near the
+    /// middle. Half of 1920 is the whole claim of the feature's name.
+    #[test]
+    fn the_bar_is_centred_in_the_work_area() {
+        let (cx, _) = center_anchor(WORK.0, WORK.1);
+        assert_eq!(cx, 960.0);
+    }
+
+    /// The gap is measured from the *work area's* bottom, which is the top of the
+    /// taskbar — not from the screen's bottom, which is behind it.
+    ///
+    /// This is the bug the feature exposed. The old arithmetic took the full
+    /// monitor height and subtracted a constant that was a guess at how tall a
+    /// taskbar is, so on this display the pill's bottom landed at 984 with 48px
+    /// of dead air under it, and on an auto-hidden taskbar it floated for no
+    /// reason at all.
+    #[test]
+    fn the_bar_sits_one_gap_above_the_taskbar() {
+        let (_, top) = center_anchor(WORK.0, WORK.1);
+        assert_eq!(top + PILL_H, 1032.0 - BOTTOM_GAP, "pill bottom");
+        assert_eq!(top, 976.0);
+    }
+
+    /// A taskbar set to auto-hide leaves the work area equal to the whole screen.
+    /// The bar should then sit a gap above the screen's bottom, because that is
+    /// where the usable space now ends — not 96px up, which is where a hardcoded
+    /// taskbar guess would have left it.
+    #[test]
+    fn an_auto_hidden_taskbar_gives_the_bar_the_whole_screen() {
+        let (cx, top) = center_anchor((0.0, 0.0), (1920.0, 1080.0));
+        assert_eq!(cx, 960.0);
+        assert_eq!(top + PILL_H, 1080.0 - BOTTOM_GAP);
+    }
+
+    /// A taskbar docked to the left insets the work area's *origin*, and a
+    /// centred bar has to follow it. Reading only the size would centre the bar
+    /// on the screen and leave it visibly off-centre within the space the user
+    /// can actually see.
+    #[test]
+    fn a_left_docked_taskbar_shifts_the_centre_right() {
+        let (cx, top) = center_anchor((72.0, 0.0), (1848.0, 1080.0));
+        assert_eq!(cx, 72.0 + 924.0, "centred in the work area, not the screen");
+        assert_eq!(top + PILL_H, 1080.0 - BOTTOM_GAP);
+    }
+
+    /// A secondary display left of the primary has a negative origin. Every term
+    /// here is relative to that origin, so nothing needs to know which monitor it
+    /// is on — but a version that centred on `width / 2` alone would put the bar
+    /// on the wrong screen entirely.
+    #[test]
+    fn a_monitor_at_a_negative_origin_centres_on_itself() {
+        let (cx, top) = center_anchor((-1920.0, 0.0), (1536.0, 816.0));
+        assert_eq!(cx, -1152.0);
+        assert_eq!(top + PILL_H, 816.0 - BOTTOM_GAP);
     }
 }

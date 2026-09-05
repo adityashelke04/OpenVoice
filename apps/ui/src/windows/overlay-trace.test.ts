@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { noteViewportContract, viewportNow } from "./overlay-trace";
+import { mark, noteViewportContract, reportClippedPill, viewportNow } from "./overlay-trace";
 
 /** The window the Flow Bar is created at. `OVERLAY_W`/`OVERLAY_H` in Overlay.tsx. */
 const W = 404;
@@ -76,5 +76,67 @@ describe("noteViewportContract", () => {
   it("does not need both axes to disagree", () => {
     noteViewportContract({ w: W, h: 800 }, W, H);
     expect(err).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** The check that was missing while the bar shipped cropped on every cold launch.
+ *
+ * The window is clipped to the last shape Rust was told about. If the pill is
+ * then painted wider than that shape, the difference is not drawn — the rounded
+ * ends come off flat. Every other alarm in this file passed throughout the real
+ * incident, because each of them compares this side against itself; this one
+ * compares what was sent against what was drawn, which is the only pair that
+ * differed.
+ */
+describe("reportClippedPill", () => {
+  let err: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    err = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Put a flush on the clock far enough back that no morph could still be running. */
+  function flushed(w: number, agoMs = 5000) {
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    mark("flush", { w, h: 40, m: 0, above: false });
+    vi.spyOn(performance, "now").mockReturnValue(agoMs);
+  }
+
+  it("says nothing when the paint is the shape that was sent", () => {
+    flushed(173);
+    reportClippedPill(173);
+    expect(err).not.toHaveBeenCalled();
+  });
+
+  it("reports the cold-launch crop: a 173px pill inside a 168px shape", () => {
+    flushed(168);
+    reportClippedPill(173);
+    expect(err).toHaveBeenCalledOnce();
+    expect(String(err.mock.calls[0][0])).toContain("CLIPPED");
+    // The number the user actually sees, off each rounded end.
+    expect(String(err.mock.calls[0][0])).toContain("2.5px");
+  });
+
+  it("stays quiet while the bar is still morphing towards the shape", () => {
+    // Mid-transition the box is legitimately neither size. An alarm that fired
+    // on every collapse is one nobody would read the day it was right.
+    flushed(168, 200);
+    reportClippedPill(173);
+    expect(err).not.toHaveBeenCalled();
+  });
+
+  it("reports a standing disagreement once, not on every layout pass", () => {
+    flushed(150);
+    reportClippedPill(160);
+    reportClippedPill(160);
+    reportClippedPill(160);
+    expect(err).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a pill narrower than its shape, which is only spare window", () => {
+    flushed(240);
+    reportClippedPill(173);
+    expect(err).not.toHaveBeenCalled();
   });
 });
