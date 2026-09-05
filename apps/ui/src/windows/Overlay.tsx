@@ -26,6 +26,7 @@ import {
   viewportNow,
 } from "./overlay-trace";
 import { useIdleCollapse } from "./useIdleCollapse";
+import { useMenuHeight } from "./useMenuHeight";
 import { useMenuTimeout } from "./useMenuTimeout";
 import { MONO_11, SANS_12, resolveFont, useFontsReady } from "./useFontsReady";
 import "./overlay.css";
@@ -231,16 +232,25 @@ function geometry(v: {
 /** One row of the Flow Menu. `sep` renders a divider before the item. */
 type MenuRow = { id: string; label: string; run: () => void; sep?: boolean };
 
-const MENU_PAD = 4;
-const MENU_ITEM = 28;
-const MENU_SEP = 9;
-
-/** The menu's height, computed from its contents rather than pinned to a number
- *  that silently stops matching the moment an item is added. */
-function menuHeight(rows: MenuRow[]): number {
-  const seps = rows.filter((r) => r.sep).length;
-  return PILL_H + MENU_PAD * 2 + rows.length * MENU_ITEM + seps * MENU_SEP + 12;
-}
+/**
+ * The menu's height is **measured, never modelled**. See `useMenuHeight`.
+ *
+ * There used to be a `menuHeight(rows)` here that added up a padding constant, a
+ * row height, a separator height and a magic `+ 12`. It was wrong by 6px, and the
+ * 6px was the bug: the window's region is clipped to the height this produced, so
+ * a region 6px taller than the menu left a 6px strip inside the clip that nothing
+ * painted. The overlay window is transparent only where the DOM paints — the
+ * comment at the top of `overlay.css` is the contract — so an unpainted strip
+ * inside the region is not see-through. It is the webview's own background, and
+ * it reads as a white bar hanging in the air above the menu.
+ *
+ * The number could have been corrected to 324. It would have been wrong again the
+ * first time anyone changed a padding, added a row, or shipped a font whose
+ * metrics round a button differently. This file has been bitten by exactly this
+ * before — see the note on `barText`, where sizing the window from a private copy
+ * of the component's own logic clipped "Starting the speech engine…" — and the
+ * answer is the same one: ask the thing that knows.
+ */
 
 /** How long the bar takes to slide into a snapped position after a drag. */
 const SETTLE_MS = 220;
@@ -380,7 +390,24 @@ type Anchor = { cx: number; top: number };
  * new listener has to remember to; the loop's "are we there yet?" comparison
  * covers it, which is the only mechanism in this file that has never dropped one.
  */
-type Box = { w: number; h: number; m: number; above?: boolean; vw: number; vh: number };
+type Box = {
+  w: number;
+  h: number;
+  m: number;
+  above?: boolean;
+  vw: number;
+  vh: number;
+  /**
+   * Whether this shape includes the Flow Menu.
+   *
+   * Distinct from `above`, which is only true for a menu that opens *upward* — a
+   * menu opening downward sets `above: false` and would otherwise be
+   * indistinguishable from a bare pill. Rust needs to tell them apart, because
+   * the menu is the one thing here that vanishes rather than morphs and so must
+   * not be unioned into the region after it is gone. See `set_shape`.
+   */
+  menu?: boolean;
+};
 
 /**
  * Where the pill is, given where its window is.
@@ -410,7 +437,13 @@ function anchorFrom(x: number, y: number): Anchor {
  */
 function sameBox(a: Box, b: Box): boolean {
   return (
-    a.w === b.w && a.h === b.h && a.m === b.m && a.above === b.above && a.vw === b.vw && a.vh === b.vh
+    a.w === b.w &&
+    a.h === b.h &&
+    a.m === b.m &&
+    a.above === b.above &&
+    a.menu === b.menu &&
+    a.vw === b.vw &&
+    a.vh === b.vh
   );
 }
 
@@ -419,6 +452,8 @@ function useWindowShape(
   pillH: number,
   margin: number,
   above: boolean,
+  /** Whether the shape includes the menu. See `Box`. */
+  menu: boolean,
   /** The layout viewport, measured. See `Box`. */
   view: { w: number; h: number },
   want: React.MutableRefObject<Box>,
@@ -486,13 +521,19 @@ function useWindowShape(
         // its state, and therefore of a value that could be stale. The window is
         // a constant now. All that crosses the boundary is how big the pill is.
         mark("flush", { w: target.w, h: target.h, m: target.m, above: target.above });
+        // One `shape` payload rather than seven loose arguments: four of them are
+        // numbers and two are booleans, and a transposed pair would still be a
+        // valid call on both sides of the boundary.
         await call("overlay_set_shape", {
-          pillW: target.w,
-          pillH: target.h,
-          margin: target.m,
-          above: target.above ?? false,
-          viewW: target.vw,
-          viewH: target.vh,
+          shape: {
+            pillW: target.w,
+            pillH: target.h,
+            margin: target.m,
+            above: target.above ?? false,
+            menu: target.menu ?? false,
+            viewW: target.vw,
+            viewH: target.vh,
+          },
         });
         sent.current = target;
         mark("flushed", { w: target.w, h: target.h, m: target.m, above: target.above });
@@ -512,9 +553,9 @@ function useWindowShape(
   // calling it on a pass that has nothing to do costs one comparison.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    want.current = { w: pillW, h: pillH, m: margin, above, vw: view.w, vh: view.h };
+    want.current = { w: pillW, h: pillH, m: margin, above, menu, vw: view.w, vh: view.h };
     void flush();
-  }, [pillW, pillH, margin, above, view.w, view.h, ready, fonts, flush, want]);
+  }, [pillW, pillH, margin, above, menu, view.w, view.h, ready, fonts, flush, want]);
 
   // A resize that never lands is silent, and that is what made this expensive.
   //
@@ -542,6 +583,14 @@ export function Overlay() {
   const [menu, setMenu] = useState(false);
   /** Stable, so `useMenuTimeout` is not handed a new callback every render. */
   const closeMenu = useCallback(() => setMenu(false), []);
+  /**
+   * The menu's real height, straight off the mounted element.
+   *
+   * The region the window is clipped to is built from this, and the region has to
+   * match the paint exactly — see `useMenuHeight` for why a computed height was
+   * the wrong shape of answer and what it looked like when it drifted.
+   */
+  const [menuRef, menuH] = useMenuHeight();
   /**
    * Which side the menu opens on, decided once when it opens.
    *
@@ -1303,7 +1352,14 @@ export function Overlay() {
   expectedPillH.current = pillHeight;
   // Frozen when the menu opened -- see `menuAbove`.
   const menuPlacement = menuAbove ? "above" : "below";
-  const shapeHeight = menu ? menuHeight(rows) : pillHeight;
+  // The pill plus the menu, and nothing else.
+  //
+  // `menuH` is measured off the mounted menu (see `useMenuHeight`), and the menu
+  // is laid out flush against the pill, so this sum is exactly the painted extent
+  // rather than an estimate of it. `0` before the first measurement means "just
+  // the pill", which is the only safe answer: the region may grow late, but it
+  // must never be larger than the paint.
+  const shapeHeight = menu && menuH > 0 ? pillHeight + menuH : pillHeight;
 
   // Never both: the menu already claims a much larger box for its own purposes,
   // and stacking the glow margin on top would overshoot it. The menu also closes
@@ -1311,7 +1367,17 @@ export function Overlay() {
   const glowing = live && !menu;
   const margin = glowing ? GLOW_MARGIN : 0;
 
-  useWindowShape(pillWidth, shapeHeight, margin, menu && menuAbove, viewport, box, geomReady, fontsReady);
+  useWindowShape(
+    pillWidth,
+    shapeHeight,
+    margin,
+    menu && menuAbove,
+    menu,
+    viewport,
+    box,
+    geomReady,
+    fontsReady,
+  );
 
   // Measure what was actually painted against the window it was painted in.
   //
@@ -1516,7 +1582,7 @@ export function Overlay() {
       </span>
 
       {menu && menuPlacement === "above" && (
-        <div className="overlay-menu overlay-menu--above" role="menu">
+        <div className="overlay-menu overlay-menu--above" role="menu" ref={menuRef}>
           {rows.map((r) => (
             <div key={r.id}>
               {r.sep && <div className="overlay-menu-sep" />}
@@ -1600,7 +1666,7 @@ export function Overlay() {
       </div>
 
       {menu && menuPlacement === "below" && (
-        <div className="overlay-menu overlay-menu--below" role="menu">
+        <div className="overlay-menu overlay-menu--below" role="menu" ref={menuRef}>
           {rows.map((r) => (
             <div key={r.id}>
               {r.sep && <div className="overlay-menu-sep" />}

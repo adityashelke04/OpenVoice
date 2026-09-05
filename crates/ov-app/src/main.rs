@@ -606,35 +606,52 @@ fn overlay_move(
 /// This replaced `overlay_set_box`. The window is a fixed rectangle now, so the
 /// frontend has no business knowing where it is or how big it is — it says how
 /// big the *pill* is, and the shape follows.
-#[tauri::command]
-fn overlay_set_shape(
-    app: AppHandle,
+/// The shape as it crosses the IPC boundary.
+///
+/// The optional fields are optional for one reason each, and both are about a
+/// frontend that has not finished measuring itself: a missing viewport falls back
+/// to the nominal window rather than being read as a zero, and the two booleans
+/// default to "no menu", which is the smaller region and therefore the safe
+/// answer if either ever goes missing.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShapeArgs {
     pill_w: f64,
     pill_h: f64,
     margin: f64,
     above: Option<bool>,
     view_w: Option<f64>,
     view_h: Option<f64>,
-) {
+    menu: Option<bool>,
+}
+
+#[tauri::command]
+fn overlay_set_shape(app: AppHandle, shape: ShapeArgs) {
     if let Some(win) = overlay::window(&app) {
         // The layout viewport the pill was actually centred in, not the size this
         // window is nominally supposed to be. They are the same number right up
         // until WebView2 changes its rasterization scale, at which point trusting
         // the constant clips the bar off the screen — see `css_to_physical`.
-        //
-        // Optional so that a frontend that has not measured itself yet falls back
-        // to the nominal size rather than sending a zero.
         let view = (
-            view_w.filter(|v| *v > 0.0).unwrap_or(overlay::OVERLAY_W),
-            view_h.filter(|v| *v > 0.0).unwrap_or(overlay::OVERLAY_H),
+            shape
+                .view_w
+                .filter(|v| *v > 0.0)
+                .unwrap_or(overlay::OVERLAY_W),
+            shape
+                .view_h
+                .filter(|v| *v > 0.0)
+                .unwrap_or(overlay::OVERLAY_H),
         );
         app.state::<AppState>().overlay.set_shape(
             &win,
-            view,
-            pill_w,
-            pill_h,
-            margin,
-            above.unwrap_or(false),
+            overlay::Shape {
+                view,
+                pill_w: shape.pill_w,
+                pill_h: shape.pill_h,
+                margin: shape.margin,
+                above: shape.above.unwrap_or(false),
+                menu: shape.menu.unwrap_or(false),
+            },
         );
     }
 }

@@ -319,6 +319,14 @@ pub struct Overlay {
     /// The exact region the window should currently be clipped to, in logical
     /// window coordinates. `None` until the first shape arrives.
     shape: Mutex<Option<Rect>>,
+    /// The last exact region that did **not** include the Flow Menu.
+    ///
+    /// The base for the grow-now union whenever the menu is not on screen. Kept
+    /// separately from `shape` because the menu is the one thing in this window
+    /// that vanishes rather than morphs: unioning a new pill shape against a
+    /// region that still spanned the menu left half a second of clipped-but-
+    /// unpainted window every time the menu closed, which is a white panel.
+    pill_shape: Mutex<Option<Rect>>,
     /// Bumped by every shape. A deferred shrink that wakes to find this changed
     /// has been superseded and does nothing.
     shape_gen: Arc<AtomicU64>,
@@ -333,6 +341,32 @@ pub struct Overlay {
 
 /// A rectangle in logical window coordinates: left, top, right, bottom.
 type Rect = (f64, f64, f64, f64);
+
+/// What the frontend is asking the window to be clipped to.
+///
+/// One struct rather than six positional arguments, because four of them are
+/// `f64` and two are `bool`, and a call site that transposes any pair still
+/// compiles. The fields are the whole of the shape protocol; see [`Overlay::set_shape`].
+#[derive(Debug, Clone, Copy)]
+pub struct Shape {
+    /// The layout viewport the pill was centred in, in CSS pixels.
+    pub view: (f64, f64),
+    /// The pill's painted width.
+    pub pill_w: f64,
+    /// The painted height: the pill, plus the measured menu when one is open.
+    pub pill_h: f64,
+    /// Space reserved around the pill for its glow.
+    pub margin: f64,
+    /// Whether the menu opens upward, which decides which side of the pill the
+    /// extra height is taken from.
+    pub above: bool,
+    /// Whether the Flow Menu is part of this shape.
+    ///
+    /// Not derivable from `above`: a menu opening downward sets `above: false`
+    /// and is otherwise indistinguishable from a bare pill. See `set_shape` for
+    /// what turns on it.
+    pub menu: bool,
+}
 
 /// How long to leave the window clipped to the union of the old and new shapes
 /// before tightening to the new one.
@@ -418,6 +452,7 @@ impl Overlay {
             active: Mutex::new(false),
             commanded: Mutex::new(VecDeque::new()),
             shape: Mutex::new(None),
+            pill_shape: Mutex::new(None),
             shape_gen: Arc::new(AtomicU64::new(0)),
             // Nominal until the frontend measures itself. These are what the
             // window is supposed to be, so a state read before the first shape
@@ -514,15 +549,26 @@ impl Overlay {
     /// painted in the area being uncovered; shrinking early would clip a pill that
     /// is still painted at its previous, larger size. The delay is cancelled by
     /// any newer shape, so a burst of state changes settles once.
-    pub fn set_shape(
-        &self,
-        win: &WebviewWindow,
-        view: (f64, f64),
-        pill_w: f64,
-        pill_h: f64,
-        margin: f64,
-        above: bool,
-    ) {
+    ///
+    /// **Except across the menu closing.** That rule assumes the old shape is
+    /// still being painted while the new one arrives, which is true of the pill —
+    /// it morphs between sizes over a CSS transition — and false of the menu,
+    /// which is unmounted in the same frame it is dismissed. Unioning against it
+    /// held the region open over a menu that no longer existed for the whole
+    /// `SHAPE_SETTLE_MS`, and an unpainted region is not transparent: it is the
+    /// webview's background, so closing the menu flashed a white panel where the
+    /// menu had been. `menu` says which kind of shape this is, and a shape with no
+    /// menu unions against the last shape that also had no menu — so the pill's
+    /// own morph is still protected and the dead menu box is not.
+    pub fn set_shape(&self, win: &WebviewWindow, s: Shape) {
+        let Shape {
+            view,
+            pill_w,
+            pill_h,
+            margin,
+            above,
+            menu,
+        } = s;
         // Bumped for *every* shape, including the ones that need no settle.
         //
         // It used to be bumped only on the path that spawns one, which meant a
@@ -539,8 +585,16 @@ impl Overlay {
         let next = shape_rect(view, pill_w, pill_h, margin, above);
         let now = {
             let mut cur = self.shape.lock().expect("shape");
-            let union = cur.map_or(next, |c| union_rect(c, next));
+            let mut pill_only = self.pill_shape.lock().expect("pill shape");
+            // A menu-less shape unions against the last menu-less shape, so a menu
+            // that has just been unmounted cannot hold the region open over an
+            // area nothing paints. See the note above.
+            let base = if menu { *cur } else { *pill_only };
+            let union = base.map_or(next, |c| union_rect(c, next));
             *cur = Some(next);
+            if !menu {
+                *pill_only = Some(next);
+            }
             union
         };
 
@@ -1405,6 +1459,58 @@ mod tests {
         let (l, t, r, b) = shape_rect(NOMINAL, 240.0, PILL_H, 22.0, false);
         assert_eq!(r - l, 240.0 + 44.0);
         assert_eq!(b - t, PILL_H + 44.0);
+    }
+
+    /// A menu shape's top edge is exactly the top of the menu.
+    ///
+    /// The frontend sends `pill_h` as the pill plus the *measured* menu, and the
+    /// menu is laid out flush against the pill, so this arithmetic has to put the
+    /// region's top edge exactly where the menu starts painting. It used to be
+    /// handed a modelled height that overshot by 6px, and every one of those
+    /// pixels was region with nothing painted in it.
+    #[test]
+    fn a_menu_shape_starts_where_the_menu_starts() {
+        // 280 tall menu sitting flush on a 40px pill: 320 total.
+        let (_, t, _, b) = shape_rect(NOMINAL, 280.0, PILL_H + 280.0, 0.0, true);
+        assert_eq!(
+            t,
+            PILL_TOP - 280.0,
+            "the region must start at the menu's top"
+        );
+        assert_eq!(b, PILL_TOP + PILL_H, "and end at the pill's bottom");
+    }
+
+    /// Closing the menu must not leave the region spanning where it used to be.
+    ///
+    /// `union_rect` is the grow-now half of "grow now, shrink late", and it is
+    /// right for the pill, which morphs between sizes while still painted. The
+    /// menu does not morph: it is unmounted in the frame it is dismissed. Unioning
+    /// against it held a region open over nothing for `SHAPE_SETTLE_MS`, which is
+    /// half a second of unpainted window. `set_shape` therefore unions a
+    /// menu-less shape against the last menu-less shape, and this is that rule.
+    #[test]
+    fn a_closing_menu_does_not_drag_its_region_along() {
+        let wide_pill = shape_rect(NOMINAL, 280.0, PILL_H, 0.0, false);
+        let with_menu = shape_rect(NOMINAL, 280.0, PILL_H + 280.0, 0.0, true);
+        let narrow_pill = shape_rect(NOMINAL, 173.0, PILL_H, 0.0, false);
+
+        // What the old rule did: union the dead menu box into the new pill shape.
+        let old = union_rect(with_menu, narrow_pill);
+        assert!(
+            old.1 < PILL_TOP,
+            "the bug: unioning against the menu keeps the region above the pill"
+        );
+
+        // What the new rule does: union against the last shape that had no menu.
+        let new = union_rect(wide_pill, narrow_pill);
+        assert_eq!(
+            new.1, PILL_TOP,
+            "the region starts at the pill, not the menu"
+        );
+        assert_eq!(new.3, PILL_TOP + PILL_H);
+        // The pill's own width morph is still protected.
+        assert_eq!(new.0, wide_pill.0.min(narrow_pill.0));
+        assert_eq!(new.2, wide_pill.2.max(narrow_pill.2));
     }
 }
 
