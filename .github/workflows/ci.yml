@@ -182,6 +182,15 @@ jobs:
         working-directory: apps/ui
         run: npx tsc --noEmit -p tsconfig.app.json
 
+      # The renderer owns two rules that nothing else can check: when the Flow
+      # Bar is allowed to put itself away, and whether the layout viewport is
+      # still the window it was created at. Both are pure functions with no DOM
+      # of their own, and both were arrived at by getting them wrong in front of
+      # a user. Typecheck and build cannot tell whether either still holds.
+      - name: Test
+        working-directory: apps/ui
+        run: npm test
+
       - name: Build
         working-directory: apps/ui
         run: npm run build

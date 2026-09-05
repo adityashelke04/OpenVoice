@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -101,6 +101,21 @@ pub struct OverlayState {
     pub topmost: bool,
     /// How many times it has had to be put back. See `topmost.rs`.
     pub topmost_recoveries: u64,
+    /// Physical pixels per webview CSS pixel, as last measured. Equals the
+    /// monitor's scale factor when the webview is behaving. See [`css_to_physical`].
+    pub webview_scale: f64,
+    /// The monitor's scale factor, for comparison against `webview_scale`.
+    pub monitor_scale: f64,
+    /// The layout viewport the webview last reported, in CSS pixels. Equals
+    /// `OVERLAY_W` x `OVERLAY_H` when the webview is behaving.
+    pub viewport: (f64, f64),
+    /// How many times the two above have parted company since launch.
+    ///
+    /// Reported for the same reason `topmost_recoveries` is: the user experiences
+    /// this as "the bar disappeared and I had to restart", and until there was a
+    /// number for it there was no way to tell that from a snooze, a lost z-order,
+    /// or a crash. A non-zero count names it.
+    pub scale_desyncs: u64,
 }
 
 /// Persisted overlay state.
@@ -113,10 +128,18 @@ pub struct OverlayState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Placement {
     /// The pill's centre-x, in logical pixels.
-    #[serde(default = "nan")]
+    ///
+    /// `NAN` means "never placed". It is skipped rather than written, because
+    /// JSON has no NaN: `serde_json` renders it as `null`, and `null` will not
+    /// deserialise back into an `f64`. Since [`load`](Self::load) discards a
+    /// parse error and falls back to `default()`, writing one `null` silently
+    /// reset *every* preference in this file on the next launch — the snooze,
+    /// the docked edge, `always_visible`, `mini`. Skipping the field leaves it
+    /// absent, and absent is exactly what `default = "nan"` already restores.
+    #[serde(default = "nan", skip_serializing_if = "is_nan")]
     pub cx: f64,
-    /// The pill's top edge, in logical pixels.
-    #[serde(default = "nan")]
+    /// The pill's top edge, in logical pixels. Skipped when unset, as `cx` is.
+    #[serde(default = "nan", skip_serializing_if = "is_nan")]
     pub top: f64,
     /// Whether the bar is shown when nothing is being dictated.
     #[serde(default = "yes")]
@@ -136,6 +159,21 @@ pub struct Placement {
     /// Which edge the bar is docked to. See [`Edge`].
     #[serde(default)]
     pub edge: Edge,
+    /// Whether the bar collapses to a line on its own after a spell of quiet.
+    ///
+    /// Distinct from [`mini`](Self::mini), which pins it collapsed and ignores
+    /// the clock. This is the default behaviour rather than an opt-in: a bar
+    /// that floats over someone else's window should not hold full width while
+    /// saying nothing.
+    #[serde(default = "yes")]
+    pub auto_collapse: bool,
+    /// How long the bar must be idle before it collapses, in milliseconds.
+    ///
+    /// Persisted rather than constant because the right value depends on how
+    /// fast someone reads a finished transcript, which is not something this
+    /// code can know.
+    #[serde(default = "default_collapse_delay_ms")]
+    pub collapse_delay_ms: u64,
 
     /// Legacy window origin, from before the window was a fixed size.
     ///
@@ -157,6 +195,20 @@ fn nan() -> f64 {
     f64::NAN
 }
 
+/// `serde`'s `skip_serializing_if` hands over a reference; `f64::is_nan` takes
+/// `self` by value, so it cannot be named directly.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_nan(v: &f64) -> bool {
+    v.is_nan()
+}
+
+/// Five seconds: long enough to read a short transcript that has just landed,
+/// short enough that the bar is out of the way before you have started typing
+/// again.
+fn default_collapse_delay_ms() -> u64 {
+    5_000
+}
+
 /// The idle window's width before the window became a fixed size. Used only to
 /// convert a legacy saved position into an anchor.
 const LEGACY_IDLE_W: f64 = 150.0;
@@ -170,6 +222,8 @@ impl Default for Placement {
             hidden_until: 0,
             mini: false,
             edge: Edge::Bottom,
+            auto_collapse: true,
+            collapse_delay_ms: default_collapse_delay_ms(),
             x: None,
             y: None,
         }
@@ -268,21 +322,65 @@ pub struct Overlay {
     /// Bumped by every shape. A deferred shrink that wakes to find this changed
     /// has been superseded and does nothing.
     shape_gen: Arc<AtomicU64>,
+    /// The layout viewport the frontend last reported, in CSS pixels.
+    viewport: Mutex<(f64, f64)>,
+    /// Physical pixels per CSS pixel, as last measured. See [`css_to_physical`].
+    webview_scale: Mutex<f64>,
+    /// Whether the two scales currently disagree, so the transition can be logged
+    /// once rather than the state logged on every shape.
+    scale_wrong: AtomicBool,
 }
 
 /// A rectangle in logical window coordinates: left, top, right, bottom.
 type Rect = (f64, f64, f64, f64);
 
 /// How long to leave the window clipped to the union of the old and new shapes
-/// before shrinking to the new one. Long enough for the webview to have
-/// repainted — the layout viewport was measured settling in 6-20ms — and short
-/// enough that the extra dead zone is never noticed.
-const SHAPE_SETTLE_MS: u64 = 120;
+/// before tightening to the new one.
+///
+/// This serves two jobs, and the second one is why it is no longer 120ms.
+///
+/// 1. The webview has to have repainted. The layout viewport was measured
+///    settling in 6-20ms, so 120 was ample for that alone.
+/// 2. The bar *animates* between shapes. The region is the window's clip: while
+///    a morph is in flight the painted pill is briefly larger than the shape it
+///    is heading for, and a region that tightened first would slice the
+///    animation off mid-flight. It has to outlast the longest transition in
+///    `overlay.css`.
+///
+/// The cost is that the dead zone punched into whatever is underneath lingers
+/// for this long after the bar shrinks. It is transparent and it is the size of
+/// a bar the user chose to place there, so it is a fair price for motion that
+/// is actually visible.
+const SHAPE_SETTLE_MS: u64 = 460;
 
-/// The pill's rectangle within the window, including the margin its glow paints
-/// into. Horizontally centred; the vertical position accommodates menu above/below.
-fn shape_rect(pill_w: f64, pill_h: f64, margin: f64, above: bool) -> Rect {
-    let left = (OVERLAY_W - pill_w) / 2.0 - margin;
+/// How many times the webview's scale has parted company with the monitor's.
+///
+/// See [`css_to_physical`]. Counted rather than merely logged because this is the
+/// mechanism behind "the Flow Bar vanished and only a restart brought it back",
+/// and a symptom that cannot be counted cannot be told apart from three others
+/// that look identical from the outside.
+static SCALE_DESYNCS: AtomicU64 = AtomicU64::new(0);
+
+/// Total desyncs since launch.
+pub fn scale_desyncs() -> u64 {
+    SCALE_DESYNCS.load(Ordering::Relaxed)
+}
+
+/// The pill's rectangle **in the webview's own CSS pixels**, including the margin
+/// its glow paints into.
+///
+/// `view` is the layout viewport the frontend measured, not `OVERLAY_W`/`OVERLAY_H`.
+/// Those two are normally the same number and were assumed to be for months. They
+/// are not the same number, and the day they differ this window disappears — see
+/// [`css_to_physical`] for the failure and the evidence.
+///
+/// The rule this reproduces is the one `overlay.css` actually applies: the pill is
+/// centred in the layout viewport, and its top edge is pinned at `PILL_TOP` CSS
+/// pixels from the top of it. Both terms have to come from the same viewport the
+/// stylesheet used, or the region and the paint describe different rectangles.
+fn shape_rect(view: (f64, f64), pill_w: f64, pill_h: f64, margin: f64, above: bool) -> Rect {
+    let (view_w, view_h) = view;
+    let left = (view_w - pill_w) / 2.0 - margin;
     let right = left + pill_w + margin * 2.0;
     let (top, bottom) = if above {
         let top = PILL_TOP - (pill_h - PILL_H).max(0.0) - margin;
@@ -299,8 +397,8 @@ fn shape_rect(pill_w: f64, pill_h: f64, margin: f64, above: bool) -> Rect {
     (
         left.max(0.0),
         top.max(0.0),
-        right.min(OVERLAY_W),
-        bottom.min(OVERLAY_H),
+        right.min(view_w),
+        bottom.min(view_h),
     )
 }
 
@@ -321,6 +419,12 @@ impl Overlay {
             commanded: Mutex::new(VecDeque::new()),
             shape: Mutex::new(None),
             shape_gen: Arc::new(AtomicU64::new(0)),
+            // Nominal until the frontend measures itself. These are what the
+            // window is supposed to be, so a state read before the first shape
+            // reports agreement rather than a phantom desync.
+            viewport: Mutex::new((OVERLAY_W, OVERLAY_H)),
+            webview_scale: Mutex::new(1.0),
+            scale_wrong: AtomicBool::new(false),
         }
     }
 
@@ -413,25 +517,36 @@ impl Overlay {
     pub fn set_shape(
         &self,
         win: &WebviewWindow,
+        view: (f64, f64),
         pill_w: f64,
         pill_h: f64,
         margin: f64,
         above: bool,
     ) {
-        let next = shape_rect(pill_w, pill_h, margin, above);
-        let (now, is_shrink) = {
+        // Bumped for *every* shape, including the ones that need no settle.
+        //
+        // It used to be bumped only on the path that spawns one, which meant a
+        // grow could not cancel a shrink already in flight: the shrink woke 460ms
+        // later, found the generation it was given still current, and clipped the
+        // window down to a rectangle two states old. With `SHAPE_SETTLE_MS` raised
+        // to outlast the collapse animation that window is nearly half a second
+        // wide, and "collapse, then press the hotkey" lands squarely inside it.
+        let generation = self.shape_gen.fetch_add(1, Ordering::SeqCst) + 1;
+
+        let css_to_phys = css_to_physical(win, view.0);
+        self.note_scale(win, view, css_to_phys);
+
+        let next = shape_rect(view, pill_w, pill_h, margin, above);
+        let now = {
             let mut cur = self.shape.lock().expect("shape");
-            let is_shrink = cur.is_some_and(|c| {
-                (next.2 - next.0) <= (c.2 - c.0) && (next.3 - next.1) <= (c.3 - c.1)
-            });
-            let union = cur.map_or(next, |c| if is_shrink { next } else { union_rect(c, next) });
+            let union = cur.map_or(next, |c| union_rect(c, next));
             *cur = Some(next);
-            (union, is_shrink)
+            union
         };
 
-        apply_region(win, now);
+        apply_region(win, now, css_to_phys);
 
-        if now == next || is_shrink {
+        if now == next {
             return;
         }
 
@@ -439,7 +554,6 @@ impl Overlay {
         // generation, and the task that wakes to find it changed does nothing. The
         // window's state is never read back to decide, so two settles racing cannot
         // apply each other's rectangles.
-        let generation = self.shape_gen.fetch_add(1, Ordering::SeqCst) + 1;
         let win = win.clone();
         let seen = Arc::clone(&self.shape_gen);
         std::thread::spawn(move || {
@@ -455,7 +569,11 @@ impl Overlay {
                 if seen.load(Ordering::SeqCst) != generation {
                     return;
                 }
-                apply_region(&target, next);
+                // Re-measured rather than captured. This runs up to half a
+                // second later, and the whole reason it exists is that the
+                // webview's scale is a thing that changes without warning.
+                let phys = css_to_physical(&target, view.0);
+                apply_region(&target, next, phys);
             });
         });
     }
@@ -545,6 +663,57 @@ impl Overlay {
         p.save();
     }
 
+    /// Turn the idle collapse on or off.
+    ///
+    /// Separate from [`set_mini`](Self::set_mini) because they answer different
+    /// questions. `mini` is "keep it small"; this is "let it get small on its
+    /// own". Someone can want the second without the first, and pinning it
+    /// small should not be the only way to stop it holding full width.
+    pub fn set_auto_collapse(&self, on: bool) {
+        let mut p = self.placement.lock().expect("placement");
+        p.auto_collapse = on;
+        p.save();
+    }
+
+    /// Record what the webview says its scale is, and say so when it is wrong.
+    ///
+    /// Silent in the ordinary case, which is every case until WebView2 changes its
+    /// mind. The log line is written on the *transition* rather than on every
+    /// shape, because a shape is sent several times a dictation and an error
+    /// repeated that often is one nobody reads.
+    fn note_scale(&self, win: &WebviewWindow, view: (f64, f64), css_to_phys: f64) {
+        let monitor = win.scale_factor().unwrap_or(1.0);
+        // One percent. Scale factors move in quarters, so this cannot miss a real
+        // desync; and the viewport arrives as an integer, so a 404px viewport
+        // carries up to 1/404 — a quarter of a percent — of rounding that is not
+        // a disagreement about anything.
+        let wrong = (css_to_phys - monitor).abs() > 0.01;
+        let was = self.scale_wrong.swap(wrong, Ordering::Relaxed);
+        *self.viewport.lock().expect("viewport") = view;
+        *self.webview_scale.lock().expect("scale") = css_to_phys;
+        if wrong == was {
+            return;
+        }
+        if wrong {
+            SCALE_DESYNCS.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                view_w = view.0,
+                view_h = view.1,
+                webview_scale = css_to_phys,
+                monitor_scale = monitor,
+                total = scale_desyncs(),
+                "flow bar webview lost the window's scale; the region is now                  measured from the viewport rather than the monitor, so the bar                  stays visible at the wrong size instead of vanishing"
+            );
+        } else {
+            tracing::info!(
+                view_w = view.0,
+                view_h = view.1,
+                scale = css_to_phys,
+                "flow bar webview scale agrees with the window again"
+            );
+        }
+    }
+
     /// Everything a settings screen needs to say what this window is doing.
     ///
     /// Reported rather than inferred. The bug that prompted this was invisible
@@ -562,6 +731,10 @@ impl Overlay {
             edge: p.edge,
             topmost: crate::topmost::is_topmost(win),
             topmost_recoveries: crate::topmost::recoveries(),
+            webview_scale: *self.webview_scale.lock().expect("scale"),
+            viewport: *self.viewport.lock().expect("viewport"),
+            monitor_scale: win.scale_factor().unwrap_or(1.0),
+            scale_desyncs: scale_desyncs(),
         }
     }
 
@@ -798,19 +971,79 @@ fn snap_box(win: &WebviewWindow, x: f64, y: f64, (w, h): (f64, f64)) -> (f64, f6
     (nx, ny)
 }
 
-/// A logical region rectangle in physical pixels, rounded *outward*.
+/// A rectangle of the webview's CSS pixels in physical pixels, rounded *outward*.
+///
+/// `css_to_phys` used to be the monitor's scale factor, on the assumption that the
+/// webview lays out one CSS pixel per logical pixel. It is now measured — see
+/// [`css_to_physical`] — because that assumption is the bug this pair of functions
+/// most recently caused.
 ///
 /// Outward, not nearest. The region clips both painting and input, so a half
 /// pixel lost off an edge is a half pixel off the pill's 1px border — visible,
 /// and permanent at 125%. Rounding out can only ever leave a sliver of the
 /// window unclipped, which paints nothing and swallows nothing anyone notices.
-fn region_box((l, t, r, b): Rect, scale: f64) -> (i32, i32, i32, i32) {
+fn region_box((l, t, r, b): Rect, css_to_phys: f64) -> (i32, i32, i32, i32) {
     (
-        (l * scale).floor() as i32,
-        (t * scale).floor() as i32,
-        (r * scale).ceil() as i32,
-        (b * scale).ceil() as i32,
+        (l * css_to_phys).floor() as i32,
+        (t * css_to_phys).floor() as i32,
+        (r * css_to_phys).ceil() as i32,
+        (b * css_to_phys).ceil() as i32,
     )
+}
+
+/// How many physical pixels one of the webview's CSS pixels covers.
+///
+/// # The bug
+///
+/// This used to be `win.scale_factor()`, and the difference between that and this
+/// is a bar that vanishes off the user's screen until the app is restarted.
+///
+/// `SetWindowRgn` takes physical pixels. The pill's position is decided by CSS,
+/// in CSS pixels. Converting between them with the *monitor's* scale asserts that
+/// the webview lays out at one CSS pixel per logical pixel — that its
+/// `devicePixelRatio` equals the window's scale factor. Nothing enforces that,
+/// and WebView2 does not always honour it: it keeps its own rasterization scale,
+/// and it can drop that to 1 on a display change, a lock/unlock, or a monitor
+/// wake, without any DPI message reaching this process.
+///
+/// Caught in the wild on 2026-09-05, on a 125% panel, from the frontend's own
+/// instrumentation, with no shape sent for the previous 217 seconds:
+///
+/// ```text
+/// flowbar: viewport settled  via="window" w=505 h=800   <- 404x640 x 1.25
+/// flowbar: pill displaced from anchor  dx=51  view={505,800}  at={205,300}
+/// overlay set_shape scale=1.25 logical=(154,300,250,324) physical=(192,375,313,405)
+/// ```
+///
+/// The bar painted at physical y 300..324 and the window was clipped to y
+/// 375..405. **Disjoint** — and disjoint in every state, because every state's
+/// region was scaled by 1.25 while every state painted at 1.0. So the bar was
+/// invisible collapsed, invisible expanded, invisible while dictating, and no
+/// keypress could bring it back: there was nothing wrong with it except that the
+/// window was clipped to a rectangle it did not occupy.
+///
+/// # Why measuring is the fix rather than correcting the webview
+///
+/// Whatever WebView2 decides its scale is, the client area is a known number of
+/// physical pixels and the frontend can say how many CSS pixels it was given to
+/// lay out in. Their ratio is the conversion, by construction, for any scale the
+/// webview picks — including one this process was never told about. Correcting
+/// the webview instead would leave the region trusting a number it cannot see.
+///
+/// Falls back to the scale factor when the viewport is not yet known or the
+/// window will not report its size, which reproduces the old behaviour exactly.
+fn css_to_physical(win: &WebviewWindow, view_w: f64) -> f64 {
+    let scale = win.scale_factor().unwrap_or(1.0);
+    if view_w <= 0.0 {
+        return scale;
+    }
+    let Ok(size) = win.inner_size() else {
+        return scale;
+    };
+    if size.width == 0 {
+        return scale;
+    }
+    f64::from(size.width) / view_w
 }
 
 /// Clip the window to a rectangle, so the rest of it neither paints nor takes
@@ -835,14 +1068,14 @@ fn region_box((l, t, r, b): Rect, scale: f64) -> (i32, i32, i32, i32) {
 /// The system takes ownership of the region on success and must not be asked to
 /// free it; on failure it is ours to delete.
 #[cfg(windows)]
-fn apply_region(win: &WebviewWindow, rect: Rect) {
+fn apply_region(win: &WebviewWindow, rect: Rect, css_to_phys: f64) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 
-    let (Ok(scale), Ok(handle)) = (win.scale_factor(), win.hwnd()) else {
+    let Ok(handle) = win.hwnd() else {
         return;
     };
-    let (l, t, r, b) = region_box(rect, scale);
+    let (l, t, r, b) = region_box(rect, css_to_phys);
     let hwnd = HWND(handle.0 as _);
 
     // SAFETY: `hwnd` is a live window handle owned by this process. The region is
@@ -860,15 +1093,15 @@ fn apply_region(win: &WebviewWindow, rect: Rect) {
         }
     }
     tracing::debug!(
-        scale,
-        logical = ?rect,
+        css_to_phys,
+        css = ?rect,
         physical = ?(l, t, r, b),
         "overlay set_shape"
     );
 }
 
 #[cfg(not(windows))]
-fn apply_region(_win: &WebviewWindow, _rect: Rect) {}
+fn apply_region(_win: &WebviewWindow, _rect: Rect, _css_to_phys: f64) {}
 
 /// Put `WS_EX_NOACTIVATE` and `WS_EX_TOOLWINDOW` back on the overlay.
 ///
@@ -1017,15 +1250,65 @@ mod tests {
         }
     }
 
+    /// The layout viewport a healthy webview reports: exactly the window.
+    ///
+    /// Named rather than inlined so the tests that assume it are visibly the ones
+    /// assuming it, and the two below that deliberately do not are visibly
+    /// different.
+    const NOMINAL: (f64, f64) = (OVERLAY_W, OVERLAY_H);
+
+    /// Where `overlay.css` actually paints the pill, in CSS pixels.
+    ///
+    /// Centred in the layout viewport, top edge pinned at `PILL_TOP`. This is a
+    /// second statement of the stylesheet's rule, and that is the point: the
+    /// region is only correct if it agrees with a rule written down independently
+    /// of it.
+    fn painted_rect(view_w: f64, pill_w: f64, pill_h: f64) -> Rect {
+        let left = (view_w - pill_w) / 2.0;
+        (left, PILL_TOP, left + pill_w, PILL_TOP + pill_h)
+    }
+
+    /// Every state's region contains the pill, at any viewport the webview picks.
+    ///
+    /// The property the window rests on, and the one that was silently false. The
+    /// region used to be centred in `OVERLAY_W` regardless of what the webview
+    /// laid out in, so a viewport of any other width put the clip and the paint in
+    /// different places — and at 505 CSS pixels they did not even overlap.
+    #[test]
+    fn the_region_contains_the_painted_pill_at_any_viewport() {
+        for view in [
+            NOMINAL,
+            // WebView2 dropping to devicePixelRatio 1 on a 125% panel: the exact
+            // numbers out of the 2026-09-05 log.
+            (505.0, 800.0),
+            // And the other direction, for a webview that scales up instead.
+            (323.2, 512.0),
+        ] {
+            for (w, h, m) in [
+                (96.0, 24.0, 0.0),
+                (150.0, PILL_H, 0.0),
+                (240.0, PILL_H, 22.0),
+                (170.0, PILL_H, 0.0),
+            ] {
+                let r = shape_rect(view, w, h, m, false);
+                let p = painted_rect(view.0, w, h);
+                assert!(
+                    r.0 <= p.0 && r.1 <= p.1 && r.2 >= p.2 && r.3 >= p.3,
+                    "region {r:?} does not contain the pill {p:?}                      for {w}x{h}+{m} in a {view:?} viewport"
+                );
+            }
+        }
+    }
+
     /// The pill is centred horizontally and its top edge never moves, whatever
     /// the state. This is the property the whole fix rests on: no term in the
     /// pill's position depends on its width.
     #[test]
     fn pill_top_is_constant_across_states() {
-        let idle = shape_rect(150.0, PILL_H, 0.0, false);
-        let listening = shape_rect(240.0, PILL_H, 22.0, false);
-        let working = shape_rect(170.0, PILL_H, 0.0, false);
-        let alert = shape_rect(360.0, PILL_H, 0.0, false);
+        let idle = shape_rect(NOMINAL, 150.0, PILL_H, 0.0, false);
+        let listening = shape_rect(NOMINAL, 240.0, PILL_H, 22.0, false);
+        let working = shape_rect(NOMINAL, 170.0, PILL_H, 0.0, false);
+        let alert = shape_rect(NOMINAL, 360.0, PILL_H, 0.0, false);
 
         assert_eq!(idle.1, PILL_TOP);
         assert_eq!(working.1, PILL_TOP);
@@ -1053,7 +1336,7 @@ mod tests {
             (280.0, 302.0, 0.0, false),
             (280.0, 302.0, 0.0, true),
         ] {
-            let (l, t, r, b) = shape_rect(w, h, m, above);
+            let (l, t, r, b) = shape_rect(NOMINAL, w, h, m, above);
             assert!(
                 l >= 0.0,
                 "{w}x{h}+{m} (above={above}) overflows the left edge: {l}"
@@ -1079,12 +1362,12 @@ mod tests {
     #[test]
     fn union_is_a_superset_both_ways() {
         let states = [
-            shape_rect(150.0, PILL_H, 0.0, false),
-            shape_rect(240.0, PILL_H, 22.0, false),
-            shape_rect(170.0, PILL_H, 0.0, false),
-            shape_rect(360.0, PILL_H, 0.0, false),
-            shape_rect(280.0, 302.0, 0.0, false),
-            shape_rect(280.0, 302.0, 0.0, true),
+            shape_rect(NOMINAL, 150.0, PILL_H, 0.0, false),
+            shape_rect(NOMINAL, 240.0, PILL_H, 22.0, false),
+            shape_rect(NOMINAL, 170.0, PILL_H, 0.0, false),
+            shape_rect(NOMINAL, 360.0, PILL_H, 0.0, false),
+            shape_rect(NOMINAL, 280.0, 302.0, 0.0, false),
+            shape_rect(NOMINAL, 280.0, 302.0, 0.0, true),
         ];
         for a in states {
             for b in states {
@@ -1100,7 +1383,7 @@ mod tests {
     /// of the screen puts the *pill* on the edge, not the window.
     #[test]
     fn shape_rect_is_the_pill_plus_its_margin() {
-        let (l, t, r, b) = shape_rect(240.0, PILL_H, 22.0, false);
+        let (l, t, r, b) = shape_rect(NOMINAL, 240.0, PILL_H, 22.0, false);
         assert_eq!(r - l, 240.0 + 44.0);
         assert_eq!(b - t, PILL_H + 44.0);
     }
@@ -1109,6 +1392,9 @@ mod tests {
 #[cfg(all(test, windows))]
 mod region_tests {
     use super::*;
+
+    /// The layout viewport a healthy webview reports. See `tests::NOMINAL`.
+    const NOMINAL: (f64, f64) = (OVERLAY_W, OVERLAY_H);
 
     /// At 100% the logical rectangle survives untouched. This is the case every
     /// developer sees and the reason the scaled cases below went unnoticed.
@@ -1141,14 +1427,156 @@ mod region_tests {
         assert_eq!((l, t, r, b), (123, 0, 483, 60));
     }
 
+    /// The bug: a webview that loses the window's scale must not lose the bar.
+    ///
+    /// Reconstructed from the 2026-09-05 log. The window is a 404x640 logical
+    /// rectangle on a 125% panel, so 505x800 physical. WebView2 dropped its
+    /// rasterization scale to 1, so the layout viewport became 505x800 CSS pixels
+    /// and the collapsed bar painted at physical y 300..324.
+    ///
+    /// The old conversion centred the region in 404 and multiplied by 1.25,
+    /// producing physical (192, 375, 313, 405) — which does not touch the bar at
+    /// any point. Every other state missed by a similar margin, in the same
+    /// direction, which is why the bar was invisible whatever the user pressed and
+    /// why only a restart brought it back.
+    #[test]
+    fn a_webview_that_loses_its_scale_does_not_lose_the_bar() {
+        // 505 physical pixels of client area, laid out as 505 CSS pixels.
+        let view = (505.0, 800.0);
+        let css_to_phys = 505.0 / view.0;
+        assert_eq!(css_to_phys, 1.0, "one CSS pixel per physical pixel");
+
+        for (w, h, m) in [
+            (96.0, 24.0, 0.0),
+            (150.0, PILL_H, 0.0),
+            (240.0, PILL_H, 22.0),
+        ] {
+            let (l, t, r, b) = region_box(shape_rect(view, w, h, m, false), css_to_phys);
+            // Where the bar is painted, in the same physical pixels.
+            let left = ((view.0 - w) / 2.0) as i32;
+            let (pl, pt, pr, pb) = (
+                left,
+                PILL_TOP as i32,
+                left + w as i32,
+                (PILL_TOP + h) as i32,
+            );
+            assert!(
+                l <= pl && t <= pt && r >= pr && b >= pb,
+                "{w}x{h}+{m}: region ({l},{t},{r},{b}) misses the bar at                  ({pl},{pt},{pr},{pb})"
+            );
+        }
+
+        // And the shape the old code produced, kept as the thing being ruled out.
+        let old_way = region_box(shape_rect(NOMINAL, 96.0, 24.0, 0.0, false), 1.25);
+        assert_eq!(old_way, (192, 375, 313, 405));
+        assert!(
+            old_way.1 > (PILL_TOP + 24.0) as i32,
+            "the region the bug produced starts below the bar it was clipping to"
+        );
+    }
+
     /// A rectangle is never inverted by rounding, at any scale.
     #[test]
     fn stays_well_formed_at_every_scale() {
         for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
             for (w, m) in [(150.0, 0.0), (240.0, 22.0), (170.0, 0.0), (360.0, 0.0)] {
-                let (l, t, r, b) = region_box(shape_rect(w, PILL_H, m, false), scale);
+                let (l, t, r, b) = region_box(shape_rect(NOMINAL, w, PILL_H, m, false), scale);
                 assert!(r > l && b > t, "inverted at {scale} for {w}+{m}");
             }
         }
+    }
+}
+
+/// The persisted collapse preferences.
+///
+/// Split into its own module rather than added to `tests` above because it tests
+/// serialisation rather than geometry, and the two share no fixtures.
+#[cfg(test)]
+mod collapse_tests {
+    use super::*;
+
+    /// A settings file written before the collapse existed must load, and must
+    /// load with the collapse *on*.
+    ///
+    /// This is the migration that matters. Every existing user has a file with
+    /// no `auto_collapse` key in it, and `#[serde(default)]` on a `bool` would
+    /// give them `false` — the feature silently off for exactly the people who
+    /// already use the app. `default = "yes"` is not decoration.
+    #[test]
+    fn a_file_from_before_the_feature_gets_the_collapse_on() {
+        let legacy = r#"{"cx": 960.0, "top": 900.0, "mini": false}"#;
+        let p: Placement = serde_json::from_str(legacy).expect("legacy placement parses");
+        assert!(p.auto_collapse, "collapse must default on, not off");
+        assert_eq!(p.collapse_delay_ms, 5_000);
+    }
+
+    /// Both fields survive a save/load cycle, including the non-default values.
+    #[test]
+    fn the_preferences_round_trip() {
+        let mut p = Placement {
+            auto_collapse: false,
+            collapse_delay_ms: 12_000,
+            ..Placement::default()
+        };
+        p.cx = 100.0;
+        p.top = 200.0;
+
+        let json = serde_json::to_string(&p).expect("serialises");
+        let back: Placement = serde_json::from_str(&json).expect("deserialises");
+
+        assert!(!back.auto_collapse);
+        assert_eq!(back.collapse_delay_ms, 12_000);
+    }
+
+    /// `mini` and `auto_collapse` are independent.
+    ///
+    /// They read similarly and it would be easy to collapse them into one flag.
+    /// They are not the same question: `mini` pins the bar small and ignores the
+    /// clock, `auto_collapse` lets the clock make it small. Someone can want
+    /// either without the other, and all four combinations are legal.
+    #[test]
+    fn pinning_small_and_collapsing_on_a_timer_are_different_settings() {
+        for (mini, auto) in [(false, false), (false, true), (true, false), (true, true)] {
+            let p = Placement {
+                mini,
+                auto_collapse: auto,
+                ..Placement::default()
+            };
+            let json = serde_json::to_string(&p).expect("serialises");
+            let back: Placement = serde_json::from_str(&json).expect("deserialises");
+            assert_eq!(back.mini, mini);
+            assert_eq!(back.auto_collapse, auto);
+        }
+    }
+
+    /// A preference set before the bar has ever been placed survives a restart.
+    ///
+    /// Regression test for a silent reset. `cx`/`top` are `NAN` until the bar is
+    /// first positioned; `serde_json` writes NaN as `null`, `null` will not read
+    /// back as `f64`, and `load` turns any parse failure into `default()`. So
+    /// snoozing a never-yet-dragged bar, or turning off the collapse, used to be
+    /// forgotten on the next launch along with every other preference in the
+    /// file. Found by the four-combination test below failing on the default.
+    #[test]
+    fn preferences_survive_a_restart_before_the_bar_is_ever_placed() {
+        let fresh = Placement {
+            auto_collapse: false,
+            hidden_until: 42,
+            mini: true,
+            ..Placement::default()
+        };
+        assert!(fresh.cx.is_nan(), "precondition: never placed");
+
+        let json = serde_json::to_string(&fresh).expect("serialises");
+        assert!(
+            !json.contains("null"),
+            "an unplaced anchor must be absent, not null: {json}"
+        );
+
+        let back: Placement = serde_json::from_str(&json).expect("survives the round trip");
+        assert!(!back.auto_collapse, "the collapse preference was lost");
+        assert_eq!(back.hidden_until, 42, "the snooze was lost");
+        assert!(back.mini, "the pinned-small preference was lost");
+        assert!(back.cx.is_nan(), "still unplaced");
     }
 }

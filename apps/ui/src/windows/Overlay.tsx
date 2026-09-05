@@ -21,8 +21,11 @@ import {
   noteWindowAt,
   probePill,
   reportStuckBox,
+  noteViewportContract,
   watchViewport,
+  viewportNow,
 } from "./overlay-trace";
+import { useIdleCollapse } from "./useIdleCollapse";
 import "./overlay.css";
 
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -49,9 +52,8 @@ const GLOW_MARGIN = 22;
 /**
  * The window's fixed width, and where the pill sits inside it.
  *
- * These are the contract with `overlay.rs`, which declares the same constants
- * (plus the height, which only it and `tauri.conf.json` need), and with
- * `tauri.conf.json`, which creates the window at that size. All three must
+ * These are the contract with `overlay.rs`, which declares the same constants,
+ * and with `tauri.conf.json`, which creates the window at that size. All three must
  * agree: the window exists before this script does, and Rust places it without
  * waiting to be told anything.
  *
@@ -60,6 +62,18 @@ const GLOW_MARGIN = 22;
  * doing; that is the entire point.
  */
 const OVERLAY_W = 404;
+/**
+ * The window's height, in logical pixels. `OVERLAY_H` in `overlay.rs`.
+ *
+ * This side used to have no name for it, on the grounds that nothing here needed
+ * it — the pill is positioned from the top, so its height never entered any sum.
+ * It is here now because there is one thing this side has to be able to check:
+ * whether the layout viewport it is measuring is *the window*. WebView2 can lay
+ * the page out at a different scale from the one the window was created at, and
+ * the only way to notice is to compare both axes against what the window is
+ * supposed to be. See `noteViewportContract`.
+ */
+const OVERLAY_H = 640;
 /** The pill's top edge, from the window's top. Symmetrical vertical center: 300px headroom above, 300px below. */
 const PILL_TOP = 300;
 
@@ -80,6 +94,46 @@ const PILL_H = 40;
  * read as a pill rather than as a line.
  */
 const MINI_H = 22;
+
+/**
+ * The collapsed bar's width. Long enough to find, short enough to ignore.
+ *
+ * Was 64. Widened because "short enough to ignore" turned out to be the easy
+ * half of that sentence and "long enough to find" the hard one: at 64x5 the
+ * first person to use it could not locate the bar on their own screen.
+ *
+ * Its *height* is not here. The stroke is 4px, and that number lives only in
+ * `overlay.css` as `--line-h`, because only CSS paints it — this file's business
+ * is the box the window is clipped to, which is `LINE_HIT`. Putting the stroke
+ * height here too would create a third opinion about a size, which is the exact
+ * failure mode `geometry()` exists to prevent.
+ */
+const LINE_W = 96;
+
+/**
+ * The collapsed bar's *clickable* height, which is not the height it paints.
+ *
+ * This one lives here alone. `PILL_H` is triplicated because Rust genuinely
+ * computes with it in `shape_rect`; this number only ever travels to Rust as
+ * part of the box `set_shape` is handed, so a mirrored constant over there
+ * would be a second opinion with no reader — the very thing `geometry()` exists
+ * to prevent. Clippy caught it as dead code, and clippy was right.
+ *
+ * The stroke is 8px (`--line-h` in `overlay.css`), and the window is clipped to
+ * a band three times that, so the extra is invisible target.
+ *
+ * This still sits under the 44px minimum-target guideline, and the reason is the
+ * one in `useWindowBox`: on a transparent, click-through-less window every pixel
+ * of hit area is a dead zone punched into whatever is underneath, so a 44px band
+ * would be a 96x44 hole in the user's screen for a bar they deliberately put
+ * away.
+ *
+ * But 16 was too far the other way. The dead-zone argument justifies being under
+ * 44; it does not justify being as small as possible, and treating it as though
+ * it did produced a control that was hard to find and hard to hit. 24 keeps the
+ * hole modest while giving the pointer something real to land on.
+ */
+const LINE_HIT = 24;
 
 /**
  * Pointer travel, in pixels, that turns a press into a drag rather than a click.
@@ -105,6 +159,8 @@ type Geo = { w: number; h: number };
 function geometry(v: {
   mode: FlowMode;
   mini: boolean;
+  /** Put away on the idle clock. Outranks every tier below except the menu. */
+  collapsed?: boolean;
   edge: FlowEdge;
   menu: boolean;
   hint: string;
@@ -115,6 +171,27 @@ function geometry(v: {
   // its standard height (PILL_H or MINI_H). The window's overall shape is expanded
   // to menuHeight(rows) separately in useWindowShape.
   if (v.menu) return { w: 280, h: v.mini ? MINI_H : PILL_H };
+
+  // Put away. Above every tier below it and below the menu, because opening the
+  // menu is a deliberate act and a bar that stayed a stroke under its own open
+  // menu would be a panel hanging off nothing.
+  //
+  // No mode test here on purpose: every mode worth reading — live, working, and
+  // all four that `flowSpeaks` covers — blocks the clock in `useIdleCollapse`,
+  // so by the time this is reached the bar has nothing to say. Testing the mode
+  // again would be a second copy of that rule, drifting from the first.
+  if (v.collapsed) {
+    // The box is `LINE_HIT`, not `LINE_H`. What this function returns is the
+    // region the window is clipped to, and the 4px stroke is painted centred
+    // inside it by `overlay.css` — so the invisible margin that makes a 4px bar
+    // clickable lives in one place, and this stays the single sizing authority
+    // rather than growing a second rule about hit areas.
+    //
+    // On a side edge the stroke stands up with the bar. A horizontal line on a
+    // vertical edge reads as a scrap of some other window.
+    const column = v.edge !== "bottom";
+    return column ? { w: LINE_HIT, h: LINE_W } : { w: LINE_W, h: LINE_HIT };
+  }
 
   // Docked to a side edge, with nothing that needs words: a column. Anything
   // with a sentence to deliver unfurls back to horizontal — see `flowSpeaks`.
@@ -285,8 +362,22 @@ const FAILED_OUTCOMES = new Set(["asr_failed", "capture_failed"]);
  * The anchor still moves when the user moves the bar, and only then.
  */
 type Anchor = { cx: number; top: number };
-/** The pill, not the window: its painted size, glow margin, and whether menu opens above. */
-type Box = { w: number; h: number; m: number; above?: boolean };
+/**
+ * The pill, not the window: its painted size, glow margin, and whether menu opens
+ * above — plus the layout viewport it is centred in.
+ *
+ * The viewport is part of the *shape*, not context alongside it, and that is the
+ * fix. Rust clips the window to a rectangle it computes by centring the pill in
+ * the viewport; if the viewport changes and no shape follows, the clip describes
+ * a rectangle that no longer exists and the bar is cut off — in the reported case,
+ * cut off entirely, in every state, until the app was restarted.
+ *
+ * Carrying it here means a viewport change *is* a shape change, so the
+ * convergence loop below re-sends it for the same reason it re-sends a width. No
+ * new listener has to remember to; the loop's "are we there yet?" comparison
+ * covers it, which is the only mechanism in this file that has never dropped one.
+ */
+type Box = { w: number; h: number; m: number; above?: boolean; vw: number; vh: number };
 
 /**
  * Where the pill is, given where its window is.
@@ -306,11 +397,27 @@ type Box = { w: number; h: number; m: number; above?: boolean };
 function anchorFrom(x: number, y: number): Anchor {
   return { cx: x + OVERLAY_W / 2, top: y + PILL_TOP };
 }
+/**
+ * Whether two shapes are the same request.
+ *
+ * One definition, because there were two and they disagreed: the convergence loop
+ * and the stuck-box alarm each spelled the comparison out by hand, so a field
+ * added to `Box` had to be remembered in both or the loop would keep sending
+ * while the alarm insisted everything had arrived.
+ */
+function sameBox(a: Box, b: Box): boolean {
+  return (
+    a.w === b.w && a.h === b.h && a.m === b.m && a.above === b.above && a.vw === b.vw && a.vh === b.vh
+  );
+}
+
 function useWindowShape(
   pillW: number,
   pillH: number,
   margin: number,
   above: boolean,
+  /** The layout viewport, measured. See `Box`. */
+  view: { w: number; h: number },
   want: React.MutableRefObject<Box>,
   ready: boolean,
 ) {
@@ -358,7 +465,7 @@ function useWindowShape(
       for (;;) {
         const target = want.current;
         const s = sent.current;
-        if (s && s.w === target.w && s.h === target.h && s.m === target.m && s.above === target.above) return;
+        if (s && sameBox(s, target)) return;
 
         // No position and no anchor in this call, deliberately.
         //
@@ -372,6 +479,8 @@ function useWindowShape(
           pillH: target.h,
           margin: target.m,
           above: target.above ?? false,
+          viewW: target.vw,
+          viewH: target.vh,
         });
         sent.current = target;
         mark("flushed", { w: target.w, h: target.h, m: target.m, above: target.above });
@@ -391,9 +500,9 @@ function useWindowShape(
   // calling it on a pass that has nothing to do costs one comparison.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    want.current = { w: pillW, h: pillH, m: margin, above };
+    want.current = { w: pillW, h: pillH, m: margin, above, vw: view.w, vh: view.h };
     void flush();
-  }, [pillW, pillH, margin, above, ready, flush, want]);
+  }, [pillW, pillH, margin, above, view.w, view.h, ready, flush, want]);
 
   // A resize that never lands is silent, and that is what made this expensive.
   //
@@ -408,7 +517,7 @@ function useWindowShape(
     const id = window.setInterval(() => {
       const s = sent.current;
       const w = want.current;
-      if (!s || (s.w === w.w && s.h === w.h && s.m === w.m && s.above === w.above)) return;
+      if (!s || sameBox(s, w)) return;
       reportStuckBox(s, w, sending.current);
     }, 500);
     return () => window.clearInterval(id);
@@ -419,9 +528,47 @@ export function Overlay() {
   const { view, levelRef } = useLiveEngine();
   const { settings } = useSettings();
   const [menu, setMenu] = useState(false);
+  /**
+   * The layout viewport, measured rather than assumed to be `OVERLAY_W`x`OVERLAY_H`.
+   *
+   * State, not a ref, because it has to re-render: the shape sent to Rust is
+   * derived from it, and Rust clips the window to that shape. A viewport change
+   * that produced no render produced no shape, and the window went on being
+   * clipped to a rectangle computed from a viewport that no longer existed —
+   * which is how the bar came to be invisible in every state at once.
+   */
+  const [viewport, setViewport] = useState(viewportNow);
   const [snapping, setSnapping] = useState(false);
   /** Compact rather than full. Persisted in Rust; see `overlay_set_mini`. */
   const [mini, setMini] = useState(false);
+  /**
+   * Whether the bar is allowed to put itself away on the idle clock. Persisted
+   * in Rust; see `overlay_set_auto_collapse`.
+   *
+   * Defaults to `true` here as well as in Rust, so the first frame — before the
+   * persisted value has made the round trip — is the same shape as every frame
+   * after it for the overwhelming majority of users.
+   */
+  const [autoCollapse, setAutoCollapse] = useState(true);
+  /** How long the quiet has to last. Persisted alongside `autoCollapse`. */
+  const [collapseDelayMs, setCollapseDelayMs] = useState(5000);
+  /** Bumped by a click on the put-away bar. See `useIdleCollapse`. */
+  const [wake, setWake] = useState(0);
+  /**
+   * The microphone is open with no key held — a double-tap latch.
+   *
+   * Pushed from Rust rather than derived here, because the gesture that opens it
+   * is recognised in `taplatch.rs` and nothing about it reaches the view state.
+   */
+  const [latched, setLatched] = useState(false);
+  /**
+   * Whether the bar is currently put away, readable from the mouse handlers.
+   *
+   * A ref because `collapsed` is derived far below these callbacks — it needs
+   * `mode`, which needs the whole view — and a `const` cannot be read above its
+   * own declaration. Assigned once per render, right where it is computed.
+   */
+  const collapsedRef = useRef(false);
   /** Whether the pointer is over the bar, which is what expands a compact one. */
   const [hovering, setHovering] = useState(false);
   /** Which edge the bar is docked to, and so which axis it lays out on. */
@@ -449,7 +596,7 @@ export function Overlay() {
   /** The box the window has been told to be. Read only by `useWindowGeometry`:
    *  converting a window position back into an anchor uses `anchorFrom`, which
    *  reads the window rather than this. See the note there. */
-  const box = useRef<Box>({ w: 150, h: 40, m: 0 });
+  const box = useRef<Box>({ w: 150, h: 40, m: 0, vw: OVERLAY_W, vh: OVERLAY_H });
   /**
    * Positions this side has commanded, so moves reported back can be recognised
    * as our own rather than guessed at. See `COMMANDED_HISTORY`.
@@ -509,6 +656,34 @@ export function Overlay() {
     return () => un?.();
   }, []);
 
+  // Same arrangement as `overlay-mini`, and for the same reason: the collapse
+  // preference can be changed from the bar's own menu or from the Hub, and
+  // whichever window did not send it still has to re-render.
+  useEffect(() => {
+    if (!inTauri()) return;
+    let un: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      un = await listen<boolean>("overlay-auto-collapse", ({ payload }) =>
+        setAutoCollapse(payload),
+      );
+    })();
+    return () => un?.();
+  }, []);
+
+  // Whether the microphone is latched open. Rust clears this on every route out
+  // of a session -- a tap, the bar's own control, Escape, a fault -- so the bar
+  // cannot be left claiming an open microphone after one has closed.
+  useEffect(() => {
+    if (!inTauri()) return;
+    let un: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      un = await listen<boolean>("overlay-latched", ({ payload }) => setLatched(payload));
+    })();
+    return () => un?.();
+  }, []);
+
   // Derive the anchor from the window once. Rust places the bar before this
   // window's script runs, so the starting point has to come from the window
   // itself rather than from a constant.
@@ -530,11 +705,21 @@ export function Overlay() {
       // the bar is never briefly the wrong shape on launch.
       void (async () => {
         const saved = (await call("overlay_placement")) as
-          | { mini?: boolean; edge?: FlowEdge }
+          | {
+              mini?: boolean;
+              edge?: FlowEdge;
+              auto_collapse?: boolean;
+              collapse_delay_ms?: number;
+            }
           | undefined;
         if (!live || !saved) return;
         if (saved.mini) setMini(true);
         if (saved.edge) setEdge(saved.edge);
+        // Tested against `undefined` rather than for truthiness, because `false`
+        // is the value that matters here: someone who turned the collapse off
+        // must not have it turned back on by a falsy check.
+        if (saved.auto_collapse !== undefined) setAutoCollapse(saved.auto_collapse);
+        if (saved.collapse_delay_ms !== undefined) setCollapseDelayMs(saved.collapse_delay_ms);
       })();
       // Seeds the trace's idea of where the window is. It is maintained after
       // this by parking and by the settle, the only two things that move it.
@@ -884,6 +1069,18 @@ export function Overlay() {
     // A drag ends inside the OS move loop, which never returns a mouse-up here.
     // Reaching this line at all means the pointer stayed put: a click.
     if (!p || p.moved || p.dismissed) return;
+    // A click on the put-away bar brings it back, and does nothing else.
+    //
+    // It deliberately does not also start dictating. The two gestures would be
+    // indistinguishable — the bar is 4px tall, so anyone clicking it is aiming
+    // at a stroke they can barely see — and of the two possible mistakes,
+    // opening the microphone by accident is much the worse one. Hovering
+    // already reveals the bar without a click at all; this is for the times the
+    // pointer arrives by tap rather than by travel.
+    if (collapsedRef.current) {
+      setWake((w) => w + 1);
+      return;
+    }
     // Nothing to start yet. The bar says so in this state — see `status` — and a
     // click that silently did nothing would contradict what it is displaying.
     if (status !== "ready") return;
@@ -938,7 +1135,88 @@ export function Overlay() {
   // only the component knew there was a sentence coming.
   const barText = flowText({ mode, message: messageText, progress });
 
-  const rows = useFlowMenu({ mini, live, working, setMenu, setMini });
+  // The idle clock.
+  //
+  // Composed with `mini` rather than merged into it, because they answer
+  // different questions and both answers are worth keeping. `mini` is what size
+  // the bar rests at when you are looking at it; this is whether it stays that
+  // size when you are not. Hovering a collapsed bar reveals whichever of the two
+  // resting forms the user chose.
+  //
+  // `snapping` stands in for the whole of dragging: a bar being dragged is under
+  // the pointer, so `hovering` already holds it open, and `snapping` covers the
+  // moment after release while it settles.
+  // Whether the collapse transition is in flight. See the invariant check below.
+  const morphing = useRef(false);
+  /** The height `geometry()` last asked for, for the settled-size assertion. */
+  const expectedPillH = useRef(PILL_H);
+
+  const collapsed = useIdleCollapse(
+    {
+      live,
+      working,
+      menu,
+      hovering,
+      moving: snapping,
+      speaking: flowSpeaks(mode),
+    },
+    collapseDelayMs,
+    autoCollapse,
+    wake,
+  );
+  collapsedRef.current = collapsed;
+
+  // Raised when the shape changes and lowered by the element that actually
+  // finishes moving, rather than by a timer guessing the duration. A timer here
+  // would be a third copy of the CSS durations, drifting the first time one of
+  // them was tuned.
+  useLayoutEffect(() => {
+    if (!inTauri()) return;
+    const el = hit.current;
+    if (!el) return;
+    morphing.current = true;
+    const done = (e: TransitionEvent) => {
+      if (e.target !== el) return;
+      if (e.propertyName !== "width" && e.propertyName !== "height") return;
+      // The two axes are deliberately staggered, so this fires twice and the
+      // first one arrives while the other is still travelling. Clearing the flag
+      // there would re-create the false alarm this whole effect exists to stop.
+      //
+      // The settled height is the signal, not the event count: if the box is not
+      // yet the size it is heading for, another transition is still running and
+      // there is nothing to assert.
+      if (Math.abs(el.getBoundingClientRect().height - expectedPillH.current) > 1) return;
+      morphing.current = false;
+      // Assert the settled size. This is the reading that matters: a box still
+      // at the wrong height once the animation has finished is the squished pill
+      // this check exists to catch.
+      //
+      // Read from a ref rather than recomputed. Calling `geometry()` again here
+      // would be a second opinion about a size -- the precise failure that
+      // function exists to prevent -- and it would be a stale one, since this
+      // handler closes over the render that armed it.
+      checkInvariants(el, PILL_TOP, expectedPillH.current);
+    };
+    el.addEventListener("transitionend", done);
+    return () => {
+      el.removeEventListener("transitionend", done);
+      // A shape change that lands while an earlier one is still travelling must
+      // not leave the flag raised forever.
+      morphing.current = false;
+    };
+    // Keyed on the shape alone: this arms on a size change, and re-arming it on
+    // every unrelated re-render would keep the flag raised.
+  }, [collapsed, compact, menu, edge]);
+
+  const rows = useFlowMenu({
+    mini,
+    live,
+    working,
+    autoCollapse,
+    setMenu,
+    setMini,
+    setAutoCollapse,
+  });
 
   const isClipboardFallback =
     alerting &&
@@ -973,6 +1251,7 @@ export function Overlay() {
   const geo = geometry({
     mode,
     mini: compact,
+    collapsed,
     edge,
     menu,
     hint,
@@ -981,6 +1260,7 @@ export function Overlay() {
   });
   const pillWidth = geo.w;
   const pillHeight = geo.h;
+  expectedPillH.current = pillHeight;
   // If the bar is near the top of the screen (top < 340), open menu below; otherwise open above.
   const menuAbove = (anchor.current?.top ?? 900) >= 340;
   const menuPlacement = menuAbove ? "above" : "below";
@@ -992,7 +1272,7 @@ export function Overlay() {
   const glowing = live && !menu;
   const margin = glowing ? GLOW_MARGIN : 0;
 
-  useWindowShape(pillWidth, shapeHeight, margin, menu && menuAbove, box, geomReady);
+  useWindowShape(pillWidth, shapeHeight, margin, menu && menuAbove, viewport, box, geomReady);
 
   // Measure what was actually painted against the window it was painted in.
   //
@@ -1001,9 +1281,21 @@ export function Overlay() {
   // saying the pill is 240px wide in a 150px window. Runs after layout on every
   // pass rather than being gated behind a debug flag, because the frames this
   // catches are the ones nobody is watching for. See overlay-trace.ts.
+  //
+  // The height assertion is suspended while the collapse is animating, and only
+  // then. `checkInvariants` measures the painted box the instant layout settles,
+  // but the box is on a 200-260ms transition between the two sizes, so mid-flight
+  // it is legitimately neither of them -- and asserting against it there produced
+  // an INVARIANT error on every single collapse and expand. That is worse than no
+  // check at all: an alarm that cries wolf twice a minute is one nobody reads the
+  // day it is right.
+  //
+  // Suspended, not weakened. The width-versus-window check still runs throughout,
+  // and the height is asserted again the moment the transition ends -- which is
+  // when a box that settled at the wrong size would actually be a bug.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    checkInvariants(hit.current, PILL_TOP, pillHeight);
+    checkInvariants(hit.current, PILL_TOP, morphing.current ? undefined : pillHeight);
     // And separately: where the pill actually landed *on screen*, against where
     // it belongs. `checkInvariants` can pass in full while the bar is visibly in
     // the wrong place, because a pill centred in a viewport that has not caught
@@ -1011,7 +1303,43 @@ export function Overlay() {
     probePill(hit.current, anchor.current);
   });
 
-  useEffect(() => watchViewport(), []);
+  useEffect(() => {
+    // One place learns the viewport, and everything downstream follows from the
+    // state it sets: the shape sent to Rust, and therefore the region the window
+    // is clipped to. Nothing else may send a shape derived from a viewport, or
+    // there are two answers to how big the bar is again.
+    //
+    // Setting the *same* size returns the previous object, so React bails out and
+    // the poll below costs one comparison rather than a render every half second.
+    const sync = (v: { w: number; h: number }) => {
+      setViewport((prev) => (prev.w === v.w && prev.h === v.h ? prev : v));
+      noteViewportContract(v, OVERLAY_W, OVERLAY_H);
+    };
+
+    const stop = watchViewport(sync);
+
+    // The listeners attach after the first paint, so anything that moved between
+    // the initial read and here happened unobserved. Read once more now that
+    // something is watching, rather than waiting for the next change to reveal a
+    // size that has already been wrong for a frame.
+    sync(viewportNow());
+
+    // And a poll, because the whole failure is that the window ends up clipped to
+    // a region derived from a viewport that no longer exists — and every part of
+    // detecting that is event-driven.
+    //
+    // All three listeners above did fire for the incident this was written for,
+    // so this is not the mechanism; it is the answer to "what if one day none of
+    // them does". The cost of being wrong is not a lost frame, it is a bar that
+    // is invisible until the app is restarted, and half a second is a much better
+    // worst case than that.
+    const id = window.setInterval(() => sync(viewportNow()), 500);
+
+    return () => {
+      window.clearInterval(id);
+      stop();
+    };
+  }, []);
 
   // Keep the cached scale honest.
   //
@@ -1071,7 +1399,9 @@ export function Overlay() {
   // from a waveform, and the whole point of this window is knowing whether the
   // microphone is open. Lost in an earlier rewrite; restored here.
   const spoken = live
-    ? "Listening. Press Escape to discard."
+    ? latched
+      ? "Microphone open, hands-free. Tap the shortcut or click the bar to stop. Escape discards."
+      : "Listening. Press Escape to discard."
     : working
       ? "Writing your words"
       : mode === "enginefail"
@@ -1147,8 +1477,25 @@ export function Overlay() {
           e.preventDefault();
           setMenu((m) => !m);
         }}
-        title="Click to dictate · drag to move · right-click for options"
+        data-collapsed={collapsed}
+        title={
+          collapsed
+            ? "Click to bring the bar back · drag to move · right-click for options"
+            : "Click to dictate · drag to move · right-click for options"
+        }
       >
+        {/* Always mounted, never conditional.
+            Rendering it only while collapsed was the seam behind the "pop":
+            the stroke disappeared in one frame and the pill arrived in another,
+            with no state in between for any easing to act on. Mounted, the two
+            cross-fade and the bar reads as one object changing shape.
+
+            Decorative, and `aria-hidden` for that reason: the `sr-only` live
+            region already says what the bar is doing, and it says the same thing
+            whatever size the bar happens to be. Collapsing is a change of shape,
+            not of state; announcing it would interrupt someone with news that
+            nothing had happened. */}
+        <span className="flowbar-line" aria-hidden />
         <FlowBar
           live={live}
           levelRef={levelRef}
@@ -1164,6 +1511,7 @@ export function Overlay() {
           progress={progress}
           mini={compact}
           edge={edge}
+          latched={latched}
           onCancel={() => void call("cancel_session")}
           onToggle={status === "ready" ? () => void call("toggle_session") : undefined}
         />
@@ -1201,10 +1549,12 @@ function useFlowMenu(v: {
   mini: boolean;
   live: boolean;
   working: boolean;
+  autoCollapse: boolean;
   setMenu: (b: boolean) => void;
   setMini: (b: boolean) => void;
+  setAutoCollapse: (b: boolean) => void;
 }): MenuRow[] {
-  const { mini, live, working, setMenu, setMini } = v;
+  const { mini, live, working, autoCollapse, setMenu, setMini, setAutoCollapse } = v;
   const close = useCallback(() => setMenu(false), [setMenu]);
 
   return [
@@ -1256,6 +1606,19 @@ function useFlowMenu(v: {
       run: () => {
         setMini(!mini);
         void call("overlay_set_mini", { on: !mini });
+        close();
+      },
+    },
+    {
+      // Named for what the bar does, not for the mechanism. "Auto-collapse" is
+      // a description of an implementation; "get out of the way" is the thing
+      // the user actually wants, and the label has to survive being read once,
+      // in a hurry, over somebody else's window.
+      id: "auto-collapse",
+      label: autoCollapse ? "Stay full size" : "Shrink when idle",
+      run: () => {
+        setAutoCollapse(!autoCollapse);
+        void call("overlay_set_auto_collapse", { on: !autoCollapse });
         close();
       },
     },

@@ -31,6 +31,7 @@ mod history;
 mod models;
 mod overlay;
 mod settings;
+mod taplatch;
 mod topmost;
 mod update;
 
@@ -57,6 +58,18 @@ impl engine::Shell for TauriShell {
             .state::<AppState>()
             .overlay
             .set_active(&win, active);
+    }
+
+    /// Told rather than polled, like `overlay-mini` and `overlay-auto-collapse`.
+    ///
+    /// A missing window is not an error worth logging here: the latch is cleared
+    /// on every route out of a session, including ones that can run while the
+    /// bar is snoozed or the app is shutting down, and a warning on each of
+    /// those would be noise about nothing.
+    fn set_latched(&self, latched: bool) {
+        if let Some(win) = overlay::window(&self.app) {
+            let _ = win.emit("overlay-latched", latched);
+        }
     }
 }
 
@@ -576,10 +589,30 @@ fn overlay_move(
 /// frontend has no business knowing where it is or how big it is — it says how
 /// big the *pill* is, and the shape follows.
 #[tauri::command]
-fn overlay_set_shape(app: AppHandle, pill_w: f64, pill_h: f64, margin: f64, above: Option<bool>) {
+fn overlay_set_shape(
+    app: AppHandle,
+    pill_w: f64,
+    pill_h: f64,
+    margin: f64,
+    above: Option<bool>,
+    view_w: Option<f64>,
+    view_h: Option<f64>,
+) {
     if let Some(win) = overlay::window(&app) {
+        // The layout viewport the pill was actually centred in, not the size this
+        // window is nominally supposed to be. They are the same number right up
+        // until WebView2 changes its rasterization scale, at which point trusting
+        // the constant clips the bar off the screen — see `css_to_physical`.
+        //
+        // Optional so that a frontend that has not measured itself yet falls back
+        // to the nominal size rather than sending a zero.
+        let view = (
+            view_w.filter(|v| *v > 0.0).unwrap_or(overlay::OVERLAY_W),
+            view_h.filter(|v| *v > 0.0).unwrap_or(overlay::OVERLAY_H),
+        );
         app.state::<AppState>().overlay.set_shape(
             &win,
+            view,
             pill_w,
             pill_h,
             margin,
@@ -682,6 +715,19 @@ fn overlay_set_mini(app: AppHandle, on: bool) {
     // reaches the same state.
     if let Some(win) = overlay::window(&app) {
         let _ = win.emit("overlay-mini", on);
+    }
+}
+
+/// Turn the idle collapse on or off.
+///
+/// Announced on its own event for the same reason `overlay-mini` is: this can be
+/// changed from the bar's own menu or from the Hub, and whichever window did not
+/// send it still has to re-render.
+#[tauri::command]
+fn overlay_set_auto_collapse(app: AppHandle, on: bool) {
+    app.state::<AppState>().overlay.set_auto_collapse(on);
+    if let Some(win) = overlay::window(&app) {
+        let _ = win.emit("overlay-auto-collapse", on);
     }
 }
 
@@ -788,6 +834,7 @@ fn main() {
             overlay_unsnooze,
             overlay_reset_position,
             overlay_set_mini,
+            overlay_set_auto_collapse,
             overlay_state,
             cancel_session,
             toggle_session,

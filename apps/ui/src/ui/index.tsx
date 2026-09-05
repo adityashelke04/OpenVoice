@@ -523,6 +523,7 @@ export function FlowBar({
   progress,
   mini = false,
   edge = "bottom",
+  latched = false,
   onToggle,
 }: {
   live: boolean;
@@ -550,6 +551,15 @@ export function FlowBar({
   action?: ReactNode;
   /** Momentary, on a clean landing. See `.flowbar-mic[data-confirm]`. */
   confirm?: boolean;
+  /**
+   * The microphone is held open without a key — see `taplatch.rs`.
+   *
+   * The single most important distinction this bar draws. A held session and a
+   * latched one are otherwise identical, and only one of them keeps recording
+   * when you take your hand off the keyboard. Someone who cannot tell them
+   * apart can walk away from an open microphone believing they closed it.
+   */
+  latched?: boolean;
   /** Element the live level is published onto; see `Waveform`. */
   publish?: { current: HTMLElement | null };
   /**
@@ -613,6 +623,7 @@ export function FlowBar({
       data-mode={mode}
       data-mini={mini}
       data-column={column}
+      data-latched={latched}
     >
       <span className="flowbar-mic" data-confirm={confirm} />
       {/* Keyed on the mode so React replaces the subtree on every change, which

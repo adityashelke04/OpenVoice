@@ -1002,3 +1002,32 @@
 .spacer {
   flex: 1;
 }
+
+/* Latched: the microphone is open with nothing being held.
+ *
+ * Hollow, where a held session is filled. Different in kind rather than in
+ * degree, and deliberately so: to the machine and to the eye these are the same
+ * session, and the difference only reveals itself when you take your hand off
+ * the keyboard. A bar that said "recording" in the same voice for both would
+ * have already misled you by then.
+ *
+ * A ring reads as "held open" in a way brightness cannot — it is the same idiom
+ * a latched record button uses — and it keeps the green meaning "the microphone
+ * is live" rather than splitting that colour across two meanings.
+ *
+ * The halo is dropped with the fill. The waveform beside it is already proving
+ * the microphone is open; this dot's remaining job is to say *how*. */
+.flowbar[data-latched="true"] .flowbar-mic {
+  background: transparent;
+  /* Two rings, not one.
+   *
+   * A hollow 7px dot is distinguishable from a filled one only if you are
+   * looking for it, and this is precisely the cue you are not looking for —
+   * you find out it mattered when you notice the microphone was open. The
+   * outer halo roughly doubles the mark's visual footprint without changing a
+   * single measurement in `geometry()`, so the latched bar catches the eye at
+   * the edge of vision the way the filled dot never needs to. */
+  box-shadow:
+    inset 0 0 0 2px var(--live-hi),
+    0 0 0 3px rgb(68 214 44 / 30%);
+}

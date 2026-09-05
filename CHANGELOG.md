@@ -22,6 +22,38 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+### Added
+
+- The Flow Bar puts itself away. After five seconds of quiet it folds down to a
+  slim horizontal line; clicking that line, or starting to dictate, unfurls it
+  again. It never folds away while it has something to tell you — a failure, a
+  notice, or a session in progress all hold it open. Turn it off with "Stay full
+  size" in the Flow Menu.
+- Double-tap the dictation shortcut to leave the microphone open, so you can
+  take your hand off the keyboard. Tap once more, click the bar, or press Escape
+  to finish. A hands-free session is marked differently from a held one, because
+  the difference is whether letting go stops it.
+
+### Fixed
+
+- **The Flow Bar could disappear and not come back until you restarted
+  OpenVoice.** Pressing the shortcut did nothing visible, and neither the folded
+  line nor the full bar could be found anywhere on screen. The window was being
+  clipped to a rectangle the bar no longer occupied, after the embedded browser
+  changed its own display scale — something it can do when a monitor sleeps, a
+  display is reconfigured, or the machine is locked and unlocked. The clip is now
+  measured against what the bar actually paints, so a scale change makes it
+  render slightly smaller rather than vanish. See ADR 0010.
+- Changing any Flow Bar preference before ever dragging the bar silently reset
+  *all* of them — the docked edge, snooze, "always show", compact mode — the next
+  time OpenVoice started.
+
+### Changed
+
+- The fold and unfurl are animated rather than instant: the bar unrolls along its
+  width and then fills out, and folds flat before sliding away. Honours
+  `prefers-reduced-motion`.
+
 ## [0.6.0] - 2026-09-04
 
 You can choose a speech model again, and one of the choices speaks 25 languages.

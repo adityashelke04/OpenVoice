@@ -77,6 +77,16 @@ CLAUDE.md
 # thrown away, and they quote the private documents freely. What survives one of
 # these belongs in docs/adr/ or CHANGELOG.md, which are versioned on purpose.
 docs/plans/
+docs/superpowers/
+
+# Scraper scratch. Cached responses from research runs, regenerated on demand and
+# meaningless to anyone who did not make the query.
+.firecrawl/
+
+# Screenshots of other people's applications, gathered while designing against
+# them. Reference for the person doing the work, not something to redistribute —
+# see the trade-dress note in docs/adr/0010 and the design spec.
+docs/reference/
 
 # ------------------------------------------------------------------------ OS
 Thumbs.db
