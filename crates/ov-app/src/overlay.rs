@@ -1092,6 +1092,15 @@ fn apply_region(win: &WebviewWindow, rect: Rect, css_to_phys: f64) {
             return;
         }
     }
+    // The click-away hook needs the same box, and this is the one place that
+    // computes it. Publishing here rather than letting the hook ask GDI keeps a
+    // syscall off the critical path of every mouse button in the system -- see
+    // `clickaway`'s rule 1.
+    //
+    // After the `SetWindowRgn`, not before: both paths above return without
+    // having changed the window's shape, and a published region the system
+    // refused would put the hit test somewhere the bar is not.
+    crate::clickaway::set_region(l, t, r, b);
     tracing::debug!(
         css_to_phys,
         css = ?rect,
