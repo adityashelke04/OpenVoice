@@ -618,6 +618,7 @@ fn overlay_move(
 struct ShapeArgs {
     pill_w: f64,
     pill_h: f64,
+    menu_h: Option<f64>,
     margin: f64,
     above: Option<bool>,
     view_w: Option<f64>,
@@ -648,6 +649,7 @@ fn overlay_set_shape(app: AppHandle, shape: ShapeArgs) {
                 view,
                 pill_w: shape.pill_w,
                 pill_h: shape.pill_h,
+                menu_h: shape.menu_h.filter(|v| *v > 0.0).unwrap_or(0.0),
                 margin: shape.margin,
                 above: shape.above.unwrap_or(false),
                 menu: shape.menu.unwrap_or(false),

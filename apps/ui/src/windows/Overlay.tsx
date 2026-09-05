@@ -394,6 +394,8 @@ type Box = {
   w: number;
   h: number;
   m: number;
+  /** The measured menu height in CSS pixels, or 0 when no menu is open. */
+  mh?: number;
   above?: boolean;
   vw: number;
   vh: number;
@@ -439,6 +441,7 @@ function sameBox(a: Box, b: Box): boolean {
   return (
     a.w === b.w &&
     a.h === b.h &&
+    a.mh === b.mh &&
     a.m === b.m &&
     a.above === b.above &&
     a.menu === b.menu &&
@@ -450,6 +453,8 @@ function sameBox(a: Box, b: Box): boolean {
 function useWindowShape(
   pillW: number,
   pillH: number,
+  /** The measured menu height, or 0 when none is open. See `Box`. */
+  menuH: number,
   margin: number,
   above: boolean,
   /** Whether the shape includes the menu. See `Box`. */
@@ -528,6 +533,7 @@ function useWindowShape(
           shape: {
             pillW: target.w,
             pillH: target.h,
+            menuH: target.mh ?? 0,
             margin: target.m,
             above: target.above ?? false,
             menu: target.menu ?? false,
@@ -553,9 +559,9 @@ function useWindowShape(
   // calling it on a pass that has nothing to do costs one comparison.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    want.current = { w: pillW, h: pillH, m: margin, above, menu, vw: view.w, vh: view.h };
+    want.current = { w: pillW, h: pillH, mh: menuH, m: margin, above, menu, vw: view.w, vh: view.h };
     void flush();
-  }, [pillW, pillH, margin, above, menu, view.w, view.h, ready, fonts, flush, want]);
+  }, [pillW, pillH, menuH, margin, above, menu, view.w, view.h, ready, fonts, flush, want]);
 
   // A resize that never lands is silent, and that is what made this expensive.
   //
@@ -670,7 +676,7 @@ export function Overlay() {
   /** The box the window has been told to be. Read only by `useWindowGeometry`:
    *  converting a window position back into an anchor uses `anchorFrom`, which
    *  reads the window rather than this. See the note there. */
-  const box = useRef<Box>({ w: 150, h: 40, m: 0, vw: OVERLAY_W, vh: OVERLAY_H });
+  const box = useRef<Box>({ w: 150, h: 40, mh: 0, m: 0, vw: OVERLAY_W, vh: OVERLAY_H });
   /**
    * Positions this side has commanded, so moves reported back can be recognised
    * as our own rather than guessed at. See `COMMANDED_HISTORY`.
@@ -1352,14 +1358,15 @@ export function Overlay() {
   expectedPillH.current = pillHeight;
   // Frozen when the menu opened -- see `menuAbove`.
   const menuPlacement = menuAbove ? "above" : "below";
-  // The pill plus the menu, and nothing else.
+  // Sent as its own number rather than folded into the pill's height, because
+  // Rust builds the region from the two boxes separately: they are rounded by
+  // different amounts -- 8px for the menu, half its height for the pill -- and a
+  // single box rounded either way would leave unpainted notches at the other end.
   //
-  // `menuH` is measured off the mounted menu (see `useMenuHeight`), and the menu
-  // is laid out flush against the pill, so this sum is exactly the painted extent
-  // rather than an estimate of it. `0` before the first measurement means "just
-  // the pill", which is the only safe answer: the region may grow late, but it
-  // must never be larger than the paint.
-  const shapeHeight = menu && menuH > 0 ? pillHeight + menuH : pillHeight;
+  // `0` until the menu has been measured (see `useMenuHeight`), which is the only
+  // safe answer: the region may grow a frame late, but it must never be larger
+  // than the paint.
+  const shapeMenuH = menu && menuH > 0 ? menuH : 0;
 
   // Never both: the menu already claims a much larger box for its own purposes,
   // and stacking the glow margin on top would overshoot it. The menu also closes
@@ -1369,7 +1376,8 @@ export function Overlay() {
 
   useWindowShape(
     pillWidth,
-    shapeHeight,
+    pillHeight,
+    shapeMenuH,
     margin,
     menu && menuAbove,
     menu,
