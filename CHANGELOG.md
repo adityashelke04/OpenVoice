@@ -22,6 +22,18 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Flow Menu now closes when you click somewhere else.** Right-clicking the
+  bar opened a menu that nothing could dismiss but a second right-click on the
+  bar itself — so a menu opened by accident sat over your work until you found
+  your way back to it. It now closes on a click anywhere else, on Escape, when
+  you switch to another application, when the bar is hidden, and after fifteen
+  seconds of being left alone.
+- The Flow Menu no longer opens on the wrong side of a bar that has just been
+  moved, and no longer flips sides while you are reading it.
+- A bar hidden with its menu open comes back as a bar rather than as a menu.
+
 ## [0.7.0] - 2026-09-05
 
 The Flow Bar gets out of your way when you are not using it — and stops
