@@ -26,6 +26,7 @@ import {
   viewportNow,
 } from "./overlay-trace";
 import { useIdleCollapse } from "./useIdleCollapse";
+import { useMenuTimeout } from "./useMenuTimeout";
 import { MONO_11, SANS_12, resolveFont, useFontsReady } from "./useFontsReady";
 import "./overlay.css";
 
@@ -539,6 +540,8 @@ export function Overlay() {
   const { view, levelRef } = useLiveEngine();
   const { settings } = useSettings();
   const [menu, setMenu] = useState(false);
+  /** Stable, so `useMenuTimeout` is not handed a new callback every render. */
+  const closeMenu = useCallback(() => setMenu(false), []);
   /**
    * The layout viewport, measured rather than assumed to be `OVERLAY_W`x`OVERLAY_H`.
    *
@@ -1186,6 +1189,11 @@ export function Overlay() {
     wake,
   );
   collapsedRef.current = collapsed;
+
+  // The guarantee. Every Rust-side dismissal can fail to install without saying
+  // so; this one is a timer beside the state it closes, so the bar cannot be left
+  // wearing an open menu indefinitely no matter what else breaks.
+  useMenuTimeout(menu, hovering, closeMenu);
 
   // Raised when the shape changes and lowered by the element that actually
   // finishes moving, rather than by a timer guessing the duration. A timer here
