@@ -190,6 +190,31 @@ export function FlowBarStates() {
             <Row label="Compact, working" width={44} height={22}>
               <FlowBar live={false} mini working elapsed="0:00" />
             </Row>
+            {/* Latched: the microphone open with no key held.
+                The one state that cannot be told from its neighbour by looking
+                at the neighbour. Placed next to "Listening" in review for that
+                reason — if the two read the same here, over four backdrops,
+                they read the same on screen, and someone will walk away from an
+                open microphone believing they closed it. */}
+            <Row label="Listening, hands-free" width={240}>
+              <FlowBar live latched levelRef={live} elapsed="0:12" onCancel={() => undefined} />
+            </Row>
+            {/* Put away: the idle collapse.
+                Not a `FlowBar` — the collapsed bar is a stroke, painted by
+                `overlay.css` rather than by the component, so this reproduces
+                the overlay's own markup. It is here because this is the state
+                most at risk of vanishing: a 4px line that reads on the app's
+                black canvas and disappears over a white document would look
+                fine in every review that did not use these four plates. */}
+            <Row label="Put away" width={96} height={24}>
+              <div
+                className="overlay-hit"
+                data-collapsed="true"
+                style={{ width: "100%", height: "100%" }}
+              >
+                <span className="flowbar-line" aria-hidden />
+              </div>
+            </Row>
             {/* Docked: Wispr Flow reorients at the left and right edges, because
                 a horizontal pill on a vertical edge either hangs off the screen
                 or bites into whatever is maximised behind it. */}

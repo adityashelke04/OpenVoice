@@ -373,7 +373,64 @@ export function reportStuckBox(sent: Box, want: Box, inFlight: boolean): void {
  * asked for a size and the `viewport` that got it is precisely how long the bar
  * spent disagreeing with itself. Returns a teardown.
  */
-export function watchViewport(): () => void {
+/** The layout viewport, in CSS pixels. The quantity every rule below turns on. */
+export function viewportNow(): { w: number; h: number } {
+  return {
+    w: document.documentElement.clientWidth,
+    h: document.documentElement.clientHeight,
+  };
+}
+
+/**
+ * Whether the webview is laying out in the window it was given.
+ *
+ * # The bug
+ *
+ * These two are the same number until WebView2 changes its rasterization scale,
+ * which it can do on a display change, a lock, or a monitor waking, with no DPI
+ * message reaching the app. When it does, the viewport becomes the window's
+ * *physical* size — 505x800 for a 404x640 window on a 125% panel — and every CSS
+ * pixel is one physical pixel instead of 1.25.
+ *
+ * The window is clipped to a region computed in Rust, and that region used to be
+ * derived from `OVERLAY_W` times the monitor's scale. So the bar painted at
+ * physical y 300..324 while the window was clipped to y 375..405: disjoint, in
+ * every state, until the app was restarted. The user's report was that the Flow
+ * Bar "gets invisible and pressing Ctrl does nothing".
+ *
+ * Reported once per transition, in both directions, for the same reason
+ * `probePill` reports an onset and a recovery: what matters is when it started
+ * and whether it stopped, not that it is still true this frame.
+ */
+export function noteViewportContract(view: { w: number; h: number }, w: number, h: number): void {
+  const wrong = view.w !== w || view.h !== h;
+  if (wrong === contractWrong) return;
+  contractWrong = wrong;
+  const fields = { view, window: { w, h }, ratio: w === 0 ? null : view.w / w };
+  if (wrong) {
+    console.error(
+      `[flowbar] SCALE: the webview is laying out in ${view.w}x${view.h} but its ` +
+        `window is ${w}x${h}. Everything positioned from the viewport is now in ` +
+        `the wrong place relative to the window's clip region.`,
+      fields,
+    );
+    toLog("error", "webview viewport is not the window", fields);
+  } else {
+    toLog("debug", "webview viewport agrees with the window again", fields);
+  }
+}
+
+/** Whether the viewport and the window currently disagree. See above. */
+let contractWrong = false;
+
+/**
+ * @param onChange called with the new viewport whenever it actually changes, so
+ *   the shape can be re-sent. Before this existed the viewport could change with
+ *   no flush to follow it — the log has three such changes 217 seconds after the
+ *   last flush — leaving Rust clipping the window to a region derived from a
+ *   viewport that no longer existed.
+ */
+export function watchViewport(onChange?: (v: { w: number; h: number }) => void): () => void {
   // Three sources, deliberately, because it is not settled which of them
   // actually fires when a WebView2 host window is resized.
   //
@@ -445,6 +502,11 @@ export function watchViewport(): () => void {
     };
     toLog("debug", "viewport settled", fields);
     if (verbose) console.info(`[flowbar] ${t()}ms viewport`, fields);
+
+    // Before the pill is re-measured, because the shape this triggers is what
+    // makes the region right again — and a probe against a region that is about
+    // to be replaced measures the problem rather than the fix.
+    onChange?.({ w, h });
 
     // The pill is re-measured here as well as in the layout effect, because a
     // viewport change does not require React to render: if the pill is displaced
@@ -583,7 +645,14 @@ export function probePill(el: HTMLElement | null, anchor: Anchor | null): void {
     // hypothesis this was written to test: the pill centred in the old viewport
     // inside the new window rectangle.
     want: f ? { w: f.w, h: f.h } : null,
-    viewportBehind: f ? view.w !== f.w || view.h !== f.h : null,
+    // The verdict of `noteViewportContract`, rather than a comparison made here.
+    //
+    // What stood here compared the layout viewport against the *pill's* width —
+    // 505 against 96 — so it read `true` on every line it ever printed and said
+    // nothing at all. The number that mattered was sitting in `view` beside it,
+    // unexamined. Deferring to the one place that knows what the window is
+    // supposed to be means there is no second rule to get wrong again.
+    viewportIsWindow: !contractWrong,
     sinceFlushMs: f ? Math.round(performance.now() - f.at) : null,
     box: at,
     pill: { w: Math.round(r.width), h: Math.round(r.height) },

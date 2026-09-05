@@ -164,3 +164,213 @@
   margin: var(--s-2) var(--s-2);
   background: var(--hairline);
 }
+
+/* The put-away bar.
+ *
+ * The stroke is centred inside a box (`LINE_HIT`, 24px) that `geometry()`
+ * returns and Rust clips the window to, so the invisible margin that makes a
+ * thin bar clickable lives in exactly one place. */
+:root {
+  /* Eight, not four.
+   *
+   * Four was chosen for how little of the screen it takes, which is the wrong
+   * thing to optimise for a control you have to be able to find again. In use it
+   * was invisible: a dark stroke on a dark desktop, indistinguishable from a
+   * window edge. Eight is still unmistakably a line -- twelve times longer than
+   * it is tall -- while being something the eye can actually catch. */
+  --line-h: 8px;
+
+  /* The morph.
+   *
+   * Named because four rules share them, and a transition that half-matches
+   * reads worse than one that does not match at all.
+   *
+   * Expo-out for travel: nearly all the distance is covered in the first third,
+   * so the bar feels like it responds the instant you ask rather than easing
+   * politely into motion. The bloom adds a small overshoot on the axis that
+   * arrives second, which is what gives the shape the look of having mass. */
+  --morph-travel: cubic-bezier(0.22, 1, 0.36, 1);
+  --morph-bloom: cubic-bezier(0.34, 1.42, 0.5, 1);
+  --morph-exit: cubic-bezier(0.4, 0, 0.9, 0.6);
+}
+
+.overlay-hit {
+  /* The stroke is positioned against this. */
+  position: relative;
+}
+
+.overlay-hit[data-collapsed="true"] {
+  /* A button, not a handle. At this size nobody is aiming to drag it. */
+  cursor: pointer;
+}
+
+/* Unfurl: the width leads, the height blooms after it.
+ *
+ * One transition across both axes grows the bar along its diagonal, which is the
+ * single path that reads as a box being resized by a program. Letting the width
+ * run first and the height arrive 90ms behind it makes the same two numbers read
+ * as a line being unrolled and then filling out — the bar appears to do
+ * something rather than to be redrawn.
+ *
+ * This is the direction that had to be got right. It is the one met on every
+ * dictation, at the moment the key has just gone down and the only question is
+ * whether the microphone is open. */
+.overlay-hit {
+  transition:
+    width 300ms var(--morph-travel),
+    height 320ms var(--morph-bloom) 90ms;
+}
+
+/* Fold: the same two axes in the other order, and quicker.
+ *
+ * Height first, then the width retracts, so the bar folds flat and slides away
+ * rather than shrinking towards a point. Exits run faster than entrances —
+ * getting out of the way should not be a performance. */
+.overlay-hit[data-collapsed="true"] {
+  transition:
+    height 200ms var(--morph-exit),
+    width 260ms var(--morph-exit) 100ms;
+}
+
+/* The stroke.
+ *
+ * Absolutely positioned and always mounted, so it can cross-fade with the pill
+ * instead of being swapped for it. Unmounting was the visible seam: the line
+ * vanished in one frame and the pill arrived in another, and no amount of easing
+ * on the box could hide that. */
+.flowbar-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--line-h);
+  border-radius: 999px;
+  pointer-events: none;
+
+  /* A lit top edge over a darker body.
+   *
+   * Flat fills read as a hole in the screen at this size. The gradient gives the
+   * stroke a light top and a dark underside, which is how every physical grab
+   * handle is shaded, and why this reads as an object you could take hold of
+   * rather than as a gap between two windows. */
+  background: linear-gradient(180deg, rgb(46 46 52), rgb(18 18 21));
+
+  /* Two edges, opposite polarity, because there is no third option.
+   *
+   * This bar floats over a white document, a dark editor, or a photograph, and a
+   * single-colour outline can only survive one of those. The inner light
+   * hairline carries it against dark backdrops, the outer dark hairline against
+   * light ones, and the drop shadow lifts it off both so it never reads as part
+   * of whatever is behind it. The same trick a macOS window border uses, for the
+   * same reason. */
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 26%),
+    0 0 0 1px rgb(0 0 0 / 48%),
+    0 2px 8px rgb(0 0 0 / 34%);
+
+  opacity: 0;
+  transform: translateY(-50%) scaleX(0.4);
+  transition:
+    opacity 140ms var(--morph-exit),
+    transform 240ms var(--morph-travel);
+}
+
+/* Arriving: the stroke draws itself outward from the centre.
+ *
+ * `scaleX` from 0.4 rather than from 0, because a line growing from nothing
+ * reads as a progress bar. From 40% it reads as the pill's width being drawn
+ * back in. */
+.overlay-hit[data-collapsed="true"] .flowbar-line {
+  opacity: 0.92;
+  transform: translateY(-50%) scaleX(1);
+  transition:
+    opacity 200ms var(--morph-travel) 120ms,
+    transform 300ms var(--morph-travel) 60ms;
+}
+
+.overlay-hit[data-collapsed="true"]:hover .flowbar-line {
+  opacity: 1;
+  /* A hair of growth on approach, so the pointer's arrival is acknowledged in
+     the frames before the morph starts. */
+  transform: translateY(-50%) scaleY(1.2);
+}
+
+/* Docked to a side edge: the stroke stands up with the bar. */
+.overlay-root:not([data-edge="bottom"]) .flowbar-line {
+  left: 50%;
+  right: auto;
+  top: 0;
+  bottom: 0;
+  width: var(--line-h);
+  height: auto;
+  transform: translateX(-50%) scaleY(0.4);
+}
+
+.overlay-root:not([data-edge="bottom"]) .overlay-hit[data-collapsed="true"] .flowbar-line {
+  transform: translateX(-50%) scaleY(1);
+}
+
+.overlay-root:not([data-edge="bottom"]) .overlay-hit[data-collapsed="true"]:hover .flowbar-line {
+  transform: translateX(-50%) scaleX(1.2);
+}
+
+/* The pill, blooming in behind the stroke.
+ *
+ * Kept mounted rather than unmounted: `publish` — the measurement the
+ * shape-convergence check depends on — lives on it, and a component that has
+ * been removed cannot fade.
+ *
+ * The blur is what makes this read as depth rather than as a fade. Two pixels is
+ * enough to say "this is arriving" and little enough to stay cheap. */
+.flowbar {
+  transition:
+    opacity 200ms var(--morph-travel) 150ms,
+    transform 320ms var(--morph-bloom) 120ms,
+    filter 200ms var(--morph-travel) 150ms;
+}
+
+.overlay-hit[data-collapsed="true"] .flowbar {
+  opacity: 0;
+  transform: scale(0.94);
+  filter: blur(2px);
+  pointer-events: none;
+  /* Leaving, the content goes first and fast, so the words are gone before the
+     box is too small to hold them. */
+  transition:
+    opacity 90ms var(--morph-exit),
+    transform 160ms var(--morph-exit),
+    filter 90ms var(--morph-exit);
+}
+
+/* Dragging, and within reach of a snap line: the collapsed bar says so too. */
+.overlay-hit[data-snapping="true"] .flowbar-line {
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 45%),
+    0 0 0 1px rgb(0 0 0 / 48%),
+    0 2px 8px rgb(0 0 0 / 34%);
+}
+
+/* None of the above is information.
+ *
+ * Every state the bar reports is carried by its shape, its colour, and the
+ * `sr-only` announcement. The motion is the pleasure of using it, so removing it
+ * costs nothing but pleasure — which is exactly what this query asks for. */
+@media (prefers-reduced-motion: reduce) {
+  .overlay-hit,
+  .overlay-hit[data-collapsed="true"],
+  .flowbar,
+  .overlay-hit[data-collapsed="true"] .flowbar,
+  .flowbar-line,
+  .overlay-hit[data-collapsed="true"] .flowbar-line {
+    transition: none;
+  }
+
+  .flowbar-line {
+    transform: translateY(-50%);
+  }
+
+  .overlay-hit[data-collapsed="true"] .flowbar {
+    transform: none;
+    filter: none;
+  }
+}

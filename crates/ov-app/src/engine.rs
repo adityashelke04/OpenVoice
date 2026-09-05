@@ -49,6 +49,13 @@ pub trait Shell: Send + Sync + 'static {
     fn emit(&self, event: &Event);
     /// Show or hide the floating overlay.
     fn set_overlay_visible(&self, visible: bool);
+    /// Tell the Flow Bar whether the microphone is being held open without a key.
+    ///
+    /// A latched session and a held one are otherwise identical on screen, and
+    /// the difference between them is the only one that matters when you take
+    /// your hand off the keyboard. A bar that cannot say which it is showing is
+    /// a bar that lets people walk away from an open microphone.
+    fn set_latched(&self, latched: bool);
 }
 
 /// Profiles and their compiled formatters, replaced as a unit.
@@ -174,6 +181,13 @@ pub struct Engine {
     /// therefore has to produce the same press/release pattern a real key would,
     /// which means remembering which half of it we are in.
     synthetic_down: std::sync::atomic::AtomicBool,
+    /// Turns tap patterns on the shortcut into hands-free dictation.
+    ///
+    /// Lives here rather than in the hook closure because two things need it:
+    /// the hook, which feeds it key transitions, and `toggle`, which has to be
+    /// able to close a latched session when the user clicks the Flow Bar. See
+    /// [`crate::taplatch`].
+    latch: Mutex<crate::taplatch::TapLatch>,
 }
 
 impl Engine {
@@ -287,6 +301,11 @@ impl Engine {
     /// kept in step. Harmless when nothing is running: `Input::Cancelled` from
     /// idle is a no-op in `session.rs`.
     pub fn cancel(&self) {
+        // Escape ends a latched session as surely as a tap does, and the latch
+        // has to be told or it would keep believing the microphone was open --
+        // making the next tap "stop" a session that had already gone.
+        self.latch.lock().expect("latch").forget();
+        self.shell.set_latched(false);
         if let Some(tx) = self.inputs.get() {
             let _ = tx.send(Input::Cancelled { at: self.now() });
         }
@@ -317,6 +336,20 @@ impl Engine {
 
         let Some(tx) = self.inputs.get() else { return };
         let at = self.now();
+
+        // A latched session has no key being held, so there is no press pattern
+        // to reproduce -- only a release to deliver. Handled before the mode
+        // below because `synthetic_down` describes a hold this session never had,
+        // and consulting it here would leave the click doing nothing.
+        {
+            let mut latch = self.latch.lock().expect("latch");
+            if latch.is_latched() {
+                latch.forget();
+                self.shell.set_latched(false);
+                let _ = tx.send(Input::HotkeyReleased { at });
+                return;
+            }
+        }
 
         let press = |tx: &std::sync::mpsc::Sender<Input>| {
             let app = self.apps.foreground().unwrap_or_default();
@@ -481,6 +514,7 @@ pub fn start(
         hotkey,
         activation: Mutex::new(config.activation),
         synthetic_down: std::sync::atomic::AtomicBool::new(false),
+        latch: Mutex::new(crate::taplatch::TapLatch::default()),
     });
 
     let (tx, rx) = channel::<Input>();
@@ -497,17 +531,69 @@ pub fn start(
         engine
             .hotkey
             .start(Arc::new(move |event| {
+                use crate::taplatch::{OnPress, OnRelease};
+                use ov_core::config::ActivationMode;
+
                 let at = e.now();
-                let input = match event {
-                    HotkeyEvent::Pressed => {
-                        let app = e.apps.foreground().unwrap_or_default();
-                        let profile = e.profile_for(&app.exe);
-                        Input::HotkeyPressed { at, app, profile }
-                    }
-                    HotkeyEvent::Released => Input::HotkeyReleased { at },
-                    HotkeyEvent::Cancelled => Input::Cancelled { at },
+
+                // Tap gestures only mean anything in hold-to-talk. In toggle mode
+                // a tap already starts and a second one already stops, so there is
+                // nothing for a latch to add and every reason not to add it.
+                let push_to_talk = matches!(
+                    *e.activation.lock().expect("activation mutex"),
+                    ActivationMode::PushToTalk
+                );
+
+                let pressed = |e: &Engine| {
+                    let app = e.apps.foreground().unwrap_or_default();
+                    let profile = e.profile_for(&app.exe);
+                    Input::HotkeyPressed { at, app, profile }
                 };
-                let _ = tx.send(input);
+
+                match event {
+                    HotkeyEvent::Pressed if push_to_talk => {
+                        let decision = e.latch.lock().expect("latch").press(at.0);
+                        match decision {
+                            OnPress::Start => {
+                                let _ = tx.send(pressed(&e));
+                            }
+                            OnPress::LatchOpen => {
+                                e.shell.set_latched(true);
+                                // The first tap of the gesture started a session
+                                // and its release stopped it. That stub is a few
+                                // tens of milliseconds of audio nobody asked for,
+                                // and transcribing it would put a spurious notice
+                                // on the bar at the exact moment the user is
+                                // starting to speak. Discard it, then open the
+                                // session that will outlive the key.
+                                let _ = tx.send(Input::Cancelled { at });
+                                let _ = tx.send(pressed(&e));
+                            }
+                            OnPress::StopLatched => {
+                                e.shell.set_latched(false);
+                                let _ = tx.send(Input::HotkeyReleased { at });
+                            }
+                        }
+                    }
+                    HotkeyEvent::Pressed => {
+                        let _ = tx.send(pressed(&e));
+                    }
+                    HotkeyEvent::Released if push_to_talk => {
+                        // Swallowed when it belongs to the press that latched the
+                        // microphone open, or to the tap that closed one.
+                        if e.latch.lock().expect("latch").release(at.0) == OnRelease::Stop {
+                            let _ = tx.send(Input::HotkeyReleased { at });
+                        }
+                    }
+                    HotkeyEvent::Released => {
+                        let _ = tx.send(Input::HotkeyReleased { at });
+                    }
+                    HotkeyEvent::Cancelled => {
+                        e.latch.lock().expect("latch").forget();
+                        e.shell.set_latched(false);
+                        let _ = tx.send(Input::Cancelled { at });
+                    }
+                }
             }))
             .map_err(|e| e.to_string())?;
     }
