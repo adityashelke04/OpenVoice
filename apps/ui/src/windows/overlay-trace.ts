@@ -272,11 +272,72 @@ export function checkInvariants(
     return reading;
   }
 
+  // The shape the window is clipped to, against the pill that is actually
+  // painted. See `reportClippedPill`.
+  reportClippedPill(pill.w);
+
   // Check internal content centering if el has a .flowbar child
   checkContentCentering(el);
 
   mark("render", reading as unknown as Record<string, unknown>);
   return reading;
+}
+
+/** Shape-versus-paint disagreements already reported, so a standing one is one
+ *  line rather than one every layout pass. Same reasoning as `stuck`. */
+const clipped = new Set<string>();
+
+/**
+ * How long after a flush the painted pill is allowed to disagree with it.
+ *
+ * The box is on a `width`/`height` transition — 300ms plus a 90ms stagger on the
+ * slower axis — so mid-morph it is legitimately neither size. Anything past that
+ * is not an animation, it is a disagreement.
+ */
+const MORPH_SETTLE_MS = 600;
+
+/**
+ * The window is clipped to a pill the bar is no longer painting.
+ *
+ * This is the check that was missing, and its absence is why the cold-launch
+ * crop went unreported for as long as it did. Every other alarm in this file
+ * passed throughout it: the pill fitted its window, it was centred, its top edge
+ * was where it belongs, and the shape this side wanted was the shape it had
+ * sent. The one pair nobody compared was the shape Rust was told and the pill
+ * Chromium drew — and those are the two that were different, by five pixels,
+ * because `geometry()` sizes the pill from a canvas `measureText` and that
+ * measurement changes underneath React when a web font arrives. See
+ * `useFontsReady` for the cause and the fix.
+ *
+ * The user sees this as the bar's rounded ends sliced flat, because the window's
+ * region clips painting: whatever the pill draws outside the last shape sent
+ * simply is not there.
+ *
+ * Compared against the *pill's* width rather than the shape's rectangle, which
+ * is that plus the glow margin on both sides. The margin can only ever widen the
+ * region, so leaving it out makes this conservative: it fires when the pill is
+ * clipped even with the glow's allowance, and never on the allowance alone.
+ */
+export function reportClippedPill(paintedW: number): void {
+  const f = lastFlush;
+  if (!f) return;
+  // Still animating towards the shape that was asked for. Not a disagreement.
+  if (performance.now() - f.at < MORPH_SETTLE_MS) return;
+  // One pixel of slack, as everywhere else here: a logical coordinate makes a
+  // lossy round trip through physical pixels on a fractional display scale.
+  const over = paintedW - f.w;
+  if (over <= 1) return;
+  const key = `${f.w}+${f.m}<${Math.round(paintedW)}`;
+  if (clipped.has(key)) return;
+  clipped.add(key);
+  const reading = { shape: { w: f.w, h: f.h, m: f.m }, painted: paintedW, over };
+  console.error(
+    `[flowbar] CLIPPED: the window is clipped to a ${f.w}px pill but a ${paintedW}px ` +
+      `pill is being painted, so ${(over / 2).toFixed(1)}px is sliced off each end. ` +
+      `The shape and the paint were computed from different measurements.`,
+    reading,
+  );
+  toLog("error", "painted pill is wider than the window's shape", reading);
 }
 
 /**

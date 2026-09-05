@@ -26,6 +26,7 @@ import {
   viewportNow,
 } from "./overlay-trace";
 import { useIdleCollapse } from "./useIdleCollapse";
+import { MONO_11, SANS_12, resolveFont, useFontsReady } from "./useFontsReady";
 import "./overlay.css";
 
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -216,13 +217,13 @@ function geometry(v: {
   // before the part that says what to do about it.
   if (v.text !== undefined) {
     const actionW = v.hasAction ? 96 : 0;
-    const w = Math.ceil(MSG_CHROME + textWidth(v.text, "400 12px $sans") + actionW);
+    const w = Math.ceil(MSG_CHROME + textWidth(v.text, SANS_12) + actionW);
     return { w: Math.min(380, Math.max(200, w)), h: PILL_H };
   }
 
   // Idle. The fixed 150px tier fit exactly one shortcut — the default — and any
   // remap collided with the word "Hold" and was clipped.
-  const w = Math.ceil(IDLE_CHROME + textWidth(v.hint, "500 11px $mono"));
+  const w = Math.ceil(IDLE_CHROME + textWidth(v.hint, MONO_11));
   return { w: Math.max(150, w), h: PILL_H };
 }
 
@@ -304,9 +305,10 @@ function textWidth(text: string, font: string): number {
     ((textWidth as { c?: HTMLCanvasElement }).c = document.createElement("canvas"));
   const ctx = canvas.getContext("2d");
   if (!ctx) return text.length * 7;
-  const root = getComputedStyle(document.documentElement);
-  ctx.font = font.replace("$mono", root.getPropertyValue("--font-mono").trim() || "monospace")
-    .replace("$sans", root.getPropertyValue("--font-sans").trim() || "sans-serif");
+  // The same substitution the preload in `useFontsReady` applies, so the face
+  // that was loaded is by construction the face being measured. When it was
+  // written out twice, only one of the two knew what a `$mono` was.
+  ctx.font = resolveFont(font);
   return ctx.measureText(text).width;
 }
 
@@ -420,6 +422,15 @@ function useWindowShape(
   view: { w: number; h: number },
   want: React.MutableRefObject<Box>,
   ready: boolean,
+  /**
+   * Bumped when a face the pill measures with loads. See `useFontsReady`.
+   *
+   * A dependency, not context, and for the same reason the viewport is part of
+   * the `Box`: a font arriving changes how wide the pill is, and a width that
+   * changes without a shape following it leaves the window clipped to the
+   * previous one. React cannot see a font load, so it is named here.
+   */
+  fonts: number,
 ) {
   // Whether a command is already in flight. With `want`, this makes the sender
   // single-flight: bursts collapse to the latest desired shape instead of
@@ -502,7 +513,7 @@ function useWindowShape(
     if (!inTauri()) return;
     want.current = { w: pillW, h: pillH, m: margin, above, vw: view.w, vh: view.h };
     void flush();
-  }, [pillW, pillH, margin, above, view.w, view.h, ready, flush, want]);
+  }, [pillW, pillH, margin, above, view.w, view.h, ready, fonts, flush, want]);
 
   // A resize that never lands is silent, and that is what made this expensive.
   //
@@ -617,6 +628,16 @@ export function Overlay() {
    */
   const scaleRef = useRef(1);
   const [geomReady, setGeomReady] = useState(false);
+  /**
+   * The faces the pill measures itself with.
+   *
+   * Read here rather than inside `geometry()` because a font load is not a React
+   * state change: without this the browser re-lays-out the pill at its true
+   * width and nothing re-renders, so the shape Rust clips the window to keeps
+   * the width a canvas guessed before the face existed. That is the cold-launch
+   * crop. See `useFontsReady`.
+   */
+  const fontsReady = useFontsReady();
 
   // Rust places the bar at startup and whenever it returns from hidden, and
   // says so. Re-deriving the anchor from that is what keeps "only show while
@@ -1272,7 +1293,7 @@ export function Overlay() {
   const glowing = live && !menu;
   const margin = glowing ? GLOW_MARGIN : 0;
 
-  useWindowShape(pillWidth, shapeHeight, margin, menu && menuAbove, viewport, box, geomReady);
+  useWindowShape(pillWidth, shapeHeight, margin, menu && menuAbove, viewport, box, geomReady, fontsReady);
 
   // Measure what was actually painted against the window it was painted in.
   //
