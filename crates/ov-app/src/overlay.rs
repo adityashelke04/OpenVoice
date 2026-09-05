@@ -17,8 +17,18 @@ use tauri::{Emitter, LogicalPosition, Manager, WebviewWindow};
 
 /// Distance from a screen edge within which the bar snaps flush to it.
 const SNAP_PX: f64 = 28.0;
-/// Clearance left below the bar when it is auto-placed, enough for a taskbar.
-const BOTTOM_GAP: f64 = 96.0;
+/// Clearance left below the bar between it and the bottom of the *work area*.
+///
+/// This used to be 96 and used to be measured from the bottom of the screen,
+/// where it was standing in for the height of a taskbar nobody had measured. On
+/// a 1080p display with Windows 11's 48px taskbar that left the pill's bottom at
+/// 984 with 48px of dead air under it; with the taskbar set to auto-hide it left
+/// the bar floating 96px up for no reason at all; and with the taskbar docked
+/// left or top it was wrong in the other direction. The work area already knows
+/// where the usable space ends, so this is only the gap — small enough to read as
+/// "just above the taskbar", large enough that the glow margin while dictating
+/// does not touch it.
+const BOTTOM_GAP: f64 = 16.0;
 
 // The window is a fixed size, and the pill moves inside it. See ADR 0007.
 //
@@ -971,16 +981,10 @@ impl Overlay {
             return;
         }
 
-        let Some((origin, area)) = monitor_logical(win) else {
+        let Some((origin, area)) = work_area_logical(win) else {
             return;
         };
-        // Placed by where the *pill* goes, not the window. Both terms are
-        // independent of the pill's width, so auto-placement no longer depends on
-        // which state the bar happens to be in when it runs — which is what made
-        // a bar parked during startup and a bar parked later land tens of pixels
-        // apart.
-        let cx = origin.0 + area.0 / 2.0;
-        let top = origin.1 + area.1 - BOTTOM_GAP - PILL_H;
+        let (cx, top) = center_anchor(origin, area);
         self.command(win, cx, top);
         tracing::debug!(cx, top, "overlay auto-placed");
     }
@@ -1025,6 +1029,56 @@ impl Overlay {
         }
         q.push_back((x, y));
     }
+}
+
+/// The pill's anchor for a bar that has nowhere it remembers being: centred
+/// along the bottom of the space the user can actually see.
+///
+/// Pure, and takes the work area rather than reading a monitor, because every
+/// interesting case is a display this machine does not have — an auto-hidden
+/// taskbar, one docked to the left, a second monitor at a negative origin — and
+/// the only way to assert against those is to hand them in.
+///
+/// Both terms are relative to the work area's own origin, so nothing here knows
+/// or cares which monitor it is describing. Centring on `width / 2` alone would
+/// put a bar that lives on the left-hand display onto the right-hand one.
+///
+/// Expressed as the *pill's* anchor, not the window's origin, for the reason
+/// stated on [`origin_for`]: the window is a fixed rectangle around the pill, so
+/// neither term depends on which state the bar happens to be in when this runs.
+fn center_anchor((ox, oy): (f64, f64), (w, h): (f64, f64)) -> (f64, f64) {
+    (ox + w / 2.0, oy + h - BOTTOM_GAP - PILL_H)
+}
+
+/// The monitor's *work area* in logical pixels: origin and size, taskbar excluded.
+///
+/// The distinction from [`monitor_logical`] is the point. A monitor's
+/// `size` is the glass; its work area is what is left once the shell has taken
+/// its share, and the shell's share is not a constant — it moves with the
+/// taskbar's edge, its height, and whether it auto-hides. Placing the bar against
+/// the glass and subtracting a guess is how the bar came to sit 48px above the
+/// taskbar on one machine and behind it on another.
+///
+/// Falls back to the full monitor when a work area is unavailable, which keeps a
+/// platform that does not report one behaving exactly as it did before rather
+/// than dropping the bar into a corner.
+fn work_area_logical(win: &WebviewWindow) -> Option<((f64, f64), (f64, f64))> {
+    let m = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten())?;
+    let scale = m.scale_factor();
+    let area = m.work_area();
+    let size = area.size.to_logical::<f64>(scale);
+    // A zero-sized work area is not a screen with no room on it; it is a monitor
+    // that did not answer. Treating it as real would stack the bar's whole height
+    // above the origin and park it off the top of the display.
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return monitor_logical(win);
+    }
+    let pos = area.position.to_logical::<f64>(scale);
+    Some(((pos.x, pos.y), (size.width, size.height)))
 }
 
 fn monitor_logical(win: &WebviewWindow) -> Option<((f64, f64), (f64, f64))> {
@@ -1092,7 +1146,13 @@ fn edge_at(origin_x: f64, width: f64, pill_w: f64, x: f64) -> Edge {
 }
 
 fn snap_box(win: &WebviewWindow, x: f64, y: f64, (w, h): (f64, f64)) -> (f64, f64) {
-    let Some((origin, area)) = monitor_logical(win) else {
+    // The work area, not the monitor, and for the same reason `park` uses it: the
+    // home line a drag snaps to and the home line "Back to center" jumps to have
+    // to be the same line. Measured from the screen instead, `bottom -
+    // BOTTOM_GAP` would sit behind the taskbar, and the bar would have two
+    // different ideas of where the middle of the bottom of the screen is
+    // depending on how it got there.
+    let Some((origin, area)) = work_area_logical(win) else {
         return (x, y);
     };
     let (mut nx, mut ny) = (x, y);
@@ -1912,5 +1972,76 @@ mod collapse_tests {
         assert_eq!(back.hidden_until, 42, "the snooze was lost");
         assert!(back.mini, "the pinned-small preference was lost");
         assert!(back.cx.is_nan(), "still unplaced");
+    }
+}
+
+/// Where the bar goes when it has no remembered position — and when the user
+/// asks for it back.
+///
+/// Split from `tests` above because those assert the *shape* of the pill and
+/// share the viewport fixtures; these assert where the pill is *put*, against a
+/// monitor's work area, and share nothing with them.
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    /// The primary display on the machine this was written on: 1920x1080 with a
+    /// 48px taskbar along the bottom, so the work area is 1920x1032.
+    const WORK: ((f64, f64), (f64, f64)) = ((0.0, 0.0), (1920.0, 1032.0));
+
+    /// Horizontally centred in the work area, not merely somewhere near the
+    /// middle. Half of 1920 is the whole claim of the feature's name.
+    #[test]
+    fn the_bar_is_centred_in_the_work_area() {
+        let (cx, _) = center_anchor(WORK.0, WORK.1);
+        assert_eq!(cx, 960.0);
+    }
+
+    /// The gap is measured from the *work area's* bottom, which is the top of the
+    /// taskbar — not from the screen's bottom, which is behind it.
+    ///
+    /// This is the bug the feature exposed. The old arithmetic took the full
+    /// monitor height and subtracted a constant that was a guess at how tall a
+    /// taskbar is, so on this display the pill's bottom landed at 984 with 48px
+    /// of dead air under it, and on an auto-hidden taskbar it floated for no
+    /// reason at all.
+    #[test]
+    fn the_bar_sits_one_gap_above_the_taskbar() {
+        let (_, top) = center_anchor(WORK.0, WORK.1);
+        assert_eq!(top + PILL_H, 1032.0 - BOTTOM_GAP, "pill bottom");
+        assert_eq!(top, 976.0);
+    }
+
+    /// A taskbar set to auto-hide leaves the work area equal to the whole screen.
+    /// The bar should then sit a gap above the screen's bottom, because that is
+    /// where the usable space now ends — not 96px up, which is where a hardcoded
+    /// taskbar guess would have left it.
+    #[test]
+    fn an_auto_hidden_taskbar_gives_the_bar_the_whole_screen() {
+        let (cx, top) = center_anchor((0.0, 0.0), (1920.0, 1080.0));
+        assert_eq!(cx, 960.0);
+        assert_eq!(top + PILL_H, 1080.0 - BOTTOM_GAP);
+    }
+
+    /// A taskbar docked to the left insets the work area's *origin*, and a
+    /// centred bar has to follow it. Reading only the size would centre the bar
+    /// on the screen and leave it visibly off-centre within the space the user
+    /// can actually see.
+    #[test]
+    fn a_left_docked_taskbar_shifts_the_centre_right() {
+        let (cx, top) = center_anchor((72.0, 0.0), (1848.0, 1080.0));
+        assert_eq!(cx, 72.0 + 924.0, "centred in the work area, not the screen");
+        assert_eq!(top + PILL_H, 1080.0 - BOTTOM_GAP);
+    }
+
+    /// A secondary display left of the primary has a negative origin. Every term
+    /// here is relative to that origin, so nothing needs to know which monitor it
+    /// is on — but a version that centred on `width / 2` alone would put the bar
+    /// on the wrong screen entirely.
+    #[test]
+    fn a_monitor_at_a_negative_origin_centres_on_itself() {
+        let (cx, top) = center_anchor((-1920.0, 0.0), (1536.0, 816.0));
+        assert_eq!(cx, -1152.0);
+        assert_eq!(top + PILL_H, 816.0 - BOTTOM_GAP);
     }
 }

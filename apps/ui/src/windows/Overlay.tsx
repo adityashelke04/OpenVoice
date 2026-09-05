@@ -26,6 +26,7 @@ import {
   viewportNow,
 } from "./overlay-trace";
 import { useIdleCollapse } from "./useIdleCollapse";
+import { useFlowMenu } from "./useFlowMenu";
 import { useMenuHeight } from "./useMenuHeight";
 import { useMenuTimeout } from "./useMenuTimeout";
 import { MONO_11, SANS_12, resolveFont, useFontsReady } from "./useFontsReady";
@@ -228,9 +229,6 @@ function geometry(v: {
   const w = Math.ceil(IDLE_CHROME + textWidth(v.hint, MONO_11));
   return { w: Math.max(150, w), h: PILL_H };
 }
-
-/** One row of the Flow Menu. `sep` renders a divider before the item. */
-type MenuRow = { id: string; label: string; run: () => void; sep?: boolean };
 
 /**
  * The menu's height is **measured, never modelled**. See `useMenuHeight`.
@@ -1308,6 +1306,9 @@ export function Overlay() {
     live,
     working,
     autoCollapse,
+    // `call` is async and every row ignores the result; the hook takes the
+    // fire-and-forget shape so its rows stay synchronous and testable.
+    call: (cmd, args) => void call(cmd, args),
     setMenu,
     setMini,
     setAutoCollapse,
@@ -1689,112 +1690,3 @@ export function Overlay() {
   );
 }
 
-/**
- * The Flow Menu.
- *
- * Modelled on Wispr Flow's, which offers Hide for 1 hour, Settings, Microphone,
- * transcript history and Paste last transcript — and is the part of their bar
- * that makes it a control surface rather than a status light. The two items this
- * menu used to have could open the Hub and hide the bar, which meant every other
- * thing a person might want mid-dictation required finding the Hub first.
- *
- * Destinations route to a named Hub section (see `show_hub_cmd`), so the labels
- * name where they actually go.
- */
-function useFlowMenu(v: {
-  mini: boolean;
-  live: boolean;
-  working: boolean;
-  autoCollapse: boolean;
-  setMenu: (b: boolean) => void;
-  setMini: (b: boolean) => void;
-  setAutoCollapse: (b: boolean) => void;
-}): MenuRow[] {
-  const { mini, live, working, autoCollapse, setMenu, setMini, setAutoCollapse } = v;
-  const close = useCallback(() => setMenu(false), [setMenu]);
-
-  return [
-    {
-      id: "dictate",
-      label: live ? "Stop dictating" : "Start dictating",
-      run: () => {
-        void call("toggle_session");
-        close();
-      },
-    },
-    {
-      id: "paste",
-      label: "Paste last transcript",
-      run: () => {
-        void call("paste_last");
-        close();
-      },
-    },
-    {
-      id: "history",
-      label: "Transcript history",
-      sep: true,
-      run: () => {
-        void call("show_hub_cmd", { tab: "home" });
-        close();
-      },
-    },
-    {
-      id: "mic",
-      label: "Microphone",
-      run: () => {
-        void call("show_hub_cmd", { tab: "settings" });
-        close();
-      },
-    },
-    {
-      id: "settings",
-      label: "Settings",
-      run: () => {
-        void call("show_hub_cmd", { tab: "settings" });
-        close();
-      },
-    },
-    {
-      id: "mini",
-      label: mini ? "Full bar" : "Compact bar",
-      sep: true,
-      run: () => {
-        setMini(!mini);
-        void call("overlay_set_mini", { on: !mini });
-        close();
-      },
-    },
-    {
-      // Named for what the bar does, not for the mechanism. "Auto-collapse" is
-      // a description of an implementation; "get out of the way" is the thing
-      // the user actually wants, and the label has to survive being read once,
-      // in a hurry, over somebody else's window.
-      id: "auto-collapse",
-      label: autoCollapse ? "Stay full size" : "Shrink when idle",
-      run: () => {
-        setAutoCollapse(!autoCollapse);
-        void call("overlay_set_auto_collapse", { on: !autoCollapse });
-        close();
-      },
-    },
-    {
-      // Named for what it does rather than for how long, because an hour is a
-      // detail and "you will not see this again today" is the decision.
-      id: "snooze",
-      label: "Hide for an hour",
-      run: () => {
-        void call("overlay_snooze", { minutes: 60 });
-        close();
-      },
-    },
-    {
-      id: "dictate-only",
-      label: "Only show while dictating",
-      run: () => {
-        void call("overlay_always_visible", { on: false });
-        close();
-      },
-    },
-  ].filter((r) => !(working && r.id === "dictate"));
-}
