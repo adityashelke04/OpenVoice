@@ -26,6 +26,10 @@ import {
   viewportNow,
 } from "./overlay-trace";
 import { useIdleCollapse } from "./useIdleCollapse";
+import { useFlowMenu } from "./useFlowMenu";
+import { useMenuHeight } from "./useMenuHeight";
+import { useMenuTimeout } from "./useMenuTimeout";
+import { MONO_11, SANS_12, resolveFont, useFontsReady } from "./useFontsReady";
 import "./overlay.css";
 
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -216,29 +220,35 @@ function geometry(v: {
   // before the part that says what to do about it.
   if (v.text !== undefined) {
     const actionW = v.hasAction ? 96 : 0;
-    const w = Math.ceil(MSG_CHROME + textWidth(v.text, "400 12px $sans") + actionW);
+    const w = Math.ceil(MSG_CHROME + textWidth(v.text, SANS_12) + actionW);
     return { w: Math.min(380, Math.max(200, w)), h: PILL_H };
   }
 
   // Idle. The fixed 150px tier fit exactly one shortcut — the default — and any
   // remap collided with the word "Hold" and was clipped.
-  const w = Math.ceil(IDLE_CHROME + textWidth(v.hint, "500 11px $mono"));
+  const w = Math.ceil(IDLE_CHROME + textWidth(v.hint, MONO_11));
   return { w: Math.max(150, w), h: PILL_H };
 }
 
-/** One row of the Flow Menu. `sep` renders a divider before the item. */
-type MenuRow = { id: string; label: string; run: () => void; sep?: boolean };
-
-const MENU_PAD = 4;
-const MENU_ITEM = 28;
-const MENU_SEP = 9;
-
-/** The menu's height, computed from its contents rather than pinned to a number
- *  that silently stops matching the moment an item is added. */
-function menuHeight(rows: MenuRow[]): number {
-  const seps = rows.filter((r) => r.sep).length;
-  return PILL_H + MENU_PAD * 2 + rows.length * MENU_ITEM + seps * MENU_SEP + 12;
-}
+/**
+ * The menu's height is **measured, never modelled**. See `useMenuHeight`.
+ *
+ * There used to be a `menuHeight(rows)` here that added up a padding constant, a
+ * row height, a separator height and a magic `+ 12`. It was wrong by 6px, and the
+ * 6px was the bug: the window's region is clipped to the height this produced, so
+ * a region 6px taller than the menu left a 6px strip inside the clip that nothing
+ * painted. The overlay window is transparent only where the DOM paints — the
+ * comment at the top of `overlay.css` is the contract — so an unpainted strip
+ * inside the region is not see-through. It is the webview's own background, and
+ * it reads as a white bar hanging in the air above the menu.
+ *
+ * The number could have been corrected to 324. It would have been wrong again the
+ * first time anyone changed a padding, added a row, or shipped a font whose
+ * metrics round a button differently. This file has been bitten by exactly this
+ * before — see the note on `barText`, where sizing the window from a private copy
+ * of the component's own logic clipped "Starting the speech engine…" — and the
+ * answer is the same one: ask the thing that knows.
+ */
 
 /** How long the bar takes to slide into a snapped position after a drag. */
 const SETTLE_MS = 220;
@@ -304,9 +314,10 @@ function textWidth(text: string, font: string): number {
     ((textWidth as { c?: HTMLCanvasElement }).c = document.createElement("canvas"));
   const ctx = canvas.getContext("2d");
   if (!ctx) return text.length * 7;
-  const root = getComputedStyle(document.documentElement);
-  ctx.font = font.replace("$mono", root.getPropertyValue("--font-mono").trim() || "monospace")
-    .replace("$sans", root.getPropertyValue("--font-sans").trim() || "sans-serif");
+  // The same substitution the preload in `useFontsReady` applies, so the face
+  // that was loaded is by construction the face being measured. When it was
+  // written out twice, only one of the two knew what a `$mono` was.
+  ctx.font = resolveFont(font);
   return ctx.measureText(text).width;
 }
 
@@ -377,7 +388,26 @@ type Anchor = { cx: number; top: number };
  * new listener has to remember to; the loop's "are we there yet?" comparison
  * covers it, which is the only mechanism in this file that has never dropped one.
  */
-type Box = { w: number; h: number; m: number; above?: boolean; vw: number; vh: number };
+type Box = {
+  w: number;
+  h: number;
+  m: number;
+  /** The measured menu height in CSS pixels, or 0 when no menu is open. */
+  mh?: number;
+  above?: boolean;
+  vw: number;
+  vh: number;
+  /**
+   * Whether this shape includes the Flow Menu.
+   *
+   * Distinct from `above`, which is only true for a menu that opens *upward* — a
+   * menu opening downward sets `above: false` and would otherwise be
+   * indistinguishable from a bare pill. Rust needs to tell them apart, because
+   * the menu is the one thing here that vanishes rather than morphs and so must
+   * not be unioned into the region after it is gone. See `set_shape`.
+   */
+  menu?: boolean;
+};
 
 /**
  * Where the pill is, given where its window is.
@@ -407,19 +437,39 @@ function anchorFrom(x: number, y: number): Anchor {
  */
 function sameBox(a: Box, b: Box): boolean {
   return (
-    a.w === b.w && a.h === b.h && a.m === b.m && a.above === b.above && a.vw === b.vw && a.vh === b.vh
+    a.w === b.w &&
+    a.h === b.h &&
+    a.mh === b.mh &&
+    a.m === b.m &&
+    a.above === b.above &&
+    a.menu === b.menu &&
+    a.vw === b.vw &&
+    a.vh === b.vh
   );
 }
 
 function useWindowShape(
   pillW: number,
   pillH: number,
+  /** The measured menu height, or 0 when none is open. See `Box`. */
+  menuH: number,
   margin: number,
   above: boolean,
+  /** Whether the shape includes the menu. See `Box`. */
+  menu: boolean,
   /** The layout viewport, measured. See `Box`. */
   view: { w: number; h: number },
   want: React.MutableRefObject<Box>,
   ready: boolean,
+  /**
+   * Bumped when a face the pill measures with loads. See `useFontsReady`.
+   *
+   * A dependency, not context, and for the same reason the viewport is part of
+   * the `Box`: a font arriving changes how wide the pill is, and a width that
+   * changes without a shape following it leaves the window clipped to the
+   * previous one. React cannot see a font load, so it is named here.
+   */
+  fonts: number,
 ) {
   // Whether a command is already in flight. With `want`, this makes the sender
   // single-flight: bursts collapse to the latest desired shape instead of
@@ -474,13 +524,20 @@ function useWindowShape(
         // its state, and therefore of a value that could be stale. The window is
         // a constant now. All that crosses the boundary is how big the pill is.
         mark("flush", { w: target.w, h: target.h, m: target.m, above: target.above });
+        // One `shape` payload rather than seven loose arguments: four of them are
+        // numbers and two are booleans, and a transposed pair would still be a
+        // valid call on both sides of the boundary.
         await call("overlay_set_shape", {
-          pillW: target.w,
-          pillH: target.h,
-          margin: target.m,
-          above: target.above ?? false,
-          viewW: target.vw,
-          viewH: target.vh,
+          shape: {
+            pillW: target.w,
+            pillH: target.h,
+            menuH: target.mh ?? 0,
+            margin: target.m,
+            above: target.above ?? false,
+            menu: target.menu ?? false,
+            viewW: target.vw,
+            viewH: target.vh,
+          },
         });
         sent.current = target;
         mark("flushed", { w: target.w, h: target.h, m: target.m, above: target.above });
@@ -500,9 +557,9 @@ function useWindowShape(
   // calling it on a pass that has nothing to do costs one comparison.
   useLayoutEffect(() => {
     if (!inTauri()) return;
-    want.current = { w: pillW, h: pillH, m: margin, above, vw: view.w, vh: view.h };
+    want.current = { w: pillW, h: pillH, mh: menuH, m: margin, above, menu, vw: view.w, vh: view.h };
     void flush();
-  }, [pillW, pillH, margin, above, view.w, view.h, ready, flush, want]);
+  }, [pillW, pillH, menuH, margin, above, menu, view.w, view.h, ready, fonts, flush, want]);
 
   // A resize that never lands is silent, and that is what made this expensive.
   //
@@ -528,6 +585,27 @@ export function Overlay() {
   const { view, levelRef } = useLiveEngine();
   const { settings } = useSettings();
   const [menu, setMenu] = useState(false);
+  /** Stable, so `useMenuTimeout` is not handed a new callback every render. */
+  const closeMenu = useCallback(() => setMenu(false), []);
+  /**
+   * The menu's real height, straight off the mounted element.
+   *
+   * The region the window is clipped to is built from this, and the region has to
+   * match the paint exactly — see `useMenuHeight` for why a computed height was
+   * the wrong shape of answer and what it looked like when it drifted.
+   */
+  const [menuRef, menuH] = useMenuHeight();
+  /**
+   * Which side the menu opens on, decided once when it opens.
+   *
+   * Derived from `anchor`, which is a ref: reading a ref during render is not
+   * reactive, so the placement could be computed from an anchor that had not
+   * landed yet, and could flip from above to below underneath a menu the user was
+   * already reading. Freezing it at open time makes the placement a property of
+   * this particular opening rather than of whatever the bar's position happened
+   * to be on the last render.
+   */
+  const [menuAbove, setMenuAbove] = useState(true);
   /**
    * The layout viewport, measured rather than assumed to be `OVERLAY_W`x`OVERLAY_H`.
    *
@@ -596,7 +674,7 @@ export function Overlay() {
   /** The box the window has been told to be. Read only by `useWindowGeometry`:
    *  converting a window position back into an anchor uses `anchorFrom`, which
    *  reads the window rather than this. See the note there. */
-  const box = useRef<Box>({ w: 150, h: 40, m: 0, vw: OVERLAY_W, vh: OVERLAY_H });
+  const box = useRef<Box>({ w: 150, h: 40, mh: 0, m: 0, vw: OVERLAY_W, vh: OVERLAY_H });
   /**
    * Positions this side has commanded, so moves reported back can be recognised
    * as our own rather than guessed at. See `COMMANDED_HISTORY`.
@@ -617,6 +695,16 @@ export function Overlay() {
    */
   const scaleRef = useRef(1);
   const [geomReady, setGeomReady] = useState(false);
+  /**
+   * The faces the pill measures itself with.
+   *
+   * Read here rather than inside `geometry()` because a font load is not a React
+   * state change: without this the browser re-lays-out the pill at its true
+   * width and nothing re-renders, so the shape Rust clips the window to keeps
+   * the width a canvas guessed before the face existed. That is the cold-launch
+   * crop. See `useFontsReady`.
+   */
+  const fontsReady = useFontsReady();
 
   // Rust places the bar at startup and whenever it returns from hidden, and
   // says so. Re-deriving the anchor from that is what keeps "only show while
@@ -1166,6 +1254,11 @@ export function Overlay() {
   );
   collapsedRef.current = collapsed;
 
+  // The guarantee. Every Rust-side dismissal can fail to install without saying
+  // so; this one is a timer beside the state it closes, so the bar cannot be left
+  // wearing an open menu indefinitely no matter what else breaks.
+  useMenuTimeout(menu, hovering, closeMenu);
+
   // Raised when the shape changes and lowered by the element that actually
   // finishes moving, rather than by a timer guessing the duration. A timer here
   // would be a third copy of the CSS durations, drifting the first time one of
@@ -1213,6 +1306,9 @@ export function Overlay() {
     live,
     working,
     autoCollapse,
+    // `call` is async and every row ignores the result; the hook takes the
+    // fire-and-forget shape so its rows stay synchronous and testable.
+    call: (cmd, args) => void call(cmd, args),
     setMenu,
     setMini,
     setAutoCollapse,
@@ -1261,10 +1357,17 @@ export function Overlay() {
   const pillWidth = geo.w;
   const pillHeight = geo.h;
   expectedPillH.current = pillHeight;
-  // If the bar is near the top of the screen (top < 340), open menu below; otherwise open above.
-  const menuAbove = (anchor.current?.top ?? 900) >= 340;
+  // Frozen when the menu opened -- see `menuAbove`.
   const menuPlacement = menuAbove ? "above" : "below";
-  const shapeHeight = menu ? menuHeight(rows) : pillHeight;
+  // Sent as its own number rather than folded into the pill's height, because
+  // Rust builds the region from the two boxes separately: they are rounded by
+  // different amounts -- 8px for the menu, half its height for the pill -- and a
+  // single box rounded either way would leave unpainted notches at the other end.
+  //
+  // `0` until the menu has been measured (see `useMenuHeight`), which is the only
+  // safe answer: the region may grow a frame late, but it must never be larger
+  // than the paint.
+  const shapeMenuH = menu && menuH > 0 ? menuH : 0;
 
   // Never both: the menu already claims a much larger box for its own purposes,
   // and stacking the glow margin on top would overshoot it. The menu also closes
@@ -1272,7 +1375,18 @@ export function Overlay() {
   const glowing = live && !menu;
   const margin = glowing ? GLOW_MARGIN : 0;
 
-  useWindowShape(pillWidth, shapeHeight, margin, menu && menuAbove, viewport, box, geomReady);
+  useWindowShape(
+    pillWidth,
+    pillHeight,
+    shapeMenuH,
+    margin,
+    menu && menuAbove,
+    menu,
+    viewport,
+    box,
+    geomReady,
+    fontsReady,
+  );
 
   // Measure what was actually painted against the window it was painted in.
   //
@@ -1381,9 +1495,11 @@ export function Overlay() {
   // and the listener below only ever fires in the component sheet, where the same
   // component runs in an ordinary browser window. Without the state check, right-
   // clicking the bar and then dictating left the 226px menu panel open behind the
-  // pill — an opaque rectangle around a window whose entire job is to be a pill,
-  // and one the user cannot dismiss by clicking away from, because there is
-  // nowhere to click that this window can see.
+  // pill — an opaque rectangle around a window whose entire job is to be a pill.
+  //
+  // "Nowhere to click that this window can see" used to be the end of the story,
+  // and it was the whole bug: the menu had no dismissal but a second right-click.
+  // Rust now goes and finds those clicks — see `overlay-menu-dismiss` below.
   useEffect(() => {
     if (!menu) return;
     if (live || working) {
@@ -1394,6 +1510,38 @@ export function Overlay() {
     window.addEventListener("blur", close);
     return () => window.removeEventListener("blur", close);
   }, [menu, live, working]);
+
+  // Arm the click-away watch for exactly as long as the menu is up.
+  //
+  // One effect on `menu` rather than a call beside each `setMenu`, so a future
+  // route that closes the menu cannot forget to take the hook down with it — and
+  // a hook left installed is a dictation app watching every click in the system
+  // for no reason.
+  useEffect(() => {
+    if (!inTauri()) return;
+    void call("overlay_menu_open", { open: menu });
+    return () => {
+      if (menu) void call("overlay_menu_open", { open: false });
+    };
+  }, [menu]);
+
+  // The dismissal itself: a click somewhere else, another app coming forward,
+  // Escape, or the bar being hidden. All four arrive on one event, because from
+  // this side they are one fact — the menu is no longer what the user is doing.
+  //
+  // This is the listener the `blur` one above could never be. The window is
+  // `WS_EX_NOACTIVATE` and clipped to the pill, so a click anywhere else is not
+  // an event it is capable of observing; Rust has to go and find it. See the
+  // `clickaway` module.
+  useEffect(() => {
+    if (!inTauri()) return;
+    let un: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      un = await listen("overlay-menu-dismiss", () => setMenu(false));
+    })();
+    return () => un?.();
+  }, []);
 
   // State changes are announced. A person using a screen reader gets no benefit
   // from a waveform, and the whole point of this window is knowing whether the
@@ -1443,7 +1591,7 @@ export function Overlay() {
       </span>
 
       {menu && menuPlacement === "above" && (
-        <div className="overlay-menu overlay-menu--above" role="menu">
+        <div className="overlay-menu overlay-menu--above" role="menu" ref={menuRef}>
           {rows.map((r) => (
             <div key={r.id}>
               {r.sep && <div className="overlay-menu-sep" />}
@@ -1475,7 +1623,16 @@ export function Overlay() {
         }}
         onContextMenu={(e) => {
           e.preventDefault();
-          setMenu((m) => !m);
+          setMenu((m) => {
+            // Only on the way open. Deciding the side on every toggle would let a
+            // close recompute a placement nothing is going to use, and a bar that
+            // had since moved would then animate the panel out on the wrong side.
+            //
+            // Near the top of the screen there is no room above, so the menu goes
+            // below; anywhere else it opens upward, away from the pointer.
+            if (!m) setMenuAbove((anchor.current?.top ?? 900) >= 340);
+            return !m;
+          });
         }}
         data-collapsed={collapsed}
         title={
@@ -1518,7 +1675,7 @@ export function Overlay() {
       </div>
 
       {menu && menuPlacement === "below" && (
-        <div className="overlay-menu overlay-menu--below" role="menu">
+        <div className="overlay-menu overlay-menu--below" role="menu" ref={menuRef}>
           {rows.map((r) => (
             <div key={r.id}>
               {r.sep && <div className="overlay-menu-sep" />}
@@ -1533,112 +1690,3 @@ export function Overlay() {
   );
 }
 
-/**
- * The Flow Menu.
- *
- * Modelled on Wispr Flow's, which offers Hide for 1 hour, Settings, Microphone,
- * transcript history and Paste last transcript — and is the part of their bar
- * that makes it a control surface rather than a status light. The two items this
- * menu used to have could open the Hub and hide the bar, which meant every other
- * thing a person might want mid-dictation required finding the Hub first.
- *
- * Destinations route to a named Hub section (see `show_hub_cmd`), so the labels
- * name where they actually go.
- */
-function useFlowMenu(v: {
-  mini: boolean;
-  live: boolean;
-  working: boolean;
-  autoCollapse: boolean;
-  setMenu: (b: boolean) => void;
-  setMini: (b: boolean) => void;
-  setAutoCollapse: (b: boolean) => void;
-}): MenuRow[] {
-  const { mini, live, working, autoCollapse, setMenu, setMini, setAutoCollapse } = v;
-  const close = useCallback(() => setMenu(false), [setMenu]);
-
-  return [
-    {
-      id: "dictate",
-      label: live ? "Stop dictating" : "Start dictating",
-      run: () => {
-        void call("toggle_session");
-        close();
-      },
-    },
-    {
-      id: "paste",
-      label: "Paste last transcript",
-      run: () => {
-        void call("paste_last");
-        close();
-      },
-    },
-    {
-      id: "history",
-      label: "Transcript history",
-      sep: true,
-      run: () => {
-        void call("show_hub_cmd", { tab: "home" });
-        close();
-      },
-    },
-    {
-      id: "mic",
-      label: "Microphone",
-      run: () => {
-        void call("show_hub_cmd", { tab: "settings" });
-        close();
-      },
-    },
-    {
-      id: "settings",
-      label: "Settings",
-      run: () => {
-        void call("show_hub_cmd", { tab: "settings" });
-        close();
-      },
-    },
-    {
-      id: "mini",
-      label: mini ? "Full bar" : "Compact bar",
-      sep: true,
-      run: () => {
-        setMini(!mini);
-        void call("overlay_set_mini", { on: !mini });
-        close();
-      },
-    },
-    {
-      // Named for what the bar does, not for the mechanism. "Auto-collapse" is
-      // a description of an implementation; "get out of the way" is the thing
-      // the user actually wants, and the label has to survive being read once,
-      // in a hurry, over somebody else's window.
-      id: "auto-collapse",
-      label: autoCollapse ? "Stay full size" : "Shrink when idle",
-      run: () => {
-        setAutoCollapse(!autoCollapse);
-        void call("overlay_set_auto_collapse", { on: !autoCollapse });
-        close();
-      },
-    },
-    {
-      // Named for what it does rather than for how long, because an hour is a
-      // detail and "you will not see this again today" is the decision.
-      id: "snooze",
-      label: "Hide for an hour",
-      run: () => {
-        void call("overlay_snooze", { minutes: 60 });
-        close();
-      },
-    },
-    {
-      id: "dictate-only",
-      label: "Only show while dictating",
-      run: () => {
-        void call("overlay_always_visible", { on: false });
-        close();
-      },
-    },
-  ].filter((r) => !(working && r.id === "dictate"));
-}

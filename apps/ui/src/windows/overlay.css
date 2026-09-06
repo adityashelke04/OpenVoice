@@ -81,9 +81,22 @@
  * you want mid-dictation — paste the last transcript, change the microphone,
  * make the bar smaller, make it go away for an hour — do not require finding
  * the Hub first. */
+/* The menu sits flush against the pill, with no gap between them.
+ *
+ * There used to be an `--s-2` gap, and it could not work. The window's region is
+ * a single rectangle spanning the menu and the pill, and the window is
+ * transparent only where the DOM paints (see the note at the top of this file).
+ * A gap between two painted boxes is therefore not a gap: it is a 4px band inside
+ * the region that nothing paints, which the webview fills with its own
+ * background. It rendered as a white line across the bar.
+ *
+ * Flush is not a compromise made to satisfy the region. A menu touching the
+ * control it belongs to is how menus anchored to a bar are normally drawn, and it
+ * reads as attached to the pill rather than floating near it. The old gap was
+ * describing a separation the compositor was never going to honour. */
 .overlay-menu {
   pointer-events: auto;
-  margin-top: var(--s-2);
+  margin-top: 0;
   /* Matches the pill it hangs from rather than the window, which is a fixed 404
      and much wider than the menu should be. `geometry()` widens the pill to 280
      while the menu is open for exactly this reason. */
@@ -100,7 +113,7 @@
 }
 
 .overlay-menu--below {
-  margin-top: var(--s-2);
+  margin-top: 0;
   animation: menu-appear-below 140ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
   transform-origin: top center;
 }
@@ -110,30 +123,34 @@
   margin-top: 0;
   top: var(--pill-top, 300px);
   left: 50%;
-  transform: translate(-50%, calc(-100% - var(--s-2)));
+  transform: translate(-50%, -100%);
   animation: menu-appear-above 140ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
   transform-origin: bottom center;
 }
 
+/* The entrance moves opacity only.
+ *
+ * It used to translate 6px and scale to 0.98, which meant that for the 140ms of
+ * the animation the menu was smaller than the region already clipped for it —
+ * and every pixel of the difference was unpainted region showing the webview's
+ * background. The bug this file's region rules exist to prevent, reintroduced by
+ * an easing curve. A menu that fades in reads as arriving just as well, and it is
+ * the same size on every frame it is on screen. */
 @keyframes menu-appear-above {
   from {
     opacity: 0;
-    transform: translate(-50%, calc(-100% - var(--s-2) + 6px)) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, calc(-100% - var(--s-2))) scale(1);
   }
 }
 
 @keyframes menu-appear-below {
   from {
     opacity: 0;
-    transform: translateY(-6px) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 

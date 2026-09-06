@@ -26,6 +26,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
+mod clickaway;
 mod engine;
 mod history;
 mod models;
@@ -69,6 +70,23 @@ impl engine::Shell for TauriShell {
     fn set_latched(&self, latched: bool) {
         if let Some(win) = overlay::window(&self.app) {
             let _ = win.emit("overlay-latched", latched);
+        }
+    }
+
+    /// Escape closes the Flow Menu.
+    ///
+    /// Routed through Rust because the bar is `WS_EX_NOACTIVATE` and never has
+    /// keyboard focus, so its webview receives no key events at all. The global
+    /// hook in `ov-input` is the only thing in the process that sees the
+    /// keystroke.
+    ///
+    /// Sent unconditionally rather than gated on `clickaway::is_armed()`. The
+    /// event is a no-op in a webview whose menu is already closed, and a gate
+    /// would make Escape depend on the mouse hook having installed successfully
+    /// — which is precisely the failure this is a backstop for.
+    fn on_cancel_key(&self) {
+        if let Some(win) = overlay::window(&self.app) {
+            let _ = win.emit("overlay-menu-dismiss", ());
         }
     }
 }
@@ -588,35 +606,54 @@ fn overlay_move(
 /// This replaced `overlay_set_box`. The window is a fixed rectangle now, so the
 /// frontend has no business knowing where it is or how big it is — it says how
 /// big the *pill* is, and the shape follows.
-#[tauri::command]
-fn overlay_set_shape(
-    app: AppHandle,
+/// The shape as it crosses the IPC boundary.
+///
+/// The optional fields are optional for one reason each, and both are about a
+/// frontend that has not finished measuring itself: a missing viewport falls back
+/// to the nominal window rather than being read as a zero, and the two booleans
+/// default to "no menu", which is the smaller region and therefore the safe
+/// answer if either ever goes missing.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShapeArgs {
     pill_w: f64,
     pill_h: f64,
+    menu_h: Option<f64>,
     margin: f64,
     above: Option<bool>,
     view_w: Option<f64>,
     view_h: Option<f64>,
-) {
+    menu: Option<bool>,
+}
+
+#[tauri::command]
+fn overlay_set_shape(app: AppHandle, shape: ShapeArgs) {
     if let Some(win) = overlay::window(&app) {
         // The layout viewport the pill was actually centred in, not the size this
         // window is nominally supposed to be. They are the same number right up
         // until WebView2 changes its rasterization scale, at which point trusting
         // the constant clips the bar off the screen — see `css_to_physical`.
-        //
-        // Optional so that a frontend that has not measured itself yet falls back
-        // to the nominal size rather than sending a zero.
         let view = (
-            view_w.filter(|v| *v > 0.0).unwrap_or(overlay::OVERLAY_W),
-            view_h.filter(|v| *v > 0.0).unwrap_or(overlay::OVERLAY_H),
+            shape
+                .view_w
+                .filter(|v| *v > 0.0)
+                .unwrap_or(overlay::OVERLAY_W),
+            shape
+                .view_h
+                .filter(|v| *v > 0.0)
+                .unwrap_or(overlay::OVERLAY_H),
         );
         app.state::<AppState>().overlay.set_shape(
             &win,
-            view,
-            pill_w,
-            pill_h,
-            margin,
-            above.unwrap_or(false),
+            overlay::Shape {
+                view,
+                pill_w: shape.pill_w,
+                pill_h: shape.pill_h,
+                menu_h: shape.menu_h.filter(|v| *v > 0.0).unwrap_or(0.0),
+                margin: shape.margin,
+                above: shape.above.unwrap_or(false),
+                menu: shape.menu.unwrap_or(false),
+            },
         );
     }
 }
@@ -715,6 +752,25 @@ fn overlay_set_mini(app: AppHandle, on: bool) {
     // reaches the same state.
     if let Some(win) = overlay::window(&app) {
         let _ = win.emit("overlay-mini", on);
+    }
+}
+
+/// Tell the Windows side whether the Flow Menu is on screen.
+///
+/// The bar cannot see a click that lands anywhere else — it is
+/// `WS_EX_NOACTIVATE`, so it never has focus to lose, and `SetWindowRgn` clips it
+/// to the pill, so no click outside the pill is ever delivered to it. The only
+/// way to learn about one is a low-level mouse hook, and this is what turns that
+/// hook on and off. See `clickaway`.
+///
+/// Driven by a React effect on the menu's own state, so every route that opens or
+/// closes the menu goes through here without each of them having to remember to.
+#[tauri::command]
+fn overlay_menu_open(app: AppHandle, open: bool) {
+    if open {
+        clickaway::arm(app);
+    } else {
+        clickaway::disarm();
     }
 }
 
@@ -834,6 +890,7 @@ fn main() {
             overlay_unsnooze,
             overlay_reset_position,
             overlay_set_mini,
+            overlay_menu_open,
             overlay_set_auto_collapse,
             overlay_state,
             cancel_session,

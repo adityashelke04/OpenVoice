@@ -1,7 +1,7 @@
 {
   "name": "openvoice",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Workspace-level build entry points. The application itself is Rust; this file exists so that build commands resolve from a fixed root instead of from whatever directory happened to invoke them.",
   "scripts": {
     "build:ui": "npm --prefix apps/ui run build",

@@ -48,6 +48,14 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
+    # SetWinEventHook, for closing the Flow Menu when another app comes forward.
+    # A click is not the only way to leave a menu behind: alt-tab, the Win key
+    # and a notification stealing focus all mean the same thing.
+    "Win32_UI_Accessibility",
+    # GetCurrentThreadId. The click-away hook thread has to hand its own id back
+    # so `disarm` can post it a WM_QUIT -- the only way to wake a thread blocked
+    # in GetMessageW and get the hook uninstalled.
+    "Win32_System_Threading",
 ] }
 
 [lints.clippy]
