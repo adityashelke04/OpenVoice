@@ -84,6 +84,16 @@ This is not architecture astronautics. It buys three concrete things:
   is a new impl of one trait, not a refactor.
 - macOS/Linux support later becomes "write three adapters", not "rewrite the app".
 
+<div align="center">
+<a href="images/architecture.png"><img src="images/architecture.png" width="880" alt="OpenVoice drawn as ports and adapters. A dashed enclosure at the top, labelled &quot;Pure domain — compiles to wasm32-unknown-unknown in CI&quot;, holds the session state machine (ov-core) and the formatting pipeline (ov-format). Beneath it sits the composition root (ov-app, engine.rs), which feeds Input into the state machine and executes every Effect that comes back. On the left the keyboard hook (ov-input) and audio capture (ov-audio) call in through the HotkeyListener and AudioSource ports, and the Flow Bar and Hub webviews receive events over IPC. On the right the composition root drives speech recognition (ov-asr), history storage (ov-store) and text injection (ov-input), which writes keystrokes or a clipboard paste into the focused application. A separate dashed box marks ov-fetch as the only crate permitted network egress; it supplies sha256-verified model weights to ov-asr."></a>
+<br>
+<sub>Ports and adapters, drawn to scale. The dashed enclosure is the wasm32 boundary CI
+enforces; everything inside it is pure. The composition root beneath it is the only
+thing that ever touches an adapter — it feeds <code>Input</code> into the state machine
+and executes the <code>Effect</code>s that come back. Generated from
+<a href="architecture.diagram.json">a typed spec</a> pinned to this revision; click the diagram for full size.</sub>
+</div>
+
 ```mermaid
 flowchart LR
     subgraph driving["Driving adapters"]
@@ -92,11 +102,12 @@ flowchart LR
         MIC["WASAPI capture<br/>ov-audio"]
     end
 
-    subgraph core["ov-core — pure. Compiles to wasm32."]
+    ROOT["Composition root<br/>ov-app · engine.rs"]
+
+    subgraph core["ov-core + ov-format — pure. Compile to wasm32."]
         direction TB
         SM["Session state machine"]
         FMT["Formatting pipeline<br/>ov-format"]
-        SM -- "event bus (broadcast)" --> FMT
     end
 
     subgraph driven["Driven adapters"]
@@ -107,12 +118,14 @@ flowchart LR
         DB["SQLite + FTS5<br/>ov-store"]
     end
 
-    HK   -- "HotkeyListener" --> SM
-    MIC  -- "AudioSource"    --> SM
-    SM   -- "Transcriber"    --> ASR
-    SM   -- "AppContext"     --> APP
-    SM   -- "HistoryStore"   --> DB
-    FMT  -- "TextSink"       --> SINK
+    HK   -- "HotkeyListener" --> ROOT
+    MIC  -- "AudioSource"    --> ROOT
+    ROOT -- "Input / Effect" --> SM
+    ROOT -- "Effect::Format" --> FMT
+    ROOT -- "Transcriber"    --> ASR
+    ROOT -- "AppContext"     --> APP
+    ROOT -- "HistoryStore"   --> DB
+    ROOT -- "TextSink"       --> SINK
 ```
 
 ### 2.2 The six ports (the entire contract surface)
