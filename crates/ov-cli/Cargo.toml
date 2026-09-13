@@ -23,6 +23,9 @@ serde.workspace = true
 serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 hound = "3.5"
+# Benchmark only: decodes the LibriSpeech FLAC files `ov bench` reads. A pure
+# decoder with no dependencies of its own, so no network path.
+claxon = "0.4"
 
 [lints.rust]
 unsafe_code = "forbid"

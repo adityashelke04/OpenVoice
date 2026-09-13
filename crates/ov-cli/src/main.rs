@@ -25,9 +25,15 @@ use ov_core::types::{InjectMode, Millis, Outcome};
 use ov_format::profile::{self, Profile};
 use ov_format::Formatter;
 
+// Used by `ov bench` in the next change; until then only their tests use them.
+#[cfg_attr(not(test), allow(dead_code))]
+mod corpus;
 mod history;
 mod latency_report;
 mod stats;
+// Used by `ov bench` in the next change; until then only their tests use them.
+#[cfg_attr(not(test), allow(dead_code))]
+mod wer;
 
 #[derive(Parser)]
 #[command(
