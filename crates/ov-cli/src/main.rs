@@ -933,6 +933,9 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
             flush();
         }
 
+        // The CLI keeps one buffer and replaces it on every capture, so there is
+        // no per-session state to forget.
+        Effect::Discard { .. } => {}
         Effect::Emit(event) => match event {
             Event::Listening { profile, .. } => {
                 print!("listening [{profile}] ... ");

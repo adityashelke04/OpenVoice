@@ -25,6 +25,8 @@
 //! 3. A session never reaches injection without having been formatted first.
 //! 4. Key auto-repeat cannot start a second capture.
 //! 5. A stuck key cannot record past `max_duration_ms`.
+//! 6. Every [`Effect::Persist`] is followed by an [`Effect::Discard`] for the same
+//!    session, and audio for an unknown session is discarded on arrival.
 
 use crate::config::{ActivationMode, SessionLimits};
 use crate::event::{Event, NoticeLevel};
@@ -228,6 +230,20 @@ pub enum Effect {
     Persist {
         /// The completed record.
         record: Box<SessionRecord>,
+    },
+    /// Let go of everything held for a session that will never be transcribed again.
+    ///
+    /// Emitted with every [`Effect::Persist`], and when audio arrives for a
+    /// session the machine has already finished with. Adapters hold per-session
+    /// buffers the machine cannot see, and before this existed only a transcribe
+    /// ever released one: every too-short tap, silent recording and late buffer
+    /// after Escape stayed in memory until the app quit. Pairing the release with
+    /// the persist makes it structural, like the persist itself. Adapters must
+    /// treat it as idempotent, because a delivered session's buffer is already
+    /// gone by the time it arrives.
+    Discard {
+        /// Session to forget.
+        session: SessionId,
     },
     /// Publish an event for the UI.
     Emit(Event),
@@ -578,7 +594,10 @@ impl SessionMachine {
         fx: &mut Vec<Effect>,
     ) {
         let Some(active) = self.capturing.take_if_id(session) else {
-            return; // cancelled while capture was finishing
+            // Cancelled while capture was finishing. The session is already
+            // persisted, but its buffer has only just been handed to the adapter.
+            fx.push(Effect::Discard { session });
+            return;
         };
         let mut active = active;
         active.audio_ms = duration_ms;
@@ -793,6 +812,7 @@ impl SessionMachine {
                 latency_ms,
             }),
         });
+        fx.push(Effect::Discard { session: active.id });
         fx.push(Effect::Emit(Event::Finished {
             session: active.id,
             outcome,
@@ -1038,6 +1058,71 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn discards(fx: &[Effect]) -> Vec<SessionId> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::Discard { session } => Some(*session),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_too_short_tap_lets_go_of_its_audio() {
+        let mut m = machine();
+        press(&mut m, 0);
+        release(&mut m, 100);
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 100,
+            rms: 0.1,
+            at: Millis(110),
+        });
+        assert_eq!(persists(&fx)[0].outcome, Outcome::TooShort);
+        assert_eq!(discards(&fx), vec![SessionId(1)]);
+    }
+
+    #[test]
+    fn a_silent_capture_lets_go_of_its_audio() {
+        let mut m = machine();
+        press(&mut m, 0);
+        release(&mut m, 2_000);
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 2_000,
+            rms: 0.0,
+            at: Millis(2_010),
+        });
+        assert_eq!(persists(&fx)[0].outcome, Outcome::Silent);
+        assert_eq!(discards(&fx), vec![SessionId(1)]);
+    }
+
+    #[test]
+    fn audio_that_arrives_after_escape_is_let_go_of() {
+        // The race the engine cannot see: Escape persisted the session while the
+        // adapter was still handing its buffer back, and the buffer then lands in
+        // a map nothing will ever read again.
+        let mut m = machine();
+        press(&mut m, 0);
+        release(&mut m, 1_000);
+        m.handle(Input::Cancelled { at: Millis(1_005) });
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 1_000,
+            rms: 0.1,
+            at: Millis(1_010),
+        });
+        assert!(persists(&fx).is_empty(), "already persisted at cancel");
+        assert_eq!(discards(&fx), vec![SessionId(1)]);
+    }
+
+    #[test]
+    fn a_delivered_session_is_discarded_exactly_once() {
+        let mut m = machine();
+        let fx = full_run(&mut m);
+        assert_eq!(discards(&fx), vec![SessionId(1)]);
     }
 
     #[test]

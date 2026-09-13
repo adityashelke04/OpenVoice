@@ -929,6 +929,10 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             }
         }
 
+        Effect::Discard { session } => {
+            e.captured.lock().expect("capture mutex").remove(&session);
+        }
+
         Effect::Emit(event) => {
             // The overlay follows the session, not the user: it appears when a
             // session starts and hides when everything is finished.
