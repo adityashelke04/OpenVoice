@@ -127,6 +127,12 @@ pub struct Engine {
     /// `ov-core` still depends on it -- that is what made this swap cheap -- but
     /// the composition root can say what it actually built.
     transcriber: ov_asr::sherpa::SherpaTranscriber,
+    /// Where to keep recordings, when the user asked for them to be kept.
+    ///
+    /// Fixed when the engine is built from the user's setting, for the reason
+    /// the transcriber used to give: "is this app recording me right now" must
+    /// not have a time-dependent answer.
+    retain_dir: Option<std::path::PathBuf>,
     sink: ov_input::WinTextSink,
     apps: ov_input::WinForeground,
     /// Profiles and formatters live behind one lock and are replaced together.
@@ -500,8 +506,8 @@ pub fn start(
         tracing::warn!(dir = %d.display(), "keeping recordings on disk; this is off by default");
     }
 
-    let transcriber = ov_asr::sherpa::SherpaTranscriber::with_retention(spec, dir, retain)
-        .map_err(|e| e.to_string())?;
+    let transcriber =
+        ov_asr::sherpa::SherpaTranscriber::new(spec, dir).map_err(|e| e.to_string())?;
 
     transcriber.warm().map_err(|e| e.to_string())?;
 
@@ -540,6 +546,7 @@ pub fn start(
     let engine = Arc::new(Engine {
         audio,
         transcriber,
+        retain_dir: retain,
         sink: ov_input::WinTextSink::new(config.paste_threshold_chars),
         apps: ov_input::WinForeground,
         rules: Mutex::new(rules),
@@ -775,6 +782,17 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                     });
                     return;
                 };
+                // Before the decode, not after: if the decode takes the process
+                // down, the user still has the recording they asked to keep.
+                if let Some(dir) = &e.retain_dir {
+                    match ov_asr::recordings::keep(dir, &audio.samples) {
+                        Ok(path) => tracing::debug!(path = %path.display(), "kept recording"),
+                        Err(err) => tracing::warn!(
+                            error = %err,
+                            "could not keep the recording; the transcript is unaffected"
+                        ),
+                    }
+                }
                 // Proper nouns only -- never the whole dictionary.
                 //
                 // Filling this with identifiers was measured to make output

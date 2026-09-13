@@ -9,9 +9,30 @@
 //! None of that survives a single model that ships inside the installer, but the
 //! sweeper does -- retention is a user setting with real bytes behind it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ov_core::error::{Error, Result};
+
+/// Write one utterance into `dir` as a 16 kHz mono WAV, returning where.
+///
+/// Named by seconds and nanoseconds since the epoch, so the directory sorts
+/// chronologically. That matches what `purge_recordings` and anything a user
+/// already filed away expect.
+///
+/// Called once per session by the engine, before decoding, so a decode that
+/// takes the process down still leaves the recording behind. It used to live
+/// inside `SherpaTranscriber::transcribe`. That stopped being one call per
+/// utterance once dictations were decoded in segments.
+pub fn keep(dir: &Path, samples: &[f32]) -> Result<PathBuf> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let path = dir.join(format!("{}-{:09}.wav", now.as_secs(), now.subsec_nanos()));
+    std::fs::create_dir_all(dir)
+        .map_err(|e| Error::Transcription(format!("creating {}: {e}", dir.display())))?;
+    crate::wav::write_16k_mono(&path, samples).map_err(Error::Transcription)?;
+    Ok(path)
+}
 
 /// Delete recordings older than `days`, returning how many went.
 ///
@@ -71,6 +92,28 @@ pub fn purge_recordings(dir: &Path, days: u32) -> Result<u64> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_kept_recording_is_a_playable_16k_mono_wav() {
+        let dir = std::env::temp_dir().join("ov-keep-playable");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = keep(&dir, &vec![0.25; 16_000]).expect("keep");
+        let r = hound::WavReader::open(&path).expect("a kept recording must be readable");
+        assert_eq!(r.spec().sample_rate, 16_000);
+        assert_eq!(r.spec().channels, 1);
+        assert_eq!(r.duration(), 16_000, "every sample, not a truncated file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recordings_made_in_quick_succession_do_not_overwrite_each_other() {
+        let dir = std::env::temp_dir().join("ov-keep-distinct");
+        let _ = std::fs::remove_dir_all(&dir);
+        keep(&dir, &[0.1; 160]).expect("first");
+        keep(&dir, &[0.1; 160]).expect("second");
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn recordings(tag: &str, ages_in_days: &[u64]) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ov-rec-{tag}-{}", std::process::id()));
