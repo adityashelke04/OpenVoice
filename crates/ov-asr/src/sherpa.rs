@@ -63,14 +63,14 @@ use sherpa_onnx::{
 
 use crate::catalog::{ModelKind, ModelSpec};
 
-/// Decode threads.
+/// Decode threads, unless a caller measured a better number for its machine.
 ///
 /// Four, not "all of them". Measured on a 12-thread machine: 535 ms median at
 /// four threads against 645 ms at twelve. The extra eight threads buy 110 ms and
 /// cost the responsiveness of whatever the user is dictating into. This is a
 /// background tool that runs while someone is playing a game or on a call, so it
-/// takes the smaller share deliberately.
-const DECODE_THREADS: i32 = 4;
+/// takes the smaller share deliberately. `ov bench --threads` is how to revisit it.
+pub const DEFAULT_DECODE_THREADS: i32 = 4;
 
 /// A loaded model, ready to decode.
 pub struct SherpaTranscriber {
@@ -118,6 +118,28 @@ impl SherpaTranscriber {
         dir: PathBuf,
         retain_audio_dir: Option<PathBuf>,
     ) -> Result<Self> {
+        Self::load(spec, dir, retain_audio_dir, DEFAULT_DECODE_THREADS)
+    }
+
+    /// Load the model decoding on `threads` threads, keeping no recordings.
+    ///
+    /// For measuring. The app uses [`SherpaTranscriber::new`]; `ov bench`
+    /// uses this to find out whether a different count is worth shipping.
+    pub fn with_threads(spec: &'static ModelSpec, dir: PathBuf, threads: i32) -> Result<Self> {
+        if threads < 1 {
+            return Err(Error::Transcription(format!(
+                "at least one decode thread is needed, not {threads}"
+            )));
+        }
+        Self::load(spec, dir, None, threads)
+    }
+
+    fn load(
+        spec: &'static ModelSpec,
+        dir: PathBuf,
+        retain_audio_dir: Option<PathBuf>,
+        threads: i32,
+    ) -> Result<Self> {
         // Check the files before handing paths to the C library. It reports a
         // missing or unreadable model as a null pointer with no detail, and
         // "could not create recognizer" is not something a user can act on.
@@ -161,7 +183,7 @@ impl SherpaTranscriber {
                 cfg.model_config.model_type = Some("whisper".into());
             }
         }
-        cfg.model_config.num_threads = DECODE_THREADS;
+        cfg.model_config.num_threads = threads;
 
         let started = std::time::Instant::now();
         let recognizer = OfflineRecognizer::create(&cfg).ok_or_else(|| {
@@ -173,7 +195,7 @@ impl SherpaTranscriber {
         })?;
         tracing::info!(
             model = spec.id,
-            threads = DECODE_THREADS,
+            threads,
             took_ms = started.elapsed().as_millis() as u64,
             "speech model loaded"
         );
@@ -356,6 +378,32 @@ mod tests {
         assert!(
             err.contains("encoder.int8.onnx"),
             "the error must name the missing file: {err}"
+        );
+    }
+
+    #[test]
+    fn zero_decode_threads_is_refused_before_anything_loads() {
+        // Checked before the files, so this needs no model on disk.
+        let err = SherpaTranscriber::with_threads(bundled(), "Z:/nope".into(), 0)
+            .expect_err("zero threads must be refused")
+            .to_string();
+        assert!(err.contains("at least one decode thread"), "{err}");
+    }
+
+    #[test]
+    fn a_non_default_thread_count_still_decodes() {
+        if skip() {
+            return;
+        }
+        let t = SherpaTranscriber::with_threads(bundled(), model_dir().expect("model"), 6)
+            .expect("load at six threads");
+        let out = t
+            .transcribe(&speech(), &DecodeHint::default())
+            .expect("decode");
+        assert!(
+            out.text.to_lowercase().contains("portrait"),
+            "{:?}",
+            out.text
         );
     }
 

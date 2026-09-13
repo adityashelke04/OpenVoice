@@ -25,14 +25,11 @@ use ov_core::types::{InjectMode, Millis, Outcome};
 use ov_format::profile::{self, Profile};
 use ov_format::Formatter;
 
-// Used by `ov bench` in the next change; until then only their tests use them.
-#[cfg_attr(not(test), allow(dead_code))]
+mod bench;
 mod corpus;
 mod history;
 mod latency_report;
 mod stats;
-// Used by `ov bench` in the next change; until then only their tests use them.
-#[cfg_attr(not(test), allow(dead_code))]
 mod wer;
 
 #[derive(Parser)]
@@ -121,6 +118,33 @@ enum Command {
         #[arg(long)]
         log: Option<PathBuf>,
     },
+    /// Decode LibriSpeech through the real model: release latency and accuracy.
+    Bench(BenchArgs),
+}
+
+#[derive(clap::Args)]
+struct BenchArgs {
+    /// LibriSpeech test-clean directory. Defaults to fixtures/librispeech.
+    #[arg(long)]
+    corpus: Option<PathBuf>,
+    /// Clips to decode (after concatenation).
+    #[arg(long, default_value_t = 25)]
+    clips: usize,
+    /// Join this many utterances into each clip, 600 ms apart, for long-form speech.
+    #[arg(long, default_value_t = 1)]
+    concat: usize,
+    /// Shortest utterance to use.
+    #[arg(long, default_value_t = 2_000)]
+    min_ms: u64,
+    /// Longest utterance to use.
+    #[arg(long, default_value_t = 12_000)]
+    max_ms: u64,
+    /// Decode threads.
+    #[arg(long, default_value_t = ov_asr::sherpa::DEFAULT_DECODE_THREADS)]
+    threads: i32,
+    /// Silence between the end of speech and the release.
+    #[arg(long, default_value_t = 400)]
+    release_pause_ms: u64,
 }
 
 fn main() -> std::process::ExitCode {
@@ -158,7 +182,49 @@ fn run(cli: &Cli) -> Result<(), String> {
         Command::Type { text, delay, paste } => cmd_type(text, *delay, *paste),
         Command::Dictate => cmd_dictate(cli),
         Command::Latency { log } => cmd_latency(log.as_ref()),
+        Command::Bench(args) => cmd_bench(args),
     }
+}
+
+/* -- bench -------------------------------------------------------------------- */
+
+fn cmd_bench(args: &BenchArgs) -> Result<(), String> {
+    let root = args.corpus.clone().unwrap_or_else(corpus::default_root);
+    let group = args.concat.max(1);
+    let loaded = corpus::load_librispeech(&root, args.min_ms, args.max_ms, args.clips * group)?;
+    let clips: Vec<corpus::Clip> = loaded
+        .chunks(group)
+        .map(|g| corpus::concat(g, 600))
+        .collect();
+
+    let spec = ov_asr::catalog::default_spec();
+    let dir = ov_asr::locate::model_dir(spec, &user_models()).map_err(|e| e.to_string())?;
+    let transcriber = ov_asr::sherpa::SherpaTranscriber::with_threads(spec, dir, args.threads)
+        .map_err(|e| e.to_string())?;
+    // One throwaway decode, so the first clip does not pay for paging the model in.
+    let _ = transcriber.transcribe(
+        &Pcm16k {
+            samples: vec![0.0; 8_000],
+        },
+        &DecodeHint::default(),
+    );
+
+    let mut runs = Vec::new();
+    for clip in &clips {
+        let m = bench::run_full(&transcriber, clip, args.release_pause_ms)?;
+        println!(
+            "{:>7} ms audio {:>6} ms release  {}",
+            m.audio_ms,
+            m.release_ms,
+            &m.id[..m.id.len().min(40)]
+        );
+        runs.push(m);
+    }
+    println!(
+        "\n{}",
+        bench::render("full", args.threads, &bench::summarize(&runs))
+    );
+    Ok(())
 }
 
 /* -- latency ------------------------------------------------------------------ */
