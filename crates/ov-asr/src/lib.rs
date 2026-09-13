@@ -27,6 +27,7 @@
 //! * [`locate`] — where a model's weights are on this machine.
 //! * [`recordings`] — sweeping up audio the user asked us to keep.
 //! * [`segment`] — where a dictation can be cut so it decodes while it is spoken.
+//! * [`incremental`] — decoding a dictation while it is spoken.
 //!
 //! The port did not change, and neither did `ov-core`, `ov-format`, `ov-audio`,
 //! `ov-input` or `ov-store`. A backend swap this complete touching nothing behind
@@ -36,6 +37,7 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod catalog;
+pub mod incremental;
 pub mod locate;
 pub mod recordings;
 pub mod segment;
