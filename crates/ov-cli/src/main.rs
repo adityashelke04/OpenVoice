@@ -26,6 +26,8 @@ use ov_format::profile::{self, Profile};
 use ov_format::Formatter;
 
 mod history;
+mod latency_report;
+mod stats;
 
 #[derive(Parser)]
 #[command(
@@ -107,6 +109,12 @@ enum Command {
         #[arg(long)]
         paste: bool,
     },
+    /// Summarise where dictation time went, from the app's log.
+    Latency {
+        /// Log to read. Defaults to the app's own `openvoice.log`.
+        #[arg(long)]
+        log: Option<PathBuf>,
+    },
 }
 
 fn main() -> std::process::ExitCode {
@@ -143,7 +151,37 @@ fn run(cli: &Cli) -> Result<(), String> {
         Command::Mictest { seconds } => cmd_mictest(cli, *seconds),
         Command::Type { text, delay, paste } => cmd_type(text, *delay, *paste),
         Command::Dictate => cmd_dictate(cli),
+        Command::Latency { log } => cmd_latency(log.as_ref()),
     }
+}
+
+/* -- latency ------------------------------------------------------------------ */
+
+fn cmd_latency(log: Option<&PathBuf>) -> Result<(), String> {
+    let path = log.cloned().unwrap_or_else(|| {
+        user_models()
+            .parent()
+            .expect("models dir has a parent")
+            .join("openvoice.log")
+    });
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let times: Vec<_> = text
+        .lines()
+        .filter_map(ov_core::latency::StageTimes::parse)
+        .collect();
+    if times.is_empty() {
+        println!(
+            "no latency lines in {} yet: dictate something first",
+            path.display()
+        );
+        return Ok(());
+    }
+    println!("{} sessions from {}\n", times.len(), path.display());
+    print!(
+        "{}",
+        latency_report::render(&latency_report::summarize(&times))
+    );
+    Ok(())
 }
 
 /* -- helpers ---------------------------------------------------------------- */
