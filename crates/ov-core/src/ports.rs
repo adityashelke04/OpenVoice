@@ -83,10 +83,37 @@ pub struct LevelFrame {
     pub peak: f32,
 }
 
+/// Receives captured audio while capture is still running: 16 kHz mono, in order.
+///
+/// Called on the adapter's capture thread every few tens of milliseconds. It must
+/// return quickly: take a lock, copy, return. Anything slower delays the next
+/// chunk and, in the end, the release.
+pub type PcmSink = Arc<dyn Fn(&[f32]) + Send + Sync>;
+
 /// Captures microphone audio and normalizes it to 16 kHz mono.
 pub trait AudioSource: Send + Sync {
     /// Start capturing. `levels` is called roughly every 20 ms for UI metering.
     fn start(&self, levels: Arc<dyn Fn(LevelFrame) + Send + Sync>) -> Result<()>;
+
+    /// Start capturing, and hand converted audio to `pcm` as it arrives.
+    ///
+    /// The chunks given to `pcm`, concatenated, are exactly the samples the next
+    /// [`AudioSource::stop`] returns. That equality is what lets a consumer decode
+    /// while the user is still speaking and trust the result once they stop.
+    ///
+    /// Adapters that cannot stream do not have to. This default starts an
+    /// ordinary capture and never calls `pcm`, and consumers must treat a sink
+    /// that saw nothing as "decode it all at the end". Adding a method with a
+    /// default, rather than changing `start`, is what keeps `ov-cli` and every
+    /// test adapter compiling unchanged. See ADR 0012.
+    fn start_streaming(
+        &self,
+        levels: Arc<dyn Fn(LevelFrame) + Send + Sync>,
+        pcm: PcmSink,
+    ) -> Result<()> {
+        let _ = pcm;
+        self.start(levels)
+    }
 
     /// Stop capturing and return everything recorded since [`AudioSource::start`].
     ///
@@ -184,4 +211,46 @@ pub trait HistoryStore: Send + Sync {
     fn search(&self, query: &str, limit: usize) -> Result<Vec<Utterance>>;
     /// Delete entries older than `days`, returning the number removed.
     fn purge_older_than(&self, days: u32) -> Result<u64>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// An adapter written before streaming existed.
+    #[derive(Default)]
+    struct Batch {
+        started: AtomicUsize,
+    }
+
+    impl AudioSource for Batch {
+        fn start(&self, _levels: Arc<dyn Fn(LevelFrame) + Send + Sync>) -> Result<()> {
+            self.started.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn stop(&self) -> Result<Pcm16k> {
+            Ok(Pcm16k {
+                samples: Vec::new(),
+            })
+        }
+        fn abort(&self) -> Result<()> {
+            Ok(())
+        }
+        fn devices(&self) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn an_adapter_that_cannot_stream_still_starts_when_asked_to() {
+        let batch = Batch::default();
+        batch
+            .start_streaming(
+                Arc::new(|_| {}),
+                Arc::new(|_: &[f32]| panic!("must not stream")),
+            )
+            .expect("start");
+        assert_eq!(batch.started.load(Ordering::SeqCst), 1);
+    }
 }
