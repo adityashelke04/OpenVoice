@@ -145,6 +145,29 @@ struct BenchArgs {
     /// Silence between the end of speech and the release.
     #[arg(long, default_value_t = 400)]
     release_pause_ms: u64,
+    /// Decode the whole clip at release, or decode while it streams.
+    #[arg(long, value_enum, default_value_t = BenchMode::Full)]
+    mode: BenchMode,
+    /// Pause, after speech, that triggers a speculative decode.
+    #[arg(long, default_value_t = ov_asr::segment::SegmentPolicy::default().checkpoint_pause_ms)]
+    checkpoint_pause_ms: u64,
+    /// Pause, after enough speech, that commits a segment.
+    #[arg(long, default_value_t = ov_asr::segment::SegmentPolicy::default().commit_pause_ms)]
+    commit_pause_ms: u64,
+    /// Shortest segment that a pause may commit.
+    #[arg(long, default_value_t = ov_asr::segment::SegmentPolicy::default().min_segment_ms)]
+    min_segment_ms: u64,
+    /// Print reference and hypothesis for every clip, to read the joins.
+    #[arg(long)]
+    show_text: bool,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum BenchMode {
+    /// Decode the whole utterance in one call at release, as the app did.
+    Full,
+    /// Decode while the audio streams in, as the app does now.
+    Incremental,
 }
 
 fn main() -> std::process::ExitCode {
@@ -209,20 +232,55 @@ fn cmd_bench(args: &BenchArgs) -> Result<(), String> {
         &DecodeHint::default(),
     );
 
+    let policy = ov_asr::segment::SegmentPolicy {
+        checkpoint_pause_ms: args.checkpoint_pause_ms,
+        commit_pause_ms: args.commit_pause_ms,
+        min_segment_ms: args.min_segment_ms,
+        ..ov_asr::segment::SegmentPolicy::default()
+    };
+    let transcriber = Arc::new(transcriber);
+    let decoder = match args.mode {
+        BenchMode::Full => None,
+        BenchMode::Incremental => Some(
+            ov_asr::incremental::IncrementalDecoder::new(Arc::clone(&transcriber), policy)
+                .map_err(|e| e.to_string())?,
+        ),
+    };
+
     let mut runs = Vec::new();
-    for clip in &clips {
-        let m = bench::run_full(&transcriber, clip, args.release_pause_ms)?;
+    for (i, clip) in clips.iter().enumerate() {
+        let m = match &decoder {
+            None => bench::run_full(&*transcriber, clip, args.release_pause_ms)?,
+            Some(d) => bench::run_incremental(
+                d,
+                ov_core::types::SessionId(i as u64 + 1),
+                clip,
+                args.release_pause_ms,
+                true,
+            )?,
+        };
         println!(
-            "{:>7} ms audio {:>6} ms release  {}",
+            "{:>7} ms audio {:>6} ms release {}  {}",
             m.audio_ms,
             m.release_ms,
+            if m.reused { "reused" } else { "      " },
             &m.id[..m.id.len().min(40)]
         );
+        if args.show_text {
+            println!("    ref: {}\n    hyp: {}", m.reference, m.hypothesis);
+        }
         runs.push(m);
     }
+    let label = match args.mode {
+        BenchMode::Full => "full".to_owned(),
+        BenchMode::Incremental => format!(
+            "incremental(checkpoint={} commit={} min_segment={})",
+            policy.checkpoint_pause_ms, policy.commit_pause_ms, policy.min_segment_ms
+        ),
+    };
     println!(
         "\n{}",
-        bench::render("full", args.threads, &bench::summarize(&runs))
+        bench::render(&label, args.threads, &bench::summarize(&runs))
     );
     Ok(())
 }

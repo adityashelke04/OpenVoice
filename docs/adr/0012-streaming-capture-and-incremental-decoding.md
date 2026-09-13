@@ -22,7 +22,8 @@ was started late.
    so ADR 0001's six ports stay six.
 2. `ov-asr` decodes while the user speaks. A pure `SegmentPlanner` finds pauses
    in the audio. A 240 ms pause triggers a speculative decode of the audio so far.
-   A 480 ms pause, once the segment is at least 3 s long, commits that segment.
+   A 640 ms pause, once the segment is at least 3 s long, commits that segment
+   (480 ms was tried first and cut too many sentences; see the Gate B record).
    An `IncrementalDecoder` runs those decodes on one long-lived thread and, on
    release, decodes only what is left, or nothing if the last speculative decode
    already covers it.

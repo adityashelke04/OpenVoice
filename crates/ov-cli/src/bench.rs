@@ -5,12 +5,17 @@
 //! `ov latency` measures in the real app. It is the part a decoding strategy
 //! changes, isolated from everything a decoding strategy cannot.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use ov_asr::incremental::IncrementalDecoder;
 use ov_core::ports::{DecodeHint, Pcm16k, Transcriber};
+use ov_core::types::SessionId;
 
 use crate::corpus::Clip;
 use crate::stats::percentile;
+
+/// What `ov-audio` hands the decoder at a time: 40 ms.
+const STREAM_CHUNK: usize = 640;
 
 /// One clip's outcome.
 #[derive(Debug, Clone)]
@@ -68,6 +73,48 @@ pub fn run_full<T: Transcriber>(t: &T, clip: &Clip, pause_ms: u64) -> Result<Mea
         reference: clip.reference.clone(),
         hypothesis: out.text,
         reused: false,
+    })
+}
+
+/// Feed `clip`, then `pause_ms` of silence, to `d` as the capture thread would,
+/// then release and time what is left.
+///
+/// With `pace`, chunks arrive in real time, which is the only way the decode
+/// thread gets the head start it has in the app. Without it the whole clip
+/// arrives at once, which is only good for testing the plumbing.
+pub fn run_incremental<T: Transcriber + 'static>(
+    d: &IncrementalDecoder<T>,
+    session: SessionId,
+    clip: &Clip,
+    pause_ms: u64,
+    pace: bool,
+) -> Result<Measured, String> {
+    let mut samples = clip.samples.clone();
+    samples.resize(samples.len() + (pause_ms * 16) as usize, 0.0);
+
+    d.begin(session, DecodeHint::default());
+    let started = Instant::now();
+    for (i, chunk) in samples.chunks(STREAM_CHUNK).enumerate() {
+        d.push(session, chunk);
+        if pace {
+            let due = started + Duration::from_millis(40 * (i as u64 + 1));
+            if let Some(wait) = due.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+        }
+    }
+
+    let released = Instant::now();
+    let (out, facts) = d
+        .finish(session, &Pcm16k { samples })
+        .map_err(|e| e.to_string())?;
+    Ok(Measured {
+        id: clip.id.clone(),
+        audio_ms: clip.samples.len() as u64 * 1_000 / 16_000,
+        release_ms: released.elapsed().as_millis() as u64,
+        reference: clip.reference.clone(),
+        hypothesis: out.text,
+        reused: facts.reused,
     })
 }
 
@@ -146,6 +193,36 @@ mod tests {
         );
         assert_eq!(m.hypothesis, "hello world");
         assert!(!m.reused);
+    }
+
+    #[test]
+    fn an_incremental_run_reports_what_the_decoder_did_at_release() {
+        use ov_asr::incremental::IncrementalDecoder;
+        use ov_asr::segment::{SegmentPolicy, FRAME};
+        use std::sync::Arc;
+
+        let parrot = Arc::new(Parrot(Mutex::new(Vec::new())));
+        let d = IncrementalDecoder::new(Arc::clone(&parrot), SegmentPolicy::default()).unwrap();
+        // One second of speech-like audio: loud, with a dip every half second.
+        let samples: Vec<f32> = (0..50)
+            .flat_map(|f| {
+                let a = if f % 25 == 12 { 0.002 } else { 0.1 };
+                (0..FRAME).map(move |i| if i % 2 == 0 { a } else { -a })
+            })
+            .collect();
+        let clip = Clip {
+            id: "c1".into(),
+            reference: "HELLO WORLD".into(),
+            samples,
+        };
+
+        let m = run_incremental(&d, SessionId(1), &clip, 400, false).expect("run");
+        assert_eq!(m.hypothesis, "hello world");
+        assert!(
+            m.reused,
+            "a 400 ms pause before release must leave nothing to decode"
+        );
+        assert_eq!(m.audio_ms, 1_000);
     }
 
     #[test]

@@ -53,12 +53,17 @@ pub struct SegmentPolicy {
 
 impl Default for SegmentPolicy {
     /// Chosen at Gate B; see `docs/benchmarks/2026-09-13-release-latency.md`.
+    ///
+    /// The commit pause is 640 ms rather than the 480 ms first tried. At 480 ms,
+    /// four cuts in 4.2 minutes of long-form speech fell inside a sentence and put
+    /// a full stop mid-sentence; at 640 ms one did, with word error rate unchanged
+    /// and release latency still inside every bound.
     fn default() -> Self {
         Self {
             floor_rms: 0.004,
             noise_ratio: 2.5,
             checkpoint_pause_ms: 240,
-            commit_pause_ms: 480,
+            commit_pause_ms: 640,
             min_segment_ms: 3_000,
             max_segment_ms: 20_000,
         }
@@ -321,7 +326,18 @@ mod tests {
     fn the_defaults_are_the_ones_the_benchmark_chose() {
         // Change this together with the Gate B record in
         // docs/benchmarks/2026-09-13-release-latency.md, never on its own.
-        assert_eq!(SegmentPolicy::default(), policy());
+        //
+        // Spelled out rather than compared with `policy()`: the positions in the
+        // tests below were computed with a 480 ms commit pause, and Gate B chose
+        // 640 ms for the shipped default. Tuning the default must not silently
+        // rewrite what those tests specify, and it must not go unnoticed either.
+        assert_eq!(
+            SegmentPolicy::default(),
+            SegmentPolicy {
+                commit_pause_ms: 640,
+                ..policy()
+            }
+        );
     }
 
     #[test]
