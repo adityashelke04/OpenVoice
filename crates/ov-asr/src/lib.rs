@@ -26,6 +26,7 @@
 //! * [`sherpa`] — the [`ov_core::ports::Transcriber`] implementation.
 //! * [`locate`] — where a model's weights are on this machine.
 //! * [`recordings`] — sweeping up audio the user asked us to keep.
+//! * [`segment`] — where a dictation can be cut so it decodes while it is spoken.
 //!
 //! The port did not change, and neither did `ov-core`, `ov-format`, `ov-audio`,
 //! `ov-input` or `ov-store`. A backend swap this complete touching nothing behind
@@ -37,5 +38,6 @@
 pub mod catalog;
 pub mod locate;
 pub mod recordings;
+pub mod segment;
 pub mod sherpa;
 mod wav;
