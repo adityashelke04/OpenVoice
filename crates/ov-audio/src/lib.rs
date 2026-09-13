@@ -34,6 +34,9 @@ use ov_core::error::{Error, Result};
 use ov_core::ports::{AudioSource, LevelFrame, Pcm16k};
 
 mod resample;
+// Wired into the capture thread by the next change; until then only its tests use it.
+#[cfg_attr(not(test), allow(dead_code))]
+mod stream;
 
 /// Commands sent to the thread that owns the `cpal` stream.
 enum Cmd {
