@@ -19,11 +19,10 @@ Thread decision: **stay at 4.** Six threads lowered p50 by 1% on the short set
 (426 → 422 ms) and 6.5% on long-form (3,534 → 3,305 ms). The bar for adopting
 it was 10% on both, and neither reached it. WER was identical.
 
-Long-form release latency is ≈ 14 ms per second of audio here against ≈ 75 ms
-in the app's history. The benchmark decodes clean read speech into a warm model
-with nothing else competing for the CPU; the app does not have those luxuries.
-The ratio between the sets, not the absolute figure, is what incremental
-decoding has to change.
+Long-form clips average about 51 s, so whole-utterance release latency is
+≈ 70 ms per second of audio here, in line with the ≈ 75 ms the app's history
+shows. That cost growing with length is what incremental decoding has to
+remove.
 
 ## In the app
 
@@ -114,3 +113,23 @@ Tuning runs, in order:
    spelling variant above, which no cutting policy touches.
 
 Verdict: **PASS**, with the spelling-variant caveat above.
+
+## Gate C: in the app (`ov latency`, sessions after commit d993120)
+
+**Pending.** Needs at least 30 real dictations in a release build that includes
+commit d993120, mixed as they really are: short notes and long paragraphs, into
+the usual apps. Then `ov latency` (pass a trimmed copy of the log with `--log`
+if it also holds older lines) and paste the table here.
+
+| bucket | Gate A p50 / p90 (history) | Gate C p50 / p90 | change |
+|---|---|---|---|
+| <3s | 253 / 512 ms | | |
+| 3-7s | 443 / 602 ms | | |
+| 7-15s | 820 / 1,138 ms | | |
+| >15s | 2,160 / 5,441 ms | | |
+
+Pass criteria: every bucket with n ≥ 5 at p50 ≤ 250 ms and p90 ≤ 600 ms;
+`<3s` and `3-7s` p50 lower than Gate A; `>15s` p50 at least 4× lower than
+Gate A; no session with `fallback=true`.
+
+Fallbacks: pending. Verdict: pending.

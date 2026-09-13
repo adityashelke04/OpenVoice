@@ -22,6 +22,23 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+### Changed
+
+- Dictation is decoded while you speak, so text appears almost as soon as you let
+  go of the key, including after long dictations. (ADR 0012)
+- Audio is converted to 16 kHz as it is recorded, and the microphone closes after
+  your text is on its way rather than before.
+
+### Fixed
+
+- Audio from accidental taps, silent recordings and cancelled dictations is no
+  longer kept in memory until the app quits.
+
+### Added
+
+- `ov latency` shows where dictation time goes, stage by stage.
+- `ov bench` measures release latency and word error rate on LibriSpeech.
+
 ## [0.8.0] - 2026-09-05
 
 A way back to the middle, and a bar whose edges survive being clipped.

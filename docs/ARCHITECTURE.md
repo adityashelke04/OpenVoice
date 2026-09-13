@@ -271,25 +271,31 @@ Recordings shorter than `min_duration_ms` (default 300 ms) are discarded as
 fat-finger presses, silently — a toast for something the user did not mean to do is
 noise.
 
-### 3.1 Latency budget (target, 10 s utterance, RTX 3050)
+### 3.1 Release latency, measured
 
-These are the per-stage budgets encoded in `event::Stage::budget_ms`, not measured
-averages. The sub-700 ms p50 they add up to is a v0.3 goal.
+Written for a GPU and Whisper, this section used to be a table of per-stage
+budgets. It is now measured on the reference machine (Ryzen 5 6600H, CPU decode
+at 4 threads), and the full record is
+[`docs/benchmarks/2026-09-13-release-latency.md`](benchmarks/2026-09-13-release-latency.md).
 
-| Stage | Budget | Notes |
-|---|---:|---|
-| Hotkey release → capture stop | 10 ms | hook thread does nothing but post a message |
-| Finalize | 5 ms | already 16 kHz mono; no VAD trim needed any more |
-| ASR decode (Parakeet TDT 0.6B v2, CPU) | 500 ms | median over dictation-length clips, 4 threads |
-| Format pipeline | 5 ms | pure string work, no allocation storms |
-| Injection (clipboard path) | 120 ms | dominated by target app's paste handler |
-| **Total (p50)** | **~640 ms** | perceived as "instant enough" |
+Decoding while the user speaks (§5.4) is what moved these. Release latency is
+the decoding work left once the key comes up, from `ov bench` on LibriSpeech
+`test-clean`, speech followed by a 400 ms pause before release:
 
-Every stage already emits an `Event::Timing` carrying its measured duration, so the
-data is on the wire today. **Planned:** the debug panel that renders the last 50
-sessions as a stacked bar. Currently the UI keeps only the end-to-end figure. The
-instrumentation went in from day one on purpose — retrofitting latency measurement
-into a shipped app never happens.
+| set | whole-utterance decode p50 / p90 | decoded while spoken p50 / p90 |
+|---|---:|---:|
+| short (2–12 s) | 426 / 684 ms | 0 / 87 ms |
+| long-form (~50 s) | 3,534 / 4,618 ms | 0 / 158 ms |
+
+Released mid-word, with no pause, the tail still has to be decoded: p50 243 ms
+short and 170 ms long-form, against 417 and 3,512 ms whole.
+
+In the app, every persisted session writes one `latency session=` line to
+`openvoice.log` with the duration of each stage (stop, queue, decode, format,
+inject) and the loop lag before the engine saw the release; `ov latency`
+summarises them by audio length. **Pending:** the in-app p50 / p90 by bucket
+after this change (Gate C in the benchmark record), which needs thirty or more
+real dictations.
 
 ---
 
@@ -298,9 +304,18 @@ into a shipped app never happens.
 - **Capture:** `cpal` → WASAPI shared mode, native device rate, mono downmix.
   `cpal::Stream` is `!Send` on Windows, so a dedicated thread owns the stream for
   its whole life and is driven by commands over a channel.
-- **Resample:** `rubato` (sinc) to exactly 16 kHz f32. Whisper's contract.
+- **Resample:** `rubato` (sinc) to exactly 16 kHz f32, the model's contract.
+- **Streaming:** the capture thread converts audio to 16 kHz every 40 ms while
+  the key is held, with one resampler per capture (the filter table is built
+  once, and its tail is flushed rather than cut at stop). Each chunk goes to the
+  sink passed to `AudioSource::start_streaming`; the chunks, concatenated, are
+  exactly what `stop()` returns, which is what lets the decoder start early and
+  trust the result. `stop()` replies before the WASAPI stream is closed, because
+  closing it can take tens of milliseconds the user's text should not wait for.
+  Adapters that cannot stream inherit a default that never calls the sink. See
+  ADR 0012.
 - **Buffering:** the capture callback appends into a `Vec` behind a mutex, which
-  `stop()` takes whole. A lock-free SPSC ring was the original plan and remains the
+  the capture thread swaps out on every 40 ms drain. A lock-free SPSC ring was the original plan and remains the
   right answer if the callback ever shows up in a profile; it does not today, at
   16 kHz mono with a 20 ms callback.
 - **The stream is open only while the key is held.** The original design kept the
@@ -420,6 +435,46 @@ tested:
 
 Only the files the catalogue names are kept. Whisper ships fp32 and int8 weights
 side by side; taking only int8 saves 146 MB of the 245 MB the archive expands to.
+
+### 5.4 Decoding while you speak
+
+Parakeet costs about 75 ms per second of audio, and it used to start only when
+the key came up, so a long dictation waited seconds after the user had finished.
+Now decoding happens while they talk. Two pieces in `ov-asr`, each with one job:
+
+* **`segment::SegmentPlanner`** is pure: it classifies 20 ms frames as speech or
+  pause against an adaptive noise floor and says what can be decoded. A 240 ms
+  pause after speech is a **checkpoint**: decode everything so far,
+  speculatively, in case the user lets go now. A 640 ms pause, once the segment
+  is at least 3 s long, **commits** the segment: it is final and will be joined
+  into the transcript. A segment that reaches 20 s with no pause is committed at
+  its quietest frame in the last two seconds. On release the planner reports the
+  **tail**: reuse the last checkpoint if nothing but pause followed it, decode
+  from the last commit to the end if someone spoke after it, or nothing at all if
+  the tail is silent.
+* **`incremental::IncrementalDecoder`** runs those decodes on one long-lived
+  `ov-decode` thread, because sherpa-onnx already uses the measured thread count
+  internally and two decodes at once would each be slower. The queue is ordered
+  tail, commits, checkpoints, priming. A newer checkpoint replaces one that has
+  not started, and a commit at a checkpoint's range adopts that checkpoint's
+  decode instead of repeating it.
+
+**Fallbacks.** If the adapter did not stream, if the streamed sample count
+disagrees with the recording `stop()` returned, or if any segment failed, the
+whole utterance is decoded once, the way it was before. The user's text never
+depends on the fast path working. Each session's `latency` line records
+`reused`, `segments` and `fallback`, so a fallback in real use is visible.
+
+**Priming.** A dictation that starts after 30 s without any decode queues half a
+second of silence, so the weights Windows paged out while the app sat idle are
+back before the user finishes the sentence.
+
+The session machine did not change shape: `Transcribe` still happens once per
+session, in order. The engine calls `begin` on `StartCapture`, feeds the decoder
+from the PCM sink, calls `finish` on `Transcribe`, and `discard` on the
+`Effect::Discard` that now follows every `Persist`. The thresholds were chosen
+by benchmark (Gate B in the benchmark record); ADR 0012 records the decision and
+what was rejected.
 
 ---
 
