@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ov_core::event::Event;
+use ov_core::latency::StageClock;
 use ov_core::ports::{
     AppContext, AudioSource, DecodeHint, HistoryStore, HotkeyEvent, HotkeyListener, LevelFrame,
     Pcm16k, TextSink, Transcriber, Utterance,
@@ -142,6 +143,13 @@ pub struct Engine {
     /// wrong words, and session 3 found the slot empty and failed. Keyed by
     /// session, each utterance keeps its own audio until its turn comes.
     captured: Mutex<HashMap<SessionId, Pcm16k>>,
+    /// Where each in-flight session's time has gone so far.
+    ///
+    /// Stamped as each stage finishes and logged as one line when the session
+    /// persists. `latency_ms` in history already said that roughly one dictation
+    /// in ten lost a second outside the decoder; this is what says which stage.
+    /// See `ov_core::latency`.
+    traces: Mutex<HashMap<SessionId, StageClock>>,
     /// Durable history. Injected as a port, so the engine neither knows nor cares
     /// that it is SQLite.
     history: Arc<dyn HistoryStore>,
@@ -205,6 +213,27 @@ pub struct Engine {
 impl Engine {
     fn now(&self) -> Millis {
         Millis(self.start.elapsed().as_millis() as u64)
+    }
+
+    /// Record that a stage of `session` just finished.
+    fn stamp(&self, session: SessionId, mark: impl FnOnce(&mut StageClock, Millis)) {
+        let now = self.now();
+        let mut traces = self.traces.lock().expect("traces mutex");
+        mark(traces.entry(session).or_default(), now);
+    }
+
+    /// Log where `session`'s time went, and forget it.
+    ///
+    /// Only sessions that reached `StopCapture` are logged. A cancelled capture or
+    /// a too-short tap has no release-to-delivery story to tell, and a line of
+    /// dashes for each would bury the ones that do.
+    fn finish_trace(&self, session: SessionId, audio_ms: u64, latency_ms: u64) {
+        let Some(clock) = self.traces.lock().expect("traces mutex").remove(&session) else {
+            return;
+        };
+        if clock.stop_requested.is_some() {
+            tracing::info!("{}", clock.times(session, audio_ms, latency_ms).to_line());
+        }
     }
 
     /// Format a transcript with the named profile, falling back to the first.
@@ -515,6 +544,7 @@ pub fn start(
         apps: ov_input::WinForeground,
         rules: Mutex::new(rules),
         captured: Mutex::new(HashMap::new()),
+        traces: Mutex::new(HashMap::new()),
         history,
         last_text: Mutex::new(String::new()),
         redactor: Mutex::new(redactor),
@@ -692,11 +722,14 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
         }
 
         Effect::StopCapture { session } => {
+            e.stamp(session, |c, now| c.stop_requested = Some(now));
             let e = e.clone();
             let tx = tx.clone();
             std::thread::spawn(move || {
                 let at = e.now();
-                match e.audio.stop() {
+                let stopped = e.audio.stop();
+                e.stamp(session, |c, now| c.captured = Some(now));
+                match stopped {
                     Ok(pcm) => {
                         let duration_ms = pcm.duration_ms();
                         let rms = pcm.rms();
@@ -756,7 +789,10 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                     vocabulary: e.rules.lock().expect("rules").hints.clone(),
                     language: e.language.lock().expect("language mutex").clone(),
                 };
-                match e.transcriber.transcribe(&audio, &hint) {
+                e.stamp(session, |c, now| c.decode_started = Some(now));
+                let decoded = e.transcriber.transcribe(&audio, &hint);
+                e.stamp(session, |c, now| c.decoded = Some(now));
+                match decoded {
                     Ok(transcript) => {
                         let _ = tx.send(Input::Transcribed {
                             session,
@@ -781,6 +817,7 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             profile,
         } => {
             let text = e.format(&profile, &raw);
+            e.stamp(session, |c, now| c.formatted = Some(now));
             let _ = tx.send(Input::Formatted {
                 session,
                 text,
@@ -813,7 +850,9 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                 }
 
                 let mode = ov_input::mode_for(&text, e.paste_threshold);
-                match e.sink.inject(&text, mode) {
+                let delivered = e.sink.inject(&text, mode);
+                e.stamp(session, |c, now| c.injected = Some(now));
+                match delivered {
                     Ok(_) => {
                         *e.last_text.lock().expect("last text mutex") = text;
                         let _ = tx.send(Input::Injected {
@@ -843,6 +882,7 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
         }
 
         Effect::Persist { record } => {
+            e.finish_trace(record.id, record.audio_ms, record.latency_ms);
             // Redaction happens here, on the way to storage, and nowhere else.
             //
             // The transcript reached the user's application several steps ago —
