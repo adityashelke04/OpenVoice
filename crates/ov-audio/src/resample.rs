@@ -142,6 +142,9 @@ impl StreamingResampler {
 }
 
 /// Convert a whole mono recording to 16 kHz in one go.
+///
+/// Only tests use this now: the capture thread converts as it goes.
+#[cfg(test)]
 pub fn to_16k(mono: &[f32], src_rate: u32) -> Result<Vec<f32>, String> {
     if mono.is_empty() {
         return Ok(Vec::new());
