@@ -39,6 +39,26 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # sherpa-onnx-sys unpacks its prebuilt static libraries here, beside the
+          # profile directories rather than inside one, so the cache has to be
+          # told about it. See the next step for what happens when it is not.
+          cache-directories: target/sherpa-onnx-prebuilt
+
+      # sherpa-onnx-sys's build script downloads its libraries into
+      # target/sherpa-onnx-prebuilt and records that path in its build output.
+      # A cache that restores the build output without the libraries leaves
+      # cargo believing the script already ran: `cargo check` and clippy pass,
+      # and the first real compile fails with "could not find native static
+      # library `sherpa-onnx-c-api`". That is exactly how 1.0.0's first CI run
+      # failed, on a partial cache match after Cargo.lock changed. When the
+      # libraries are missing, forget the script's output so it runs again.
+      - name: Re-fetch sherpa-onnx libraries the cache did not restore
+        shell: bash
+        run: |
+          if [ ! -d target/sherpa-onnx-prebuilt ]; then
+            rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
+          fi
 
       - name: Format
         run: cargo fmt --all --check
@@ -72,6 +92,26 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # sherpa-onnx-sys unpacks its prebuilt static libraries here, beside the
+          # profile directories rather than inside one, so the cache has to be
+          # told about it. See the next step for what happens when it is not.
+          cache-directories: target/sherpa-onnx-prebuilt
+
+      # sherpa-onnx-sys's build script downloads its libraries into
+      # target/sherpa-onnx-prebuilt and records that path in its build output.
+      # A cache that restores the build output without the libraries leaves
+      # cargo believing the script already ran: `cargo check` and clippy pass,
+      # and the first real compile fails with "could not find native static
+      # library `sherpa-onnx-c-api`". That is exactly how 1.0.0's first CI run
+      # failed, on a partial cache match after Cargo.lock changed. When the
+      # libraries are missing, forget the script's output so it runs again.
+      - name: Re-fetch sherpa-onnx libraries the cache did not restore
+        shell: bash
+        run: |
+          if [ ! -d target/sherpa-onnx-prebuilt ]; then
+            rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
+          fi
 
       # cpal links ALSA on Linux; ov-audio does not build without the headers.
       - name: ALSA headers for cpal
