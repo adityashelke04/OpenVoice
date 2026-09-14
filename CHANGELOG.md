@@ -22,12 +22,30 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-14
+
+Letting go of the key is now instant. OpenVoice starts turning your words into
+text while you are still speaking, so by the time you release there is usually
+nothing left to wait for, however long you talked.
+
+Measured on the reference machine (Ryzen 5 6600H, CPU only), from release to
+text at the caret, in a first real session: dictations over fifteen seconds went
+from 2.2 seconds to 0.4 seconds typical, and short ones stayed around a quarter
+of a second. On recorded speech with a natural pause before release, most
+dictations have no decoding left at all. Accuracy did not drop; the full record
+is in `docs/benchmarks/2026-09-13-release-latency.md`.
+
 ### Changed
 
-- Dictation is decoded while you speak, so text appears almost as soon as you let
-  go of the key, including after long dictations. (ADR 0012)
-- Audio is converted to 16 kHz as it is recorded, and the microphone closes after
-  your text is on its way rather than before.
+- **Dictation is decoded while you speak**, so text appears almost as soon as
+  you let go of the key, including after long dictations. It is cut at natural
+  pauses and each finished part is decoded while you carry on; if anything about
+  that goes wrong, the whole recording is decoded in one go exactly as before, so
+  your words never depend on the fast path. (ADR 0012)
+- Audio is converted to 16 kHz as it is recorded, and letting go no longer waits
+  for the microphone to finish closing.
+- After the app has sat idle, the speech model is woken as soon as you start
+  speaking, so the first dictation of the morning is not the slow one.
 
 ### Fixed
 
@@ -867,7 +885,8 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.4.4...v0.6.0
