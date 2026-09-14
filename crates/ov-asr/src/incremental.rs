@@ -274,11 +274,15 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
         if !streamed {
             // Whatever it had queued is for audio the fallback is about to decode
             // whole; running it as well would only delay that decode.
-            st.sessions.remove(&session);
+            let hint = st
+                .sessions
+                .remove(&session)
+                .map(|s| s.hint)
+                .unwrap_or_default();
             st.queue
                 .retain(|j| j.session != session || j.kind == Kind::Prime);
             drop(st);
-            return self.whole(audio);
+            return self.whole(audio, &hint);
         }
 
         let reused = self.schedule_tail(&mut st, session);
@@ -315,9 +319,9 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
                 }
                 Decoded::Done(Err(e)) => {
                     tracing::warn!(%session, error = %e, "a segment failed; decoding the whole dictation instead");
-                    return self.whole(audio);
+                    return self.whole(audio, &s.hint);
                 }
-                Decoded::Pending => return self.whole(audio),
+                Decoded::Pending => return self.whole(audio, &s.hint),
             }
         }
         Ok((
@@ -389,11 +393,10 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
         self.shared.settled.notify_all();
     }
 
-    fn whole(&self, audio: &Pcm16k) -> Result<(Transcript, DecodeFacts)> {
-        let transcript = self
-            .shared
-            .transcriber
-            .transcribe(audio, &DecodeHint::default())?;
+    /// Decode the whole recording in one call, with the dictation's own hints:
+    /// exactly what the app did before incremental decoding existed.
+    fn whole(&self, audio: &Pcm16k, hint: &DecodeHint) -> Result<(Transcript, DecodeFacts)> {
+        let transcript = self.shared.transcriber.transcribe(audio, hint)?;
         self.lock().last_decode = Some(Instant::now());
         Ok((
             transcript,
@@ -475,6 +478,8 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         calls: Mutex<Vec<usize>>,
+        /// The vocabulary each decode was given, in call order.
+        hints: Mutex<Vec<Vec<String>>>,
         fail_next: AtomicBool,
         blocked: Mutex<bool>,
         unblocked: Condvar,
@@ -504,13 +509,14 @@ mod tests {
         fn warm(&self) -> Result<()> {
             Ok(())
         }
-        fn transcribe(&self, audio: &Pcm16k, _: &DecodeHint) -> Result<Transcript> {
+        fn transcribe(&self, audio: &Pcm16k, hint: &DecodeHint) -> Result<Transcript> {
             drop(
                 self.unblocked
                     .wait_while(self.blocked.lock().unwrap(), |b| *b)
                     .unwrap(),
             );
             self.calls.lock().unwrap().push(audio.samples.len());
+            self.hints.lock().unwrap().push(hint.vocabulary.clone());
             if self.fail_next.swap(false, Ordering::SeqCst) {
                 return Err(Error::Transcription("boom".into()));
             }
@@ -664,6 +670,27 @@ mod tests {
         assert_eq!(t.text, "<16000>");
         assert!(facts.fallback);
         assert_eq!(fake.decodes(), vec![16_000]);
+    }
+
+    #[test]
+    fn a_whole_decode_fallback_keeps_the_dictations_vocabulary() {
+        // Falling back is supposed to be "decode it the way the app always did".
+        // The app always passed the user's proper nouns, so the fallback must too.
+        let (fake, d) = decoder();
+        let hint = DecodeHint {
+            vocabulary: vec!["Claude".into()],
+            language: None,
+        };
+        d.begin(S, hint);
+        for chunk in speech(1_000).chunks(640) {
+            d.push(S, chunk);
+        }
+        let (_, facts) = d.finish(S, &pcm(&speech(2_000))).expect("finish");
+        assert!(facts.fallback);
+        assert_eq!(
+            fake.hints.lock().unwrap().last(),
+            Some(&vec!["Claude".to_owned()])
+        );
     }
 
     #[test]
