@@ -127,7 +127,6 @@ of rules, and OpenVoice picks one from whichever app has focus — a chat messag
 gets a capital letter and a full stop, a terminal command gets neither.</sub>
 </div>
 
-
 <br>
 
 <div align="center">
@@ -202,41 +201,19 @@ second instead of by launching a GUI and talking to it.
 The boundary is enforced mechanically: CI compiles the core crates for
 `wasm32-unknown-unknown`, a target where none of those dependencies can link.
 
-```mermaid
-flowchart LR
-    subgraph driving["Driving adapters — they call in"]
-        direction TB
-        HK["Keyboard hook<br/>ov-input"]
-        MIC["WASAPI capture<br/>ov-audio"]
-    end
+<div align="center">
+<a href="docs/images/architecture.png"><img src="docs/images/architecture.png" width="880" alt="OpenVoice drawn as ports and adapters. A dashed enclosure at the top, labelled &quot;Pure domain — compiles to wasm32-unknown-unknown in CI&quot;, holds the session state machine (ov-core) and the formatting pipeline (ov-format). Beneath it sits the composition root (ov-app, engine.rs), which feeds Input into the state machine and executes every Effect that comes back. On the left the keyboard hook (ov-input) and audio capture (ov-audio) call in through the HotkeyListener and AudioSource ports, and the Flow Bar and Hub webviews receive events over IPC. On the right the composition root drives speech recognition (ov-asr), history storage (ov-store) and text injection (ov-input), which writes keystrokes or a clipboard paste into the focused application. A separate dashed box marks ov-fetch as the only crate permitted network egress; it supplies sha256-verified model weights to ov-asr."></a>
+<br>
+<sub>Ports and adapters, drawn to scale. The dashed enclosure is the wasm32 boundary CI
+enforces; everything inside it is pure. The composition root beneath it is the only
+thing that ever touches an adapter — it feeds <code>Input</code> into the state machine
+and executes the <code>Effect</code>s that come back. Generated from
+<a href="docs/architecture.diagram.json">a typed spec</a> pinned to this revision; click the diagram for full size.</sub>
+</div>
 
-    subgraph core["Pure domain — no OS, no I/O, no async, no GUI"]
-        direction TB
-        SM["Session state machine<br/>ov-core"]
-        FMT["Formatting pipeline<br/>ov-format"]
-        SM --> FMT
-    end
-
-    subgraph driven["Driven adapters — the core calls out"]
-        direction TB
-        ASR["Parakeet, in-process<br/>ov-asr"]
-        APP["Foreground app<br/>ov-input"]
-        SINK["SendInput / clipboard<br/>ov-input"]
-        DB["SQLite + FTS5<br/>ov-store"]
-    end
-
-    HK   -- "HotkeyListener" --> SM
-    MIC  -- "AudioSource"    --> SM
-    SM   -- "Transcriber"    --> ASR
-    SM   -- "AppContext"     --> APP
-    SM   -- "HistoryStore"   --> DB
-    FMT  -- "TextSink"       --> SINK
-```
-
-The six labelled edges are the entire contract surface — every trait is
-declared in [`ov-core/src/ports.rs`](crates/ov-core/src/ports.rs), and nothing
-reaches the operating system except through one of them. Adding a seventh
-requires an ADR.
+Six port traits are the entire contract surface — every one is declared in
+[`ov-core/src/ports.rs`](crates/ov-core/src/ports.rs), and nothing reaches the
+operating system except through one of them. Adding a seventh requires an ADR.
 
 
 | Crate | Role |

@@ -25,7 +25,12 @@ use ov_core::types::{InjectMode, Millis, Outcome};
 use ov_format::profile::{self, Profile};
 use ov_format::Formatter;
 
+mod bench;
+mod corpus;
 mod history;
+mod latency_report;
+mod stats;
+mod wer;
 
 #[derive(Parser)]
 #[command(
@@ -107,6 +112,62 @@ enum Command {
         #[arg(long)]
         paste: bool,
     },
+    /// Summarise where dictation time went, from the app's log.
+    Latency {
+        /// Log to read. Defaults to the app's own `openvoice.log`.
+        #[arg(long)]
+        log: Option<PathBuf>,
+    },
+    /// Decode LibriSpeech through the real model: release latency and accuracy.
+    Bench(BenchArgs),
+}
+
+#[derive(clap::Args)]
+struct BenchArgs {
+    /// LibriSpeech test-clean directory. Defaults to fixtures/librispeech.
+    #[arg(long)]
+    corpus: Option<PathBuf>,
+    /// Clips to decode (after concatenation).
+    #[arg(long, default_value_t = 25)]
+    clips: usize,
+    /// Join this many utterances into each clip, 600 ms apart, for long-form speech.
+    #[arg(long, default_value_t = 1)]
+    concat: usize,
+    /// Shortest utterance to use.
+    #[arg(long, default_value_t = 2_000)]
+    min_ms: u64,
+    /// Longest utterance to use.
+    #[arg(long, default_value_t = 12_000)]
+    max_ms: u64,
+    /// Decode threads.
+    #[arg(long, default_value_t = ov_asr::sherpa::DEFAULT_DECODE_THREADS)]
+    threads: i32,
+    /// Silence between the end of speech and the release.
+    #[arg(long, default_value_t = 400)]
+    release_pause_ms: u64,
+    /// Decode the whole clip at release, or decode while it streams.
+    #[arg(long, value_enum, default_value_t = BenchMode::Full)]
+    mode: BenchMode,
+    /// Pause, after speech, that triggers a speculative decode.
+    #[arg(long, default_value_t = ov_asr::segment::SegmentPolicy::default().checkpoint_pause_ms)]
+    checkpoint_pause_ms: u64,
+    /// Pause, after enough speech, that commits a segment.
+    #[arg(long, default_value_t = ov_asr::segment::SegmentPolicy::default().commit_pause_ms)]
+    commit_pause_ms: u64,
+    /// Shortest segment that a pause may commit.
+    #[arg(long, default_value_t = ov_asr::segment::SegmentPolicy::default().min_segment_ms)]
+    min_segment_ms: u64,
+    /// Print reference and hypothesis for every clip, to read the joins.
+    #[arg(long)]
+    show_text: bool,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum BenchMode {
+    /// Decode the whole utterance in one call at release, as the app did.
+    Full,
+    /// Decode while the audio streams in, as the app does now.
+    Incremental,
 }
 
 fn main() -> std::process::ExitCode {
@@ -143,7 +204,114 @@ fn run(cli: &Cli) -> Result<(), String> {
         Command::Mictest { seconds } => cmd_mictest(cli, *seconds),
         Command::Type { text, delay, paste } => cmd_type(text, *delay, *paste),
         Command::Dictate => cmd_dictate(cli),
+        Command::Latency { log } => cmd_latency(log.as_ref()),
+        Command::Bench(args) => cmd_bench(args),
     }
+}
+
+/* -- bench -------------------------------------------------------------------- */
+
+fn cmd_bench(args: &BenchArgs) -> Result<(), String> {
+    let root = args.corpus.clone().unwrap_or_else(corpus::default_root);
+    let group = args.concat.max(1);
+    let loaded = corpus::load_librispeech(&root, args.min_ms, args.max_ms, args.clips * group)?;
+    let clips: Vec<corpus::Clip> = loaded
+        .chunks(group)
+        .map(|g| corpus::concat(g, 600))
+        .collect();
+
+    let spec = ov_asr::catalog::default_spec();
+    let dir = ov_asr::locate::model_dir(spec, &user_models()).map_err(|e| e.to_string())?;
+    let transcriber = ov_asr::sherpa::SherpaTranscriber::with_threads(spec, dir, args.threads)
+        .map_err(|e| e.to_string())?;
+    // One throwaway decode, so the first clip does not pay for paging the model in.
+    let _ = transcriber.transcribe(
+        &Pcm16k {
+            samples: vec![0.0; 8_000],
+        },
+        &DecodeHint::default(),
+    );
+
+    let policy = ov_asr::segment::SegmentPolicy {
+        checkpoint_pause_ms: args.checkpoint_pause_ms,
+        commit_pause_ms: args.commit_pause_ms,
+        min_segment_ms: args.min_segment_ms,
+        ..ov_asr::segment::SegmentPolicy::default()
+    };
+    let transcriber = Arc::new(transcriber);
+    let decoder = match args.mode {
+        BenchMode::Full => None,
+        BenchMode::Incremental => Some(
+            ov_asr::incremental::IncrementalDecoder::new(Arc::clone(&transcriber), policy)
+                .map_err(|e| e.to_string())?,
+        ),
+    };
+
+    let mut runs = Vec::new();
+    for (i, clip) in clips.iter().enumerate() {
+        let m = match &decoder {
+            None => bench::run_full(&*transcriber, clip, args.release_pause_ms)?,
+            Some(d) => bench::run_incremental(
+                d,
+                ov_core::types::SessionId(i as u64 + 1),
+                clip,
+                args.release_pause_ms,
+                true,
+            )?,
+        };
+        println!(
+            "{:>7} ms audio {:>6} ms release {}  {}",
+            m.audio_ms,
+            m.release_ms,
+            if m.reused { "reused" } else { "      " },
+            &m.id[..m.id.len().min(40)]
+        );
+        if args.show_text {
+            println!("    ref: {}\n    hyp: {}", m.reference, m.hypothesis);
+        }
+        runs.push(m);
+    }
+    let label = match args.mode {
+        BenchMode::Full => "full".to_owned(),
+        BenchMode::Incremental => format!(
+            "incremental(checkpoint={} commit={} min_segment={})",
+            policy.checkpoint_pause_ms, policy.commit_pause_ms, policy.min_segment_ms
+        ),
+    };
+    println!(
+        "\n{}",
+        bench::render(&label, args.threads, &bench::summarize(&runs))
+    );
+    Ok(())
+}
+
+/* -- latency ------------------------------------------------------------------ */
+
+fn cmd_latency(log: Option<&PathBuf>) -> Result<(), String> {
+    let path = log.cloned().unwrap_or_else(|| {
+        user_models()
+            .parent()
+            .expect("models dir has a parent")
+            .join("openvoice.log")
+    });
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let times: Vec<_> = text
+        .lines()
+        .filter_map(ov_core::latency::StageTimes::parse)
+        .collect();
+    if times.is_empty() {
+        println!(
+            "no latency lines in {} yet: dictate something first",
+            path.display()
+        );
+        return Ok(());
+    }
+    println!("{} sessions from {}\n", times.len(), path.display());
+    print!(
+        "{}",
+        latency_report::render(&latency_report::summarize(&times))
+    );
+    Ok(())
 }
 
 /* -- helpers ---------------------------------------------------------------- */
@@ -823,6 +991,9 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
             flush();
         }
 
+        // The CLI keeps one buffer and replaces it on every capture, so there is
+        // no per-session state to forget.
+        Effect::Discard { .. } => {}
         Effect::Emit(event) => match event {
             Event::Listening { profile, .. } => {
                 print!("listening [{profile}] ... ");

@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "OpenVoice — Ports and Adapters",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/adityashelke04/OpenVoice",
+      "revision": "3e50bce02a0e2e11f3c13599e07e9bb5b1fe2e33"
+    },
+    "views": [
+      {
+        "id": "dictation-path",
+        "label": "Dictation path",
+        "focus": [
+          "mic",
+          "engine",
+          "core",
+          "format",
+          "inject",
+          "target"
+        ],
+        "note": "Hold the chord, speak, release: capture to formatted text at the caret."
+      },
+      {
+        "id": "port-boundary",
+        "label": "The six ports",
+        "focus": [
+          "hotkey",
+          "mic",
+          "engine",
+          "core",
+          "format",
+          "asr",
+          "store",
+          "inject"
+        ],
+        "note": "Every adapter the composition root owns sits behind one of the six port traits."
+      },
+      {
+        "id": "shell-and-network",
+        "label": "Shell and network",
+        "focus": [
+          "ui",
+          "engine",
+          "fetch",
+          "asr"
+        ],
+        "note": "The shell emits events to the webviews; ov-fetch is the only crate that opens a socket."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "Session state machine",
+      "sublabel": "ov-core · pure, no OS or IO",
+      "tag": "handle(Input) -> Vec<Effect>",
+      "pos": [
+        370,
+        40
+      ],
+      "size": [
+        205,
+        68
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-core/src/session.rs",
+          "line": 1,
+          "end_line": 26,
+          "label": "the state machine"
+        },
+        {
+          "path": "crates/ov-core/src/ports.rs",
+          "line": 1,
+          "end_line": 11,
+          "label": "the six ports"
+        }
+      ]
+    },
+    {
+      "id": "format",
+      "type": "backend",
+      "label": "Formatting pipeline",
+      "sublabel": "ov-format · rules + dictionary",
+      "pos": [
+        600,
+        40
+      ],
+      "size": [
+        205,
+        68
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-format/src/rules.rs",
+          "label": "voice commands"
+        },
+        {
+          "path": "crates/ov-format/src/dictionary.rs",
+          "label": "developer vocabulary"
+        }
+      ]
+    },
+    {
+      "id": "fetch",
+      "type": "cloud",
+      "label": "Model downloads",
+      "sublabel": "ov-fetch · ureq + sha256",
+      "pos": [
+        870,
+        40
+      ],
+      "size": [
+        190,
+        68
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-fetch/Cargo.toml",
+          "label": "the only socket"
+        }
+      ]
+    },
+    {
+      "id": "hotkey",
+      "type": "backend",
+      "label": "Keyboard hook",
+      "sublabel": "ov-input · WH_KEYBOARD_LL",
+      "tag": "returns in < 10 ms",
+      "pos": [
+        40,
+        165
+      ],
+      "size": [
+        185,
+        68
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-input/src/hook.rs",
+          "label": "low-level hook"
+        },
+        {
+          "path": "crates/ov-input/src/foreground.rs",
+          "label": "AppContext"
+        }
+      ]
+    },
+    {
+      "id": "asr",
+      "type": "backend",
+      "label": "Speech recognition",
+      "sublabel": "ov-asr · sherpa-onnx",
+      "tag": "Parakeet TDT 0.6b v2",
+      "pos": [
+        870,
+        165
+      ],
+      "size": [
+        190,
+        68
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-asr/src/sherpa.rs",
+          "label": "decoder"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "Composition root",
+      "sublabel": "ov-app · engine.rs",
+      "tag": "executes every Effect",
+      "pos": [
+        475,
+        225
+      ],
+      "size": [
+        225,
+        80
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-app/src/engine.rs",
+          "line": 1,
+          "end_line": 7,
+          "label": "composition root"
+        },
+        {
+          "path": "crates/ov-app/src/main.rs",
+          "line": 869,
+          "end_line": 908,
+          "label": "IPC handlers"
+        }
+      ]
+    },
+    {
+      "id": "mic",
+      "type": "backend",
+      "label": "Audio capture",
+      "sublabel": "ov-audio · cpal / WASAPI",
+      "tag": "16 kHz mono f32",
+      "pos": [
+        40,
+        305
+      ],
+      "size": [
+        185,
+        68
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-audio/src/lib.rs",
+          "label": "WASAPI capture"
+        },
+        {
+          "path": "crates/ov-audio/src/resample.rs",
+          "label": "downmix + resample"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "History",
+      "sublabel": "ov-store · SQLite + FTS5",
+      "tag": "audio never persisted",
+      "pos": [
+        870,
+        305
+      ],
+      "size": [
+        190,
+        68
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-store/src/schema.rs",
+          "label": "schema + FTS5"
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Flow Bar + Hub",
+      "sublabel": "apps/ui · React + Vite",
+      "tag": "two webviews",
+      "pos": [
+        40,
+        440
+      ],
+      "size": [
+        185,
+        68
+      ],
+      "sources": [
+        {
+          "path": "apps/ui/src/windows/Overlay.tsx",
+          "label": "Flow Bar overlay"
+        },
+        {
+          "path": "crates/ov-app/tauri.conf.json",
+          "line": 17,
+          "end_line": 47,
+          "label": "window definitions"
+        }
+      ]
+    },
+    {
+      "id": "inject",
+      "type": "backend",
+      "label": "Text injection",
+      "sublabel": "ov-input · inject.rs",
+      "pos": [
+        870,
+        440
+      ],
+      "size": [
+        190,
+        68
+      ],
+      "sources": [
+        {
+          "path": "crates/ov-input/src/inject.rs",
+          "line": 1,
+          "end_line": 22,
+          "label": "two strategies"
+        }
+      ]
+    },
+    {
+      "id": "target",
+      "type": "external",
+      "label": "Focused application",
+      "sublabel": "editor, terminal, browser",
+      "pos": [
+        1180,
+        440
+      ],
+      "size": [
+        175,
+        68
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Pure domain — compiles to wasm32-unknown-unknown in CI",
+      "wraps": [
+        "core",
+        "format"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Network egress — ov-fetch only (ADR 0009)",
+      "wraps": [
+        "fetch"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "hotkey-port",
+      "from": "hotkey",
+      "to": "engine",
+      "label": "HotkeyListener"
+    },
+    {
+      "id": "audio-port",
+      "from": "mic",
+      "to": "engine",
+      "label": "AudioSource",
+      "variant": "emphasis",
+      "labelDx": -70
+    },
+    {
+      "id": "drives-core",
+      "from": "engine",
+      "to": "core",
+      "label": "Input → Vec<Effect>",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "format-effect",
+      "from": "engine",
+      "to": "format",
+      "label": "Effect::Format",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "transcribe-effect",
+      "from": "engine",
+      "to": "asr",
+      "label": "Effect::Transcribe"
+    },
+    {
+      "id": "persist-effect",
+      "from": "engine",
+      "to": "store",
+      "label": "Effect::Persist"
+    },
+    {
+      "id": "inject-effect",
+      "from": "engine",
+      "to": "inject",
+      "label": "Effect::Inject",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "caret",
+      "from": "inject",
+      "to": "target",
+      "label": "keystrokes or paste",
+      "variant": "emphasis"
+    },
+    {
+      "id": "shell-to-ui",
+      "from": "engine",
+      "to": "ui",
+      "label": "events over IPC"
+    },
+    {
+      "id": "weights-to-asr",
+      "from": "fetch",
+      "to": "asr",
+      "label": "weights, sha256-verified",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 48
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The boundary",
+      "items": [
+        "ov-core and ov-format carry no OS, IO, GUI or async-runtime dependency",
+        "CI compiles both for wasm32-unknown-unknown, so a leak turns the build red",
+        "Six port traits are the entire contract surface; a seventh needs an ADR"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "The hot path",
+      "items": [
+        "The composition root feeds Input in and executes every Effect that comes back",
+        "Parakeet TDT 0.6b v2 decodes in this process, statically linked, no DLLs",
+        "Short text goes out as Unicode keystrokes, long text as a restored clipboard paste"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Local-first",
+      "items": [
+        "ov-fetch is the only crate in the workspace that can open a socket",
+        "Weights arrive only on a user-initiated download, verified by sha256",
+        "History lives in bundled SQLite with FTS5; audio is never written to disk"
+      ]
+    }
+  ]
+}

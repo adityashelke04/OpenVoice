@@ -38,6 +38,7 @@
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod latency;
 pub mod ports;
 pub mod redact;
 pub mod session;

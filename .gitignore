@@ -52,6 +52,8 @@ crates/ov-app/gen/
 !.env.example
 *.log
 /fixtures/audio/*.wav
+# LibriSpeech test-clean for `ov bench`: 346 MB, fetched by scripts/fetch-bench-set.ps1.
+/fixtures/librispeech/
 !/fixtures/audio/.gitkeep
 
 # Working notes from AI-assisted design sessions.

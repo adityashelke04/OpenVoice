@@ -11,10 +11,13 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use ov_asr::incremental::IncrementalDecoder;
+use ov_asr::segment::SegmentPolicy;
 use ov_core::event::Event;
+use ov_core::latency::StageClock;
 use ov_core::ports::{
     AppContext, AudioSource, DecodeHint, HistoryStore, HotkeyEvent, HotkeyListener, LevelFrame,
-    Pcm16k, TextSink, Transcriber, Utterance,
+    Pcm16k, PcmSink, TextSink, Transcriber, Utterance,
 };
 use ov_core::session::{Effect, Input, SessionMachine};
 use ov_core::types::{Millis, Outcome, SessionId};
@@ -118,14 +121,19 @@ fn build_redactor(
 
 pub struct Engine {
     audio: ov_audio::CpalAudioSource,
-    /// The speech backend.
+    /// The speech backend, decoding each dictation while it is spoken.
     ///
     /// Named concretely rather than held behind `Arc<dyn Transcriber>`: there is
-    /// one backend now, and a trait object that is only ever one type is
-    /// indirection pretending to be flexibility. The port still exists and
-    /// `ov-core` still depends on it -- that is what made this swap cheap -- but
-    /// the composition root can say what it actually built.
-    transcriber: ov_asr::sherpa::SherpaTranscriber,
+    /// one backend, and a trait object that is only ever one type is indirection
+    /// pretending to be flexibility. The decoder owns the model and one decode
+    /// thread; see ADR 0012 for why decoding starts before the key comes up.
+    decoder: IncrementalDecoder<ov_asr::sherpa::SherpaTranscriber>,
+    /// Where to keep recordings, when the user asked for them to be kept.
+    ///
+    /// Fixed when the engine is built from the user's setting, for the reason
+    /// the transcriber used to give: "is this app recording me right now" must
+    /// not have a time-dependent answer.
+    retain_dir: Option<std::path::PathBuf>,
     sink: ov_input::WinTextSink,
     apps: ov_input::WinForeground,
     /// Profiles and formatters live behind one lock and are replaced together.
@@ -142,6 +150,13 @@ pub struct Engine {
     /// wrong words, and session 3 found the slot empty and failed. Keyed by
     /// session, each utterance keeps its own audio until its turn comes.
     captured: Mutex<HashMap<SessionId, Pcm16k>>,
+    /// Where each in-flight session's time has gone so far.
+    ///
+    /// Stamped as each stage finishes and logged as one line when the session
+    /// persists. `latency_ms` in history already said that roughly one dictation
+    /// in ten lost a second outside the decoder; this is what says which stage.
+    /// See `ov_core::latency`.
+    traces: Mutex<HashMap<SessionId, StageClock>>,
     /// Durable history. Injected as a port, so the engine neither knows nor cares
     /// that it is SQLite.
     history: Arc<dyn HistoryStore>,
@@ -205,6 +220,61 @@ pub struct Engine {
 impl Engine {
     fn now(&self) -> Millis {
         Millis(self.start.elapsed().as_millis() as u64)
+    }
+
+    /// Hints for the decoder, from the current rules and language setting.
+    ///
+    /// Proper nouns only, never the whole dictionary. Filling this with
+    /// identifiers was measured to make output worse (see ov-format's dictionary
+    /// module docs), and that finding stands. It does not extend to names that
+    /// are ordinary words phonetically: "Claude" is indistinguishable from "cloud"
+    /// once the audio is gone. Read when the dictation starts, so a rule edited
+    /// mid-sentence applies from the next one.
+    fn decode_hint(&self) -> DecodeHint {
+        DecodeHint {
+            vocabulary: self.rules.lock().expect("rules").hints.clone(),
+            language: self.language.lock().expect("language mutex").clone(),
+        }
+    }
+
+    /// Start timing `session`: the engine has just been told to stop capturing.
+    ///
+    /// The only place a trace is created. Every later stamp updates an existing
+    /// one, so a stage that finishes after the session was persisted -- a decode
+    /// still running when the user pressed Escape -- cannot re-create an entry
+    /// that nothing would ever remove.
+    fn begin_trace(&self, session: SessionId) {
+        let now = self.now();
+        self.traces.lock().expect("traces mutex").insert(
+            session,
+            StageClock {
+                stop_requested: Some(now),
+                ..StageClock::default()
+            },
+        );
+    }
+
+    /// Record that a stage of `session` just finished, if it is still being timed.
+    fn stamp(&self, session: SessionId, mark: impl FnOnce(&mut StageClock, Millis)) {
+        let now = self.now();
+        if let Some(clock) = self.traces.lock().expect("traces mutex").get_mut(&session) {
+            mark(clock, now);
+        }
+    }
+
+    /// Log where `session`'s time went, and forget it.
+    ///
+    /// Only sessions the decoder was asked to transcribe are logged; see
+    /// [`StageClock::worth_logging`]. A tap, a silent capture or a cancelled
+    /// session has no release-to-delivery story to tell, and its line would sit
+    /// in the shortest bucket looking like a slow dictation.
+    fn finish_trace(&self, session: SessionId, audio_ms: u64, latency_ms: u64) {
+        let Some(clock) = self.traces.lock().expect("traces mutex").remove(&session) else {
+            return;
+        };
+        if clock.worth_logging() {
+            tracing::info!("{}", clock.times(session, audio_ms, latency_ms).to_line());
+        }
     }
 
     /// Format a transcript with the named profile, falling back to the first.
@@ -471,10 +541,11 @@ pub fn start(
         tracing::warn!(dir = %d.display(), "keeping recordings on disk; this is off by default");
     }
 
-    let transcriber = ov_asr::sherpa::SherpaTranscriber::with_retention(spec, dir, retain)
-        .map_err(|e| e.to_string())?;
-
+    let transcriber =
+        Arc::new(ov_asr::sherpa::SherpaTranscriber::new(spec, dir).map_err(|e| e.to_string())?);
     transcriber.warm().map_err(|e| e.to_string())?;
+    let decoder = IncrementalDecoder::new(transcriber, SegmentPolicy::default())
+        .map_err(|e| e.to_string())?;
 
     let rules = Rules::build(settings);
     let (redactor, redact_errors) = build_redactor(&config.privacy);
@@ -494,8 +565,8 @@ pub fn start(
         // What actually loaded, not what settings.toml happens to say. Those two
         // drifted apart the moment the model stopped being selectable, and the
         // Engine card was reporting "base.en" while Parakeet was doing the work.
-        model: transcriber.model_id(),
-        device: transcriber.model_id(),
+        model: decoder.transcriber().model_id(),
+        device: decoder.transcriber().model_id(),
         // The key actually bound, not a guess. This was the literal string
         // "Right Ctrl", which was true only until someone rebound it — and the
         // Hub shows this on the home screen as the instruction for how to use
@@ -510,11 +581,13 @@ pub fn start(
 
     let engine = Arc::new(Engine {
         audio,
-        transcriber,
+        decoder,
+        retain_dir: retain,
         sink: ov_input::WinTextSink::new(config.paste_threshold_chars),
         apps: ov_input::WinForeground,
         rules: Mutex::new(rules),
         captured: Mutex::new(HashMap::new()),
+        traces: Mutex::new(HashMap::new()),
         history,
         last_text: Mutex::new(String::new()),
         redactor: Mutex::new(redactor),
@@ -655,7 +728,7 @@ pub fn start(
 /// half-second when the user most wants it.
 fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
     match effect {
-        Effect::StartCapture { .. } => {
+        Effect::StartCapture { session } => {
             let e2 = e.clone();
 
             // Throttle to ~30 Hz.
@@ -682,7 +755,12 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                     elapsed_ms: 0,
                 });
             });
-            if let Err(err) = e.audio.start(levels) {
+            // Before the stream opens, so the first chunk has somewhere to go.
+            e.decoder.begin(session, e.decode_hint());
+            let feed = e.clone();
+            let pcm: PcmSink = Arc::new(move |chunk: &[f32]| feed.decoder.push(session, chunk));
+            if let Err(err) = e.audio.start_streaming(levels, pcm) {
+                e.decoder.discard(session);
                 tracing::error!(error = %err, "capture failed to start");
                 e.shell.emit(&Event::Notice {
                     level: ov_core::event::NoticeLevel::Error,
@@ -692,11 +770,14 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
         }
 
         Effect::StopCapture { session } => {
+            e.begin_trace(session);
             let e = e.clone();
             let tx = tx.clone();
             std::thread::spawn(move || {
                 let at = e.now();
-                match e.audio.stop() {
+                let stopped = e.audio.stop();
+                e.stamp(session, |c, now| c.captured = Some(now));
+                match stopped {
                     Ok(pcm) => {
                         let duration_ms = pcm.duration_ms();
                         let rms = pcm.rms();
@@ -742,22 +823,27 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                     });
                     return;
                 };
-                // Proper nouns only -- never the whole dictionary.
-                //
-                // Filling this with identifiers was measured to make output
-                // worse (see ov-format's dictionary module docs), and that
-                // finding stands. It does not extend to names that are ordinary
-                // words phonetically: "Claude" is indistinguishable from "cloud"
-                // once the audio is gone, so the decoder has to be told it is a
-                // candidate while it still has it. `hint_terms` is the short,
-                // explicitly-marked subset. Language is not a hint in this sense
-                // -- it is the user's own setting, read once at startup.
-                let hint = DecodeHint {
-                    vocabulary: e.rules.lock().expect("rules").hints.clone(),
-                    language: e.language.lock().expect("language mutex").clone(),
-                };
-                match e.transcriber.transcribe(&audio, &hint) {
-                    Ok(transcript) => {
+                // Before the decode, not after: if the decode takes the process
+                // down, the user still has the recording they asked to keep.
+                if let Some(dir) = &e.retain_dir {
+                    match ov_asr::recordings::keep(dir, &audio.samples) {
+                        Ok(path) => tracing::debug!(path = %path.display(), "kept recording"),
+                        Err(err) => tracing::warn!(
+                            error = %err,
+                            "could not keep the recording; the transcript is unaffected"
+                        ),
+                    }
+                }
+                e.stamp(session, |c, now| c.decode_started = Some(now));
+                let decoded = e.decoder.finish(session, &audio);
+                e.stamp(session, |c, now| {
+                    c.decoded = Some(now);
+                    if let Ok((_, facts)) = &decoded {
+                        c.facts = *facts;
+                    }
+                });
+                match decoded {
+                    Ok((transcript, _)) => {
                         let _ = tx.send(Input::Transcribed {
                             session,
                             transcript,
@@ -781,6 +867,7 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             profile,
         } => {
             let text = e.format(&profile, &raw);
+            e.stamp(session, |c, now| c.formatted = Some(now));
             let _ = tx.send(Input::Formatted {
                 session,
                 text,
@@ -813,7 +900,9 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                 }
 
                 let mode = ov_input::mode_for(&text, e.paste_threshold);
-                match e.sink.inject(&text, mode) {
+                let delivered = e.sink.inject(&text, mode);
+                e.stamp(session, |c, now| c.injected = Some(now));
+                match delivered {
                     Ok(_) => {
                         *e.last_text.lock().expect("last text mutex") = text;
                         let _ = tx.send(Input::Injected {
@@ -843,6 +932,7 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
         }
 
         Effect::Persist { record } => {
+            e.finish_trace(record.id, record.audio_ms, record.latency_ms);
             // Redaction happens here, on the way to storage, and nowhere else.
             //
             // The transcript reached the user's application several steps ago —
@@ -872,7 +962,7 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                 final_text,
                 profile: record.profile.clone(),
                 target_app: (!record.app.exe.is_empty()).then(|| record.app.exe.clone()),
-                model: e.transcriber.model_id(),
+                model: e.decoder.transcriber().model_id(),
                 status: record.outcome.code().to_string(),
                 latency_ms: record.latency_ms,
             };
@@ -887,6 +977,11 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             ) {
                 *e.last_text.lock().expect("last text mutex") = record.final_text.clone();
             }
+        }
+
+        Effect::Discard { session } => {
+            e.captured.lock().expect("capture mutex").remove(&session);
+            e.decoder.discard(session);
         }
 
         Effect::Emit(event) => {

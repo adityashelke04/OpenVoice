@@ -1,8 +1,9 @@
 //! # ov-audio — microphone capture
 //!
 //! Implements [`ov_core::ports::AudioSource`]: opens the default (or configured)
-//! input device via WASAPI, downmixes to mono, resamples to the 16 kHz Whisper
-//! expects, and hands back a single buffer when capture stops.
+//! input device via WASAPI, downmixes to mono, resamples to the 16 kHz the speech
+//! model expects, streams that audio while capture runs, and hands back the whole
+//! buffer when capture stops.
 //!
 //! ## The microphone is only open while you hold the key
 //!
@@ -22,23 +23,33 @@
 //! `cpal::Stream` is `!Send` on Windows, so it cannot simply live in a struct shared
 //! between threads. A dedicated thread owns the stream for its whole life and is
 //! driven by commands over a channel.
+//!
+//! The same thread converts audio while capturing. Every 40 ms it takes what the
+//! realtime callback has gathered, downmixes and resamples it, and hands the
+//! 16 kHz chunk to the sink given to `start_streaming`, so the decoder can start
+//! before the key comes up. On `stop` it flushes the resampler and replies
+//! *before* closing the device: closing a WASAPI stream can take tens of
+//! milliseconds, and the user's text should not wait for it.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ov_core::error::{Error, Result};
-use ov_core::ports::{AudioSource, LevelFrame, Pcm16k};
+use ov_core::ports::{AudioSource, LevelFrame, Pcm16k, PcmSink};
 
 mod resample;
+mod stream;
 
 /// Commands sent to the thread that owns the `cpal` stream.
 enum Cmd {
     Start {
         levels: Arc<dyn Fn(LevelFrame) + Send + Sync>,
+        pcm: PcmSink,
         reply: Sender<Result<()>>,
     },
     Stop {
@@ -79,9 +90,17 @@ impl CpalAudioSource {
 
 impl AudioSource for CpalAudioSource {
     fn start(&self, levels: Arc<dyn Fn(LevelFrame) + Send + Sync>) -> Result<()> {
+        self.start_streaming(levels, Arc::new(|_: &[f32]| {}))
+    }
+
+    fn start_streaming(
+        &self,
+        levels: Arc<dyn Fn(LevelFrame) + Send + Sync>,
+        pcm: PcmSink,
+    ) -> Result<()> {
         let (reply, wait) = channel();
         self.tx
-            .send(Cmd::Start { levels, reply })
+            .send(Cmd::Start { levels, pcm, reply })
             .map_err(|_| Error::Audio("audio thread is gone".into()))?;
         wait.recv()
             .map_err(|_| Error::Audio("audio thread died while starting".into()))?
@@ -116,24 +135,94 @@ impl AudioSource for CpalAudioSource {
 /// If audio glitches ever appear, this is the first thing to replace.
 type Capture = Arc<Mutex<Vec<f32>>>;
 
+/// How often the capture thread converts what the callback has gathered.
+///
+/// 40 ms: two WASAPI periods. Short enough that the decoder hears a pause
+/// within a frame or two of it happening, long enough that the conversion is
+/// a handful of large blocks instead of a stream of tiny ones.
+const DRAIN_EVERY: Duration = Duration::from_millis(40);
+
+/// The part of a capture that does not touch the device, so it can be tested
+/// without one.
+struct Pipeline {
+    buffer: Capture,
+    /// Swapped with `buffer` on every drain. Two vectors trade places for the whole
+    /// capture, so the realtime callback never appends into a freshly emptied,
+    /// zero-capacity vector and has to allocate.
+    spare: Vec<f32>,
+    converter: stream::Converter,
+}
+
+impl Pipeline {
+    fn new(buffer: Capture, converter: stream::Converter) -> Self {
+        Self {
+            buffer,
+            spare: Vec::new(),
+            converter,
+        }
+    }
+
+    /// Convert everything the callback has appended since the last drain.
+    ///
+    /// The lock is held only for the swap: the callback is never kept waiting
+    /// while this thread resamples.
+    fn drain(&mut self) -> std::result::Result<(), String> {
+        {
+            let mut buf = self
+                .buffer
+                .lock()
+                .map_err(|_| "capture buffer poisoned".to_owned())?;
+            std::mem::swap(&mut *buf, &mut self.spare);
+        }
+        let converted = self.converter.feed(&self.spare);
+        self.spare.clear();
+        converted
+    }
+
+    /// Drain what is left and return the whole recording at 16 kHz.
+    fn finish(mut self) -> std::result::Result<Vec<f32>, String> {
+        self.drain()?;
+        self.converter.finish()
+    }
+}
+
 struct Active {
     stream: cpal::Stream,
-    buffer: Capture,
-    src_rate: u32,
-    channels: u16,
+    pipeline: Pipeline,
 }
 
 fn audio_thread(rx: &std::sync::mpsc::Receiver<Cmd>, preferred: Option<String>) {
     let mut active: Option<Active> = None;
 
-    while let Ok(cmd) = rx.recv() {
+    loop {
+        // Poll only while recording. Idle, the thread blocks until the next
+        // command: OpenVoice sits in the tray all day, and waking 25 times a
+        // second to find nothing to convert would be a cost paid for nothing.
+        let next = if active.is_some() {
+            rx.recv_timeout(DRAIN_EVERY)
+        } else {
+            rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        };
+        let cmd = match next {
+            Ok(cmd) => cmd,
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(a) = active.as_mut() {
+                    if let Err(e) = a.pipeline.drain() {
+                        tracing::error!(error = %e, "converting captured audio");
+                    }
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+
         match cmd {
-            Cmd::Start { levels, reply } => {
+            Cmd::Start { levels, pcm, reply } => {
                 if active.is_some() {
                     let _ = reply.send(Ok(())); // already capturing; idempotent
                     continue;
                 }
-                match open_stream(preferred.as_deref(), levels) {
+                match open_stream(preferred.as_deref(), levels, pcm) {
                     Ok(a) => {
                         let started = a.stream.play().map_err(|e| Error::Audio(format!("{e}")));
                         if started.is_ok() {
@@ -148,21 +237,22 @@ fn audio_thread(rx: &std::sync::mpsc::Receiver<Cmd>, preferred: Option<String>) 
             }
 
             Cmd::Stop { reply } => {
-                let Some(a) = active.take() else {
+                let Some(Active { stream, pipeline }) = active.take() else {
                     let _ = reply.send(Err(Error::Audio("not capturing".into())));
                     continue;
                 };
-                // Dropping the stream closes the device, which is what turns the
-                // operating system's microphone indicator back off.
-                let _ = a.stream.pause();
-                let raw = a.buffer.lock().map(|b| b.clone()).unwrap_or_default();
-                drop(a.stream);
-
-                let mono = downmix(&raw, a.channels);
-                let out = resample::to_16k(&mono, a.src_rate)
+                let _ = stream.pause();
+                let out = pipeline
+                    .finish()
                     .map(|samples| Pcm16k { samples })
                     .map_err(|e| Error::Audio(format!("resample: {e}")));
                 let _ = reply.send(out);
+                // Dropped after the reply, not before. Closing a WASAPI stream joins
+                // its event thread and can take tens of milliseconds, and the user's
+                // text should not wait for that. The operating system's microphone
+                // indicator goes off a few milliseconds later instead, which is the
+                // only thing the ordering costs.
+                drop(stream);
             }
 
             Cmd::Abort => {
@@ -178,6 +268,7 @@ fn audio_thread(rx: &std::sync::mpsc::Receiver<Cmd>, preferred: Option<String>) 
 fn open_stream(
     preferred: Option<&str>,
     levels: Arc<dyn Fn(LevelFrame) + Send + Sync>,
+    pcm: PcmSink,
 ) -> Result<Active> {
     let host = cpal::default_host();
 
@@ -201,7 +292,10 @@ fn open_stream(
 
     let src_rate = config.sample_rate().0;
     let channels = config.channels();
-    let buffer: Capture = Arc::new(Mutex::new(Vec::with_capacity(src_rate as usize * 4)));
+    // 100 ms of device audio: the most a 40 ms drain interval should ever leave.
+    let buffer: Capture = Arc::new(Mutex::new(Vec::with_capacity(
+        src_rate as usize * usize::from(channels) / 10,
+    )));
 
     let err_fn = |e| tracing::error!(error = %e, "audio stream error");
     let sink = buffer.clone();
@@ -241,12 +335,11 @@ fn open_stream(
     }
     .map_err(|e| Error::Audio(format!("building input stream: {e}")))?;
 
+    let converter = stream::Converter::new(src_rate, channels, pcm).map_err(Error::Audio)?;
     tracing::info!(rate = src_rate, channels, "capture started");
     Ok(Active {
         stream,
-        buffer,
-        src_rate,
-        channels,
+        pipeline: Pipeline::new(buffer, converter),
     })
 }
 
@@ -276,14 +369,40 @@ fn on_data(
     levels(LevelFrame { rms, peak });
 }
 
-/// Average interleaved channels down to mono.
-fn downmix(interleaved: &[f32], channels: u16) -> Vec<f32> {
-    let ch = channels.max(1) as usize;
-    if ch == 1 {
-        return interleaved.to_vec();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draining_hands_over_everything_the_callback_appended() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let into = seen.clone();
+        let sink: PcmSink = Arc::new(move |c: &[f32]| into.lock().unwrap().extend_from_slice(c));
+        let buffer: Capture = Arc::new(Mutex::new(Vec::new()));
+        let mut pipeline = Pipeline::new(
+            buffer.clone(),
+            stream::Converter::new(16_000, 2, sink).unwrap(),
+        );
+
+        // What `on_data` does from the realtime thread.
+        buffer
+            .lock()
+            .unwrap()
+            .extend_from_slice(&[0.5, 0.5, -0.5, -0.5]);
+        pipeline.drain().unwrap();
+        assert!(
+            buffer.lock().unwrap().is_empty(),
+            "the callback's buffer must be emptied"
+        );
+        assert_eq!(*seen.lock().unwrap(), vec![0.5, -0.5]);
+
+        buffer.lock().unwrap().extend_from_slice(&[0.25, 0.25]);
+        let all = pipeline.finish().unwrap();
+        assert_eq!(
+            all,
+            vec![0.5, -0.5, 0.25],
+            "stop must include audio not yet drained"
+        );
+        assert_eq!(*seen.lock().unwrap(), all);
     }
-    interleaved
-        .chunks_exact(ch)
-        .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-        .collect()
 }
