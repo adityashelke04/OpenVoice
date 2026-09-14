@@ -195,7 +195,15 @@ fn audio_thread(rx: &std::sync::mpsc::Receiver<Cmd>, preferred: Option<String>) 
     let mut active: Option<Active> = None;
 
     loop {
-        let cmd = match rx.recv_timeout(DRAIN_EVERY) {
+        // Poll only while recording. Idle, the thread blocks until the next
+        // command: OpenVoice sits in the tray all day, and waking 25 times a
+        // second to find nothing to convert would be a cost paid for nothing.
+        let next = if active.is_some() {
+            rx.recv_timeout(DRAIN_EVERY)
+        } else {
+            rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        };
+        let cmd = match next {
             Ok(cmd) => cmd,
             Err(RecvTimeoutError::Timeout) => {
                 if let Some(a) = active.as_mut() {
