@@ -237,23 +237,42 @@ impl Engine {
         }
     }
 
-    /// Record that a stage of `session` just finished.
+    /// Start timing `session`: the engine has just been told to stop capturing.
+    ///
+    /// The only place a trace is created. Every later stamp updates an existing
+    /// one, so a stage that finishes after the session was persisted -- a decode
+    /// still running when the user pressed Escape -- cannot re-create an entry
+    /// that nothing would ever remove.
+    fn begin_trace(&self, session: SessionId) {
+        let now = self.now();
+        self.traces.lock().expect("traces mutex").insert(
+            session,
+            StageClock {
+                stop_requested: Some(now),
+                ..StageClock::default()
+            },
+        );
+    }
+
+    /// Record that a stage of `session` just finished, if it is still being timed.
     fn stamp(&self, session: SessionId, mark: impl FnOnce(&mut StageClock, Millis)) {
         let now = self.now();
-        let mut traces = self.traces.lock().expect("traces mutex");
-        mark(traces.entry(session).or_default(), now);
+        if let Some(clock) = self.traces.lock().expect("traces mutex").get_mut(&session) {
+            mark(clock, now);
+        }
     }
 
     /// Log where `session`'s time went, and forget it.
     ///
-    /// Only sessions that reached `StopCapture` are logged. A cancelled capture or
-    /// a too-short tap has no release-to-delivery story to tell, and a line of
-    /// dashes for each would bury the ones that do.
+    /// Only sessions the decoder was asked to transcribe are logged; see
+    /// [`StageClock::worth_logging`]. A tap, a silent capture or a cancelled
+    /// session has no release-to-delivery story to tell, and its line would sit
+    /// in the shortest bucket looking like a slow dictation.
     fn finish_trace(&self, session: SessionId, audio_ms: u64, latency_ms: u64) {
         let Some(clock) = self.traces.lock().expect("traces mutex").remove(&session) else {
             return;
         };
-        if clock.stop_requested.is_some() {
+        if clock.worth_logging() {
             tracing::info!("{}", clock.times(session, audio_ms, latency_ms).to_line());
         }
     }
@@ -751,7 +770,7 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
         }
 
         Effect::StopCapture { session } => {
-            e.stamp(session, |c, now| c.stop_requested = Some(now));
+            e.begin_trace(session);
             let e = e.clone();
             let tx = tx.clone();
             std::thread::spawn(move || {

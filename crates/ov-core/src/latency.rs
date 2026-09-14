@@ -90,6 +90,17 @@ fn between(from: Option<Millis>, to: Option<Millis>) -> Option<u64> {
 }
 
 impl StageClock {
+    /// Whether this session belongs in the latency log at all.
+    ///
+    /// Only a session the decoder was asked to transcribe has a release-to-text
+    /// story. Taps, silent captures and cancelled sessions all reach
+    /// `StopCapture` too, and logging them put zero-length recordings into the
+    /// shortest bucket, where their odd timings read as slow dictations.
+    #[must_use]
+    pub fn worth_logging(&self) -> bool {
+        self.stop_requested.is_some() && self.decode_started.is_some()
+    }
+
     /// Durations for this clock. `latency_ms` is the session record's own figure,
     /// carried alongside so `latency_ms - total_ms` shows how long the release sat
     /// in the session loop before the engine acted on it.
@@ -233,6 +244,26 @@ mod tests {
         // the message. The parser has to find the marker, not assume column zero.
         let logged = format!("2026-09-13T11:24:41.482082Z  INFO {}", t.to_line());
         assert_eq!(StageTimes::parse(&logged), Some(t));
+    }
+
+    #[test]
+    fn only_a_session_that_reached_the_decoder_is_worth_a_line() {
+        // Found in the first real session: taps, silent captures and Escape all
+        // reach StopCapture, and their lines (audio_ms=0, latency_ms=371) became
+        // the slow tail of the "<3s" bucket. None of them has a release-to-text
+        // story to tell.
+        let mut tap = StageClock {
+            stop_requested: Some(Millis(1_000)),
+            captured: Some(Millis(1_001)),
+            ..StageClock::default()
+        };
+        assert!(!tap.worth_logging(), "a tap never reaches the decoder");
+        tap.decode_started = Some(Millis(1_002));
+        assert!(tap.worth_logging());
+        assert!(
+            !StageClock::default().worth_logging(),
+            "nor does a session stamped only by a late decode"
+        );
     }
 
     #[test]
