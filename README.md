@@ -233,14 +233,21 @@ rationale: [`docs/adr/`](docs/adr/).
 
 ### Measured on the reference machine
 
-RTX 3050 Laptop (4 GB VRAM), Ryzen 5 6600H:
+RTX 3050 Laptop (4 GB VRAM), Ryzen 5 6600H, decoding on the CPU:
 
 | | |
 |---|---:|
 | Model load, at startup | ~2.5–3.4 s |
-| Decode, ~5 s utterance | ~500 ms median |
-| Decode, p90 across clip lengths | ~1.2 s |
+| Key release to text, dictation under 3 s | ~245 ms typical |
+| Key release to text, dictation over 15 s | ~420 ms typical (was ~2.2 s before 1.0.0) |
+| Decoding left at release, after a natural pause | usually none |
 | Memory while loaded | ~750 MB |
+
+Since 1.0.0 a dictation is decoded while you speak, so the wait after you let
+go no longer grows with how long you talked. The release-to-text figures come
+from the first 1.0.0 session in the app; the benchmark on recorded speech, with
+accuracy before and after, is in
+[docs/benchmarks/2026-09-13-release-latency.md](docs/benchmarks/2026-09-13-release-latency.md).
 
 Measured on the reference machine, CPU only, at four decode threads. Four rather
 than all twelve: the extra eight buy about 110 ms and cost the responsiveness of
