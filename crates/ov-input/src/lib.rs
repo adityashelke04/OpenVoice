@@ -14,6 +14,10 @@
 
 #![warn(missing_docs, clippy::all)]
 
+// Portable logic, but only the Windows injector calls it. Built for tests on every
+// platform so the Linux CI job still exercises it without a dead-code warning.
+#[cfg(any(windows, test))]
+mod chunk;
 #[cfg(windows)]
 mod foreground;
 #[cfg(windows)]

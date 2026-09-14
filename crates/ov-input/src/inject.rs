@@ -36,6 +36,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VIRTUAL_KEY,
 };
+use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 const CF_UNICODETEXT: u32 = 13;
 const VK_CONTROL: u16 = 0x11;
@@ -253,11 +254,24 @@ fn send_inputs(inputs: &[INPUT]) -> Result<()> {
 /// user's previous clipboard isn't gone for the rest of their session.
 const CLIPBOARD_HOLD: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// Largest piece pasted in one `Ctrl+V`, in characters.
+///
+/// Claude Code hides any paste over 800 characters behind a `[Pasted text #N]`
+/// placeholder, so a long dictation looked like it never arrived. See
+/// [`crate::chunk`] for the measurement. 700 leaves headroom under that limit.
+const PASTE_CHUNK_CHARS: usize = 700;
+/// Claude Code also collapses pastes of more than three lines.
+const PASTE_CHUNK_LINE_BREAKS: usize = 2;
+/// Pause between pieces, so the target finishes one paste before the next one
+/// arrives. 250 ms is the gap verified end to end; pieces sent back to back can
+/// be merged or reassembled out of order by a terminal agent's paste detector.
+const PASTE_CHUNK_GAP: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Snapshot the clipboard, paste, then put the clipboard back later.
 fn paste_with_restore(text: &str) -> Result<()> {
     let snapshot = ClipboardSnapshot::capture()?;
-    set_clipboard_text(text)?;
-    let result = send_paste_chord();
+    let pieces = crate::chunk::paste_chunks(text, PASTE_CHUNK_CHARS, PASTE_CHUNK_LINE_BREAKS);
+    let result = paste_pieces(&pieces);
     // Whether the synthetic Ctrl+V actually reached the target, not merely
     // whether we attempted it. See `should_restore`: this is what the restore
     // decision must key on, not just "does the clipboard still hold our text".
@@ -265,7 +279,10 @@ fn paste_with_restore(text: &str) -> Result<()> {
 
     // Restore off-thread so injection returns immediately. Blocking here made every
     // dictation feel slower *and* still lost the race.
-    let ours = text.to_string();
+    //
+    // After a successful multi-piece paste the clipboard holds the *last* piece,
+    // so that is what "still ours" must compare against.
+    let ours = pieces.last().copied().unwrap_or_default().to_string();
     std::thread::Builder::new()
         .name("ov-clipboard-restore".into())
         .spawn(move || {
@@ -284,6 +301,65 @@ fn paste_with_restore(text: &str) -> Result<()> {
         .map_err(|e| Error::Injection(format!("clipboard restore thread: {e}")))?;
 
     result
+}
+
+/// Paste each piece in order into the window that was focused at the start.
+///
+/// Stops at the first failure rather than carrying on: a later piece landing
+/// without an earlier one is exactly the "missing words" failure this exists to
+/// prevent. The caller then leaves the *whole* transcript on the clipboard.
+fn paste_pieces(pieces: &[&str]) -> Result<()> {
+    let started = std::time::Instant::now();
+    let chars: usize = pieces.iter().map(|p| p.chars().count()).sum();
+    // SAFETY: GetForegroundWindow has no preconditions.
+    let target = unsafe { GetForegroundWindow() };
+
+    for (index, piece) in pieces.iter().enumerate() {
+        if index > 0 {
+            std::thread::sleep(PASTE_CHUNK_GAP);
+            // SAFETY: as above.
+            if unsafe { GetForegroundWindow() } != target {
+                tracing::warn!(
+                    pasted = index,
+                    pieces = pieces.len(),
+                    "focus moved to another window mid-paste; stopping"
+                );
+                return Err(Error::Injection(format!(
+                    "focus moved to another window after {index} of {} pieces",
+                    pieces.len()
+                )));
+            }
+        }
+        set_verified_clipboard_text(piece)?;
+        send_paste_chord()?;
+    }
+
+    tracing::info!(
+        chars,
+        pieces = pieces.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "pasted transcript"
+    );
+    Ok(())
+}
+
+/// Put `text` on the clipboard and read it back before anything pastes it.
+///
+/// A clipboard manager or another app can replace the contents between our write
+/// and the target's read. Pasting whatever happens to be there would put the
+/// wrong words in the user's document, so a mismatch is retried once and then
+/// reported as a failure.
+fn set_verified_clipboard_text(text: &str) -> Result<()> {
+    for attempt in 0..2 {
+        set_clipboard_text(text)?;
+        if read_clipboard_text().as_deref() == Some(text) {
+            return Ok(());
+        }
+        tracing::warn!(attempt, "clipboard did not hold the text just written");
+    }
+    Err(Error::Injection(
+        "the clipboard kept changing, so the paste could not be trusted".into(),
+    ))
 }
 
 /// Whether the background thread should hand the clipboard back to whatever

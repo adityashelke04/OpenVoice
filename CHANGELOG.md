@@ -22,6 +22,22 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-14
+
+Long dictations no longer look like they failed to paste in Claude Code.
+
+### Fixed
+
+- **A minute of dictation now shows up in full in Claude Code.** Claude Code
+  hides any paste over 800 characters behind a `[Pasted text #1]` label, so a
+  long paragraph seemed to vanish even though every word was there. OpenVoice
+  now pastes long dictations in a few pieces, split between words, so the whole
+  paragraph appears in the input box. Other apps receive exactly the same text
+  as before, a fraction of a second later for very long dictations.
+- **A long paste can no longer land half in one window and half in another.** If
+  you switch windows while a long dictation is being pasted, OpenVoice stops and
+  leaves the whole dictation on your clipboard so you can paste it yourself.
+
 ## [1.0.0] - 2026-09-14
 
 Letting go of the key is now instant. OpenVoice starts turning your words into
@@ -885,7 +901,8 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.6.0...v0.7.0
