@@ -1,7 +1,8 @@
 /** Primitive components.
  *
  * Deliberately small and unopinionated about layout. The design sheet
- * (`?window=sheet`) shows every one; the two rules that erode fastest and matter most:
+ * (`?window=sheet`) shows every one. The two rules that erode fastest and
+ * matter most:
  *
  *   1. There are no shadows anywhere. Depth is the surface ladder plus hairlines.
  *   2. Green appears only on live state, the record action, and focus rings.

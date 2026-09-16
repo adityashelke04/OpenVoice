@@ -1,8 +1,9 @@
 # https://editorconfig.org
 #
 # Several languages share this tree and only Rust has a formatter wired into
-# CI (`cargo fmt`). This file is what stops the others drifting per contributor, and it is what makes an
-# editor agree with the formatter *before* CI has to.
+# CI (`cargo fmt`). This file is what stops the others drifting per
+# contributor, and it is what makes an editor agree with the formatter *before*
+# CI has to.
 #
 # The values are not preferences. Each one matches the tool that already governs
 # that language here, so this file cannot disagree with a check that runs.
@@ -22,7 +23,6 @@ indent_size = 2
 [*.rs]
 indent_size = 4
 max_line_length = 100
-
 
 [*.{ts,tsx,js,jsx,mjs,cjs}]
 indent_size = 2
