@@ -150,7 +150,7 @@ pub struct DecodeHint {
 
 /// Turns captured audio into text.
 ///
-/// Implementations: `FasterWhisperSidecar` (v0.1), `WhisperCpp` (planned), `Mock`.
+/// Implementations: `ov_asr::sherpa::SherpaTranscriber`, and mocks in tests.
 pub trait Transcriber: Send + Sync {
     /// Preload weights so the first real utterance is not penalized by a cold start.
     fn warm(&self) -> Result<()>;

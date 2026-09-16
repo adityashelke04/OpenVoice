@@ -46,7 +46,7 @@ async function call(cmd: string, args?: Record<string, unknown>) {
  *
  * A `box-shadow` is clipped at the window edge, and the window used to be sized
  * to the pill exactly — which is why this surface had no glow for so long
- * despite DESIGN.md granting it one. It is claimed only while listening, because
+ * despite the design system granting it one. It is claimed only while listening, because
  * the window's *region* is the pill plus this margin: everything outside that is
  * clipped, so it neither paints nor takes clicks, and widening the region
  * widens the dead zone punched into whatever is underneath.

@@ -44,7 +44,6 @@
 # Lockfiles are generated, enormous, and not the language this project is
 # written in. Collapsed in diffs and excluded from the repository language bar.
 Cargo.lock                  linguist-generated=true
-sidecar/uv.lock             linguist-generated=true
 apps/ui/package-lock.json   linguist-generated=true
 
 # Generated icon sets, from assets/icon-source.png via `tauri icon`.
