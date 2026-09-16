@@ -3,7 +3,7 @@
  * GPU-accelerated harmonic wave loading dots and kinetic ticking ellipsis
  * attached to loading/in-progress messages.
  *
- * Rules and reasoning live in DESIGN.md:
+ * Rules:
  * - Green appears only on live state or record actions.
  * - Loading and waiting states use neutral/body/warn tones.
  * - GPU composited transforms/opacity only with will-change.

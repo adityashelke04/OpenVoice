@@ -1,7 +1,7 @@
 /* apps/ui/src/ui/loading-dots.css
  *
  * Kinetic loading dots and ticking ellipsis components.
- * Rules & reasoning from DESIGN.md:
+ * Rules:
  * - GPU-accelerated: only transform and opacity animate, with will-change.
  * - Staggered 3-dot harmonic wave/bounce with 0s, 0.16s, 0.32s delays.
  * - Zero layout shifts; strict cubic-bezier easing.

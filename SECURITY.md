@@ -26,11 +26,11 @@ What the design does about it:
 | Concern | Mitigation |
 |---|---|
 | Hook could log every keystroke | The hook procedure compares a virtual key code against your configured chord and discards the event. It has no storage and no path to one. Source: `crates/ov-input/`. |
-| Audio could be exfiltrated | Every crate that touches audio, transcripts, the keyboard or history — `ov-core`, `ov-format`, `ov-audio`, `ov-input`, `ov-asr`, `ov-store`, `ov-cli` — is *sealed*: no HTTP client, TLS stack, or socket library anywhere in its transitive graph, build scripts included. A CI job (`scripts/check-no-network.sh`) fails the build if that changes. **Caveat, stated plainly:** the Tauri shell (`ov-app`) links `reqwest` transitively because Tauri depends on it unconditionally. No OpenVoice code calls it, and the same CI job asserts that `ov-app` takes no network dependency of its own, so telemetry or a crash uploader cannot be added without failing the build — but an HTTP client is in the shipped binary and it would be dishonest to say otherwise. Since 2026-08-09 `ov-app` also depends on `tauri-plugin-updater` for the update check ([ADR 0005](docs/adr/0005-in-app-updates.md)); it is named in the guard's allow-list, so it is a recorded exception rather than an unnoticed one, and adding any *other* network dependency still fails. |
-| Audio could be retained | Held in RAM, with one exception worth naming: the speech engine is a separate process, and audio reaches it as a temporary WAV under `%TEMP%\openvoice\`, deleted immediately after the decode returns — success or failure (`crates/ov-asr/src/wav.rs`). Nothing else writes audio to disk. There is a `privacy.retain_audio` field in the config schema and a toggle for it in Settings, but **no code reads it today**: audio is never retained, and the switch does nothing. Treat it as reserved, not as a control. |
-| Transcripts could leak secrets | **Not yet mitigated.** `privacy.redact_patterns` exists in the config schema with sensible defaults for API-key and token shapes, but nothing applies it — history and logs currently record transcripts verbatim. If you dictate a secret, it is in `history.db` and possibly in `openvoice.log`. This is the most significant gap in this table and is tracked for v0.3. |
+| Audio could be exfiltrated | Every crate that touches audio, transcripts, the keyboard or history — `ov-core`, `ov-format`, `ov-audio`, `ov-input`, `ov-asr`, `ov-store`, `ov-cli` — is *sealed*: no HTTP client, TLS stack, or socket library anywhere in its transitive graph, build scripts included. A CI job (`scripts/check-no-network.sh`) fails the build if that changes. **Caveat, stated plainly:** the Tauri shell (`ov-app`) links `reqwest` transitively because Tauri depends on it unconditionally. No OpenVoice code calls it, and the same CI job asserts that `ov-app` takes no network dependency of its own, so telemetry or a crash uploader cannot be added without failing the build — but an HTTP client is in the shipped binary and it would be dishonest to say otherwise. Since 2026-08-09 `ov-app` also depends on `tauri-plugin-updater` for the update check ([ADR 0005](docs/adr/0005-in-app-updates.md)); it is named in the guard's allow-list, so it is a recorded exception rather than an unnoticed one, and adding any *other* network dependency still fails. The one other allowance is `ov-fetch` ([ADR 0009](docs/adr/0009-model-downloads.md)), which downloads an optional speech model only when you ask for one, and verifies it against a pinned SHA-256 before extracting it. |
+| Audio could be retained | Held in RAM. The speech engine runs inside the app process, so audio never has to cross to another process and is not written to disk. The one exception is *Keep recordings* (`privacy.retain_audio`), off by default and meant for diagnosing a bad transcript: when you turn it on, recordings are saved to `%APPDATA%\OpenVoice\audio` and deleted after `privacy.audio_days` (7 by default). Source: `crates/ov-asr/src/recordings.rs`. |
+| Transcripts could leak secrets | Text matching `privacy.redact_patterns` — by default OpenAI-style keys, GitHub tokens and AWS access key ids — is replaced with `[redacted]` before a transcript is saved to history (`crates/ov-core/src/redact.rs`, applied in `crates/ov-app/src/engine.rs`). The text typed into your app is not altered. **Limit, stated plainly:** only secrets shaped like a pattern are caught. A password you dictate is ordinary words and will be stored. Set `privacy.history_days` to `0` to keep no history at all. |
 | Telemetry | There is none. Not disabled by default — absent from the codebase, and kept absent by the same CI job. |
-| Malicious release binary | Releases are built by public GitHub Actions from a tagged commit, with checksums published alongside. |
+| Malicious release binary | Releases are built by public GitHub Actions from a tagged commit, with SHA-256 checksums published alongside. Updates are also signed with a minisign key whose public half is compiled into the app; an update that fails that check is discarded without running. The installer itself is not yet Authenticode code-signed, so Windows SmartScreen may warn on first run. |
 
 ### Not covered
 
@@ -40,21 +40,21 @@ What the design does about it:
 - **Injection into privileged windows.** Windows blocks synthetic input to elevated
   processes from a non-elevated one. This is correct behaviour and OpenVoice will not
   work around it.
-- **Physical access.** History is stored unencrypted at rest in v0.1. Encryption is
+- **Physical access.** History is stored unencrypted at rest. Encryption is
   planned; until then, treat `%APPDATA%\OpenVoice\history.db` as readable by anyone
   with your account.
 
 ## Supported versions
 
-Pre-1.0, only the latest release gets fixes — currently `v0.1.0`. Fixes land on
-`main` first and reach you in the next release. From 1.0: the current minor
-version and the one before it.
+Fixes land on `main` first and reach you in the next release, which the app
+offers to install for you. The current minor version and the one before it are
+supported.
 
 | Version | Supported |
 |---|---|
-| `v0.1.0` (latest) | ✅ |
+| `1.0.x` (latest) | ✅ |
 | `main` | ✅ |
-| Anything older | ❌ |
+| Anything older than 1.0 | ❌ |
 
 ## Disclosure
 
