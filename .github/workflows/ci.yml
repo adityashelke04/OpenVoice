@@ -55,14 +55,16 @@ jobs:
       # libraries are missing, forget the script's output so it runs again.
       #
       # Test for the library file, not the directory. rust-cache's target
-      # cleanup can empty the directory while leaving it in place, which
-      # passed a directory check and failed the build the same way.
+      # cleanup can leave the directory tree in place with the libraries gone,
+      # which passed a directory check. The build script makes the same
+      # mistake -- it only asks whether `lib/` exists -- so the husk has to be
+      # removed too, or the script reruns and still skips the download.
       - name: Re-fetch sherpa-onnx libraries the cache did not restore
         shell: bash
         run: |
           if ! find target/sherpa-onnx-prebuilt -name '*sherpa-onnx-c-api*' 2>/dev/null | grep -q .; then
             echo "sherpa-onnx libraries not restored; forcing the build script to run"
-            rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
+            rm -rf target/sherpa-onnx-prebuilt target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
           fi
 
       - name: Format
@@ -113,14 +115,16 @@ jobs:
       # libraries are missing, forget the script's output so it runs again.
       #
       # Test for the library file, not the directory. rust-cache's target
-      # cleanup can empty the directory while leaving it in place, which
-      # passed a directory check and failed the build the same way.
+      # cleanup can leave the directory tree in place with the libraries gone,
+      # which passed a directory check. The build script makes the same
+      # mistake -- it only asks whether `lib/` exists -- so the husk has to be
+      # removed too, or the script reruns and still skips the download.
       - name: Re-fetch sherpa-onnx libraries the cache did not restore
         shell: bash
         run: |
           if ! find target/sherpa-onnx-prebuilt -name '*sherpa-onnx-c-api*' 2>/dev/null | grep -q .; then
             echo "sherpa-onnx libraries not restored; forcing the build script to run"
-            rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
+            rm -rf target/sherpa-onnx-prebuilt target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
           fi
 
       # cpal links ALSA on Linux; ov-audio does not build without the headers.
