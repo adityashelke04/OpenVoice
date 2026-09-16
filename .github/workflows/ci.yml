@@ -53,10 +53,15 @@ jobs:
       # library `sherpa-onnx-c-api`". That is exactly how 1.0.0's first CI run
       # failed, on a partial cache match after Cargo.lock changed. When the
       # libraries are missing, forget the script's output so it runs again.
+      #
+      # Test for the library file, not the directory. rust-cache's target
+      # cleanup can empty the directory while leaving it in place, which
+      # passed a directory check and failed the build the same way.
       - name: Re-fetch sherpa-onnx libraries the cache did not restore
         shell: bash
         run: |
-          if [ ! -d target/sherpa-onnx-prebuilt ]; then
+          if ! find target/sherpa-onnx-prebuilt -name '*sherpa-onnx-c-api*' 2>/dev/null | grep -q .; then
+            echo "sherpa-onnx libraries not restored; forcing the build script to run"
             rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
           fi
 
@@ -106,10 +111,15 @@ jobs:
       # library `sherpa-onnx-c-api`". That is exactly how 1.0.0's first CI run
       # failed, on a partial cache match after Cargo.lock changed. When the
       # libraries are missing, forget the script's output so it runs again.
+      #
+      # Test for the library file, not the directory. rust-cache's target
+      # cleanup can empty the directory while leaving it in place, which
+      # passed a directory check and failed the build the same way.
       - name: Re-fetch sherpa-onnx libraries the cache did not restore
         shell: bash
         run: |
-          if [ ! -d target/sherpa-onnx-prebuilt ]; then
+          if ! find target/sherpa-onnx-prebuilt -name '*sherpa-onnx-c-api*' 2>/dev/null | grep -q .; then
+            echo "sherpa-onnx libraries not restored; forcing the build script to run"
             rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-*
           fi
 
