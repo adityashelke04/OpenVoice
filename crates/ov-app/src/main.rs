@@ -20,8 +20,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use ov_core::event::Event;
+use ov_core::event::{Event, NoticeLevel};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -31,7 +32,9 @@ mod engine;
 mod history;
 mod material;
 mod models;
+mod names;
 mod overlay;
+mod paste_again;
 mod settings;
 mod taplatch;
 mod topmost;
@@ -167,24 +170,34 @@ impl From<ov_core::ports::Utterance> for HistoryRow {
     }
 }
 
-/// Recent history, or full-text search when `query` is given.
+/// Recent history, or full-text search when `query` is given, optionally
+/// restricted to one formatting profile.
 ///
 /// Search happens in SQLite rather than by filtering in JavaScript: the previous
 /// version fetched 200 rows and matched them client-side, so anything older than
 /// the last 200 sessions was simply unfindable.
+///
+/// `""` and `"all"` mean the same thing as omitting `profile` altogether: the
+/// Hub's "All" pill has to round-trip through `Option<String>` in TypeScript,
+/// and the empty string is what a cleared search field naturally becomes on the
+/// way here.
 #[tauri::command]
 fn get_history(
     state: tauri::State<'_, AppState>,
     limit: Option<usize>,
     query: Option<String>,
+    profile: Option<String>,
 ) -> Vec<HistoryRow> {
-    use ov_core::ports::HistoryStore;
     let limit = limit.unwrap_or(200);
     let store = &state.store;
+    let profile = profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "all");
 
     let rows = match query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
-        Some(q) => store.search(q, limit),
-        None => store.recent(limit),
+        Some(q) => store.search_filtered(q, limit, profile),
+        None => store.recent_filtered(limit, profile),
     };
 
     rows.unwrap_or_else(|e| {
@@ -229,6 +242,59 @@ fn paste_last(state: tauri::State<'_, AppState>) {
     if let Some(e) = state.engine.lock().expect("engine").as_ref() {
         e.paste_last();
     }
+}
+
+/// The Home screen's greeting, from the Windows account name.
+///
+/// `None` when the environment variable is missing or is not a name anything
+/// can be extracted from -- the greeting then falls back to a generic one
+/// rather than showing "Hi, !".
+#[tauri::command]
+fn get_user_name() -> Option<String> {
+    std::env::var("USERNAME")
+        .ok()
+        .as_deref()
+        .and_then(names::first_name)
+}
+
+/// Paste a history row into whichever app the user was in before the Hub.
+///
+/// `paste_last` types into the focused window, which is the Hub itself when its
+/// button is clicked. So: minimise the Hub, wait for Windows to hand focus to the
+/// previous window, then inject through the engine's normal path.
+#[tauri::command]
+async fn paste_again(app: AppHandle, text: String) -> Result<String, String> {
+    let engine = app
+        .state::<AppState>()
+        .engine
+        .lock()
+        .expect("engine")
+        .clone()
+        .ok_or_else(|| "The speech engine is not running, so nothing can be pasted.".to_string())?;
+    let hub = app
+        .get_webview_window("hub")
+        .ok_or("The Hub window is missing.")?;
+    let hub_hwnd = hub.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    hub.minimize().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let moved = paste_again::poll_until(
+            Duration::from_millis(600),
+            Duration::from_millis(20),
+            || paste_again::foreground_hwnd() != hub_hwnd,
+        );
+        if moved {
+            engine.paste_text(&text).map(|_| "pasted".to_string())
+        } else {
+            let _ = ov_input::set_clipboard_text(&text);
+            engine.notice(
+                NoticeLevel::Info,
+                "Copied. Click where you want it and press Ctrl+V.",
+            );
+            Ok("copied".to_string())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -889,6 +955,8 @@ fn main() {
             clear_history,
             get_log_path,
             paste_last,
+            get_user_name,
+            paste_again,
             open_data_dir,
             overlay_placement,
             overlay_move,

@@ -579,7 +579,12 @@ fn alloc_global(bytes: &[u8]) -> Option<HGLOBAL> {
 }
 
 /// Replace the clipboard with `text` as `CF_UNICODETEXT`.
-fn set_clipboard_text(text: &str) -> Result<()> {
+///
+/// Public so the "paste again" command can fall back to it when the Hub cannot
+/// confirm focus moved to another window: copying is always safe, whereas
+/// injecting keystrokes or a synthetic `Ctrl+V` into whatever still has focus --
+/// possibly the Hub itself -- is not.
+pub fn set_clipboard_text(text: &str) -> Result<()> {
     let mut utf16: Vec<u16> = text.encode_utf16().collect();
     utf16.push(0); // clipboard text must be NUL-terminated
     let bytes: Vec<u8> = utf16.iter().flat_map(|u| u.to_le_bytes()).collect();
