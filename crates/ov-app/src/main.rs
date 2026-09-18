@@ -262,8 +262,28 @@ fn get_user_name() -> Option<String> {
 /// `paste_last` types into the focused window, which is the Hub itself when its
 /// button is clicked. So: minimise the Hub, wait for Windows to hand focus to the
 /// previous window, then inject through the engine's normal path.
+///
+/// Guarded by [`AppState::pasting`] so a double click cannot start a second
+/// paste while the first is still minimising the Hub and polling for focus.
+/// The guard is cleared after [`paste_again_once`] resolves, on every path --
+/// success, a failed paste, or an early error -- because it is reset here
+/// rather than at each of that function's own return points.
 #[tauri::command]
 async fn paste_again(app: AppHandle, text: String) -> Result<String, String> {
+    if app.state::<AppState>().pasting.swap(true, Ordering::SeqCst) {
+        return Err("Already pasting.".to_string());
+    }
+    let result = paste_again_once(app.clone(), text).await;
+    app.state::<AppState>()
+        .pasting
+        .store(false, Ordering::SeqCst);
+    result
+}
+
+/// The body of [`paste_again`], factored out so the re-entry guard has exactly
+/// one place to reset regardless of which of this function's several return
+/// points was taken.
+async fn paste_again_once(app: AppHandle, text: String) -> Result<String, String> {
     let engine = app
         .state::<AppState>()
         .engine
@@ -280,17 +300,40 @@ async fn paste_again(app: AppHandle, text: String) -> Result<String, String> {
         let moved = paste_again::poll_until(
             Duration::from_millis(600),
             Duration::from_millis(20),
-            || paste_again::foreground_hwnd() != hub_hwnd,
+            || paste_again::focus_moved(paste_again::foreground_hwnd(), hub_hwnd),
         );
+
+        // Copy to the clipboard and say so, rather than injecting. Used both when
+        // focus never left the Hub, and as the fallback when it did but the
+        // injection itself still failed.
+        let copy_instead = |engine: &engine::Engine| match ov_input::set_clipboard_text(&text) {
+            Ok(()) => {
+                engine.notice(
+                    NoticeLevel::Info,
+                    "Copied. Click where you want it and press Ctrl+V.",
+                );
+                Ok("copied".to_string())
+            }
+            Err(e) => {
+                // Not the dictated text -- only the failure -- so a log line about
+                // a clipboard error never doubles as a transcript leak.
+                tracing::warn!(error = %e, "clipboard fallback failed; nothing was pasted or copied");
+                Err("Could not paste or copy the text.".to_string())
+            }
+        };
+
         if moved {
-            engine.paste_text(&text).map(|_| "pasted".to_string())
+            // The target window has just regained focus and needs a moment to
+            // restore keyboard focus to its own caret before typing into it --
+            // without this, the OS-level focus change can be observed here before
+            // the target has actually routed keyboard input to its text field.
+            std::thread::sleep(Duration::from_millis(40));
+            match engine.paste_text(&text) {
+                Ok(()) => Ok("pasted".to_string()),
+                Err(_) => copy_instead(&engine),
+            }
         } else {
-            let _ = ov_input::set_clipboard_text(&text);
-            engine.notice(
-                NoticeLevel::Info,
-                "Copied. Click where you want it and press Ctrl+V.",
-            );
-            Ok("copied".to_string())
+            copy_instead(&engine)
         }
     })
     .await
@@ -311,6 +354,10 @@ struct AppState {
     /// Whether a start attempt is in flight, so a retry cannot begin a second one
     /// beside it. Two live engines would mean two sidecars and two hotkey hooks.
     starting: AtomicBool,
+    /// Whether a `paste_again` is in flight, so a double click cannot start a
+    /// second one that minimises the Hub again mid-poll and races the first for
+    /// the clipboard and the target window's focus.
+    pasting: AtomicBool,
     /// Set while a model is being fetched from the Models screen.
     ///
     /// Recorded rather than emitted as an event: a 465 MB transfer can start
@@ -338,6 +385,7 @@ impl Default for AppState {
             error: Mutex::new(None),
             // The launch attempt begins immediately, so this starts true.
             starting: AtomicBool::new(true),
+            pasting: AtomicBool::new(false),
             download: Mutex::new(None),
             booted: Mutex::new(None),
             overlay: overlay::Overlay::new(),

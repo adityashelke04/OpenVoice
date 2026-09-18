@@ -39,16 +39,28 @@ pub fn foreground_hwnd() -> isize {
     unsafe { GetForegroundWindow() }.0 as isize
 }
 
-/// Off Windows there is no foreground window to ask about; `0` never equals a
-/// real handle, so callers comparing against it always see focus as "moved".
+/// Off Windows there is no foreground window to ask about; `0` is never a real
+/// handle, and [`focus_moved`] treats it as "not moved" rather than "moved".
 #[cfg(not(windows))]
 pub fn foreground_hwnd() -> isize {
     0
 }
 
+/// Whether focus has genuinely left the Hub.
+///
+/// `GetForegroundWindow` briefly returns `NULL` (`0`) *during* the minimise
+/// transition -- a real gap where nothing holds focus yet, not another window
+/// taking it. Treating that as "moved" (as a plain `fg != hub` would) made
+/// `paste_again` inject into whatever had no focus at all and still report
+/// success. `0` is excluded explicitly rather than relied on to merely differ
+/// from `hub`.
+pub fn focus_moved(fg: isize, hub: isize) -> bool {
+    fg != 0 && fg != hub
+}
+
 #[cfg(test)]
 mod tests {
-    use super::poll_until;
+    use super::{focus_moved, poll_until};
     use std::time::Duration;
 
     #[test]
@@ -74,5 +86,18 @@ mod tests {
             || false
         ));
         assert!(start.elapsed() >= Duration::from_millis(60));
+    }
+
+    #[test]
+    fn null_and_the_hub_itself_do_not_count_as_moved() {
+        // NULL during the minimise transition, and the Hub still holding focus,
+        // are the two cases a plain `fg != hub` would get wrong.
+        assert!(!focus_moved(0, 42));
+        assert!(!focus_moved(42, 42));
+    }
+
+    #[test]
+    fn a_real_other_window_counts_as_moved() {
+        assert!(focus_moved(7, 42));
     }
 }
