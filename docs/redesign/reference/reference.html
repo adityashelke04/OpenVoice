@@ -1,0 +1,765 @@
+<!doctype html>
+<!--
+OpenVoice Hub, reference design ("digital twin" target).
+
+Every screen and state of the Hub, in all three themes and both modes. The built
+app must render pixel-equivalent to this file when fed the fixture data described
+in docs/superpowers/specs/2026-09-18-hub-redesign-design.md, section 9.
+
+URL parameters:
+  screen = home | history | dictionary | style | models | settings | advanced
+  theme  = glacier | graphite | lagoon
+  mode   = dark | light
+  state  = normal | failed | first | loading | error      (home only)
+  solid  = 1                                               (Reduce transparency)
+
+Frozen clock for every value on this page: Friday 18 September 2026, 14:43 local.
+
+REFERENCE ONLY: fonts come from Google Fonts and icons from the Phosphor web
+bundle here. The app bundles the same families (@fontsource, @phosphor-icons/react).
+-->
+<html lang="en" data-theme="glacier" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenVoice Reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Borel&family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1"></script>
+<style>
+/* =====================================================================
+   1. TOKENS
+   ===================================================================== */
+:root {
+  --brand: #44d62c;
+  --brand-on-light: #2fb81a;
+  --display: "Bricolage Grotesque", "Geist", sans-serif;
+  --ui: "Geist", "Segoe UI Variable Text", sans-serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+  --hand: "Borel", cursive;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+  --blur: 26px;
+  --r-card: 20px; --r-hero: 22px; --r-row: 12px; --r-ctl: 10px; --r-inner: 7px;
+  --sidebar: 224px;
+}
+
+/* ---- Glacier ---- */
+[data-theme="glacier"][data-mode="dark"] {
+  --bg: #070b14;
+  --blob-1: #0e7a6a; --blob-2: #1d3fa8; --blob-3: #22c7e8; --blob-4: #2a8f2a;
+  --glass: rgb(255 255 255 / 6%); --glass-2: rgb(255 255 255 / 9%); --glass-strong: rgb(14 20 34 / 62%);
+  --solid: #0e1422; --solid-2: #152035;
+  --edge: rgb(255 255 255 / 11%); --edge-hi: rgb(255 255 255 / 20%);
+  --ink: #eef3fa; --body: #bcc6d6; --mute: #8390a6;
+  --accent: #5ad7f0; --accent-2: #8aa8ff; --accent-ink: #04121a;
+  --ok: #44d62c; --warn: #f5b454; --warn-soft: rgb(245 180 84 / 14%); --warn-ink: #1d1204;
+  --danger: #ff6b6b; --danger-soft: rgb(255 107 107 / 14%);
+  --chip-editor: #8aa8ff; --chip-terminal: #5ad7f0; --chip-prose: #7ee0b8; --chip-default: #c3cad6;
+  --well: rgb(0 0 0 / 18%);
+}
+[data-theme="glacier"][data-mode="light"] {
+  --bg: #e9eff6;
+  --blob-1: #9fe6d6; --blob-2: #a9bdfb; --blob-3: #9fe4f5; --blob-4: #b9eeb0;
+  --glass: rgb(255 255 255 / 55%); --glass-2: rgb(255 255 255 / 72%); --glass-strong: rgb(255 255 255 / 70%);
+  --solid: #ffffff; --solid-2: #f3f6fa;
+  --edge: rgb(255 255 255 / 80%); --edge-hi: rgb(255 255 255 / 95%);
+  --ink: #0d1726; --body: #33415a; --mute: #5d6b82;
+  --accent: #0a7fa3; --accent-2: #3552c9; --accent-ink: #ffffff;
+  --ok: #178a2b; --warn: #a3620a; --warn-soft: rgb(245 170 60 / 20%); --warn-ink: #ffffff;
+  --danger: #c42b2b; --danger-soft: rgb(220 60 60 / 12%);
+  --chip-editor: #3552c9; --chip-terminal: #0a7fa3; --chip-prose: #0f7a5a; --chip-default: #4d5a6e;
+  --well: rgb(20 40 70 / 6%);
+}
+/* ---- Graphite ---- */
+[data-theme="graphite"][data-mode="dark"] {
+  --bg: #0b0c0f;
+  --blob-1: #1a2330; --blob-2: #232a36; --blob-3: #1b3a2a; --blob-4: #2a3140;
+  --glass: rgb(255 255 255 / 5%); --glass-2: rgb(255 255 255 / 8%); --glass-strong: rgb(20 22 27 / 70%);
+  --solid: #15171b; --solid-2: #1c1f24;
+  --edge: rgb(255 255 255 / 9%); --edge-hi: rgb(255 255 255 / 16%);
+  --ink: #f1f2f4; --body: #c3c6cc; --mute: #8b9099;
+  --accent: #44d62c; --accent-2: #9fb3c8; --accent-ink: #061303;
+  --ok: #44d62c; --warn: #e8a94a; --warn-soft: rgb(232 169 74 / 13%); --warn-ink: #1d1204;
+  --danger: #ff6b6b; --danger-soft: rgb(255 107 107 / 13%);
+  --chip-editor: #a9b8ff; --chip-terminal: #7fd6e6; --chip-prose: #9fe0a8; --chip-default: #c3c6cc;
+  --well: rgb(0 0 0 / 22%);
+}
+[data-theme="graphite"][data-mode="light"] {
+  --bg: #eceef1;
+  --blob-1: #dfe4ea; --blob-2: #d6dce4; --blob-3: #d7ecd9; --blob-4: #e3e7ee;
+  --glass: rgb(255 255 255 / 60%); --glass-2: rgb(255 255 255 / 78%); --glass-strong: rgb(255 255 255 / 75%);
+  --solid: #ffffff; --solid-2: #f4f5f7;
+  --edge: rgb(255 255 255 / 85%); --edge-hi: #ffffff;
+  --ink: #111316; --body: #3a3f47; --mute: #646b75;
+  --accent: #178a2b; --accent-2: #4a5d73; --accent-ink: #ffffff;
+  --ok: #178a2b; --warn: #9a5c08; --warn-soft: rgb(232 160 60 / 20%); --warn-ink: #ffffff;
+  --danger: #c42b2b; --danger-soft: rgb(220 60 60 / 12%);
+  --chip-editor: #3f55c4; --chip-terminal: #0b7890; --chip-prose: #1e7a3a; --chip-default: #4a5058;
+  --well: rgb(20 30 40 / 6%);
+}
+/* ---- Lagoon ---- */
+[data-theme="lagoon"][data-mode="dark"] {
+  --bg: #04110f;
+  --blob-1: #0f8a5c; --blob-2: #0b5f73; --blob-3: #3fd49a; --blob-4: #1a3f86;
+  --glass: rgb(255 255 255 / 6%); --glass-2: rgb(255 255 255 / 9%); --glass-strong: rgb(6 26 24 / 62%);
+  --solid: #0a1d1a; --solid-2: #102723;
+  --edge: rgb(255 255 255 / 11%); --edge-hi: rgb(255 255 255 / 20%);
+  --ink: #ecf8f4; --body: #b6d0c8; --mute: #7e9d95;
+  --accent: #52e3b0; --accent-2: #4cc3e0; --accent-ink: #03140e;
+  --ok: #44d62c; --warn: #f2b85a; --warn-soft: rgb(242 184 90 / 14%); --warn-ink: #1d1204;
+  --danger: #ff6b6b; --danger-soft: rgb(255 107 107 / 14%);
+  --chip-editor: #7fb4ff; --chip-terminal: #4cc3e0; --chip-prose: #52e3b0; --chip-default: #b6d0c8;
+  --well: rgb(0 0 0 / 18%);
+}
+[data-theme="lagoon"][data-mode="light"] {
+  --bg: #e6f3ef;
+  --blob-1: #a6ecd0; --blob-2: #a4dcea; --blob-3: #c9f5b8; --blob-4: #b8c9f5;
+  --glass: rgb(255 255 255 / 55%); --glass-2: rgb(255 255 255 / 72%); --glass-strong: rgb(255 255 255 / 70%);
+  --solid: #ffffff; --solid-2: #f1f7f5;
+  --edge: rgb(255 255 255 / 80%); --edge-hi: #ffffff;
+  --ink: #0b1d18; --body: #2f4a42; --mute: #587268;
+  --accent: #0b7d5a; --accent-2: #0a6f8a; --accent-ink: #ffffff;
+  --ok: #178a2b; --warn: #9a5c08; --warn-soft: rgb(232 160 60 / 20%); --warn-ink: #ffffff;
+  --danger: #c42b2b; --danger-soft: rgb(220 60 60 / 12%);
+  --chip-editor: #2f57c4; --chip-terminal: #0a6f8a; --chip-prose: #0b7d5a; --chip-default: #45584f;
+  --well: rgb(20 50 40 / 6%);
+}
+
+/* =====================================================================
+   2. BASE, BACKDROP, GLASS
+   ===================================================================== */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--body); font: 400 14px/1.5 var(--ui); -webkit-font-smoothing: antialiased; overflow: hidden; }
+button, input, select { font: inherit; color: inherit; }
+
+.ambient { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.ambient i { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .55; }
+[data-mode="light"] .ambient i { opacity: .8; }
+.ambient i:nth-child(1) { width: 520px; height: 420px; left: -120px; top: -140px; background: var(--blob-1); }
+.ambient i:nth-child(2) { width: 620px; height: 520px; right: -160px; top: 80px; background: var(--blob-2); }
+.ambient i:nth-child(3) { width: 420px; height: 360px; left: 34%; top: -180px; background: var(--blob-3); opacity: .35; }
+.ambient i:nth-child(4) { width: 520px; height: 420px; left: 18%; bottom: -260px; background: var(--blob-4); opacity: .35; }
+.grain { position: fixed; inset: 0; z-index: 1; pointer-events: none; opacity: .05; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(var(--blur)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(160%);
+  border: 1px solid var(--edge);
+  box-shadow: inset 0 1px 0 var(--edge-hi), 0 20px 50px -30px rgb(0 0 0 / 55%);
+}
+[data-mode="light"] .glass { box-shadow: inset 0 1px 0 var(--edge-hi), 0 18px 40px -28px rgb(30 50 80 / 35%); }
+/* Reduce transparency: same layout, solid panels, no blur. */
+[data-solid] .glass { background: var(--solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
+[data-solid] .side { background: var(--solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
+[data-solid] .ambient, [data-solid] .grain { display: none; }
+
+/* =====================================================================
+   3. SHELL
+   ===================================================================== */
+.app { position: relative; z-index: 2; display: grid; grid-template-columns: var(--sidebar) 1fr; height: 100vh; }
+.side { display: flex; flex-direction: column; padding: 18px 12px 14px; background: var(--glass-strong); backdrop-filter: blur(40px) saturate(150%); -webkit-backdrop-filter: blur(40px) saturate(150%); border-right: 1px solid var(--edge); }
+.brand { display: flex; align-items: center; gap: 10px; padding: 2px 10px 22px; }
+.brand svg { width: 26px; height: 26px; flex: none; }
+.brand svg rect { fill: var(--brand); }
+[data-mode="light"] .brand svg rect { fill: var(--brand-on-light); }
+.wordmark { font: 700 18px/1 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav a { display: flex; align-items: center; gap: 11px; height: 36px; padding: 0 11px; border-radius: var(--r-ctl); color: var(--body); text-decoration: none; font-weight: 500; font-size: 13.5px; }
+.nav a i { font-size: 17px; color: var(--mute); }
+.nav a[aria-current="page"] { background: var(--glass-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge), inset 0 1px 0 var(--edge-hi); }
+.nav a[aria-current="page"] i { color: var(--accent); }
+.nav .kbd { margin-left: auto; font: 500 10.5px/1 var(--mono); color: var(--mute); opacity: .8; }
+.side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+.mic { border-radius: 14px; padding: 12px 12px 13px; }
+.mic .row1 { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink); font-weight: 500; }
+.mic .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.mic .dot.err { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.mic .row2 { display: flex; align-items: center; gap: 6px; margin-top: 9px; font-size: 12px; color: var(--mute); }
+.keycap { white-space: nowrap; font: 600 11.5px/1 var(--mono); color: var(--ink); background: var(--glass-2); border: 1px solid var(--edge); padding: 5px 7px 6px; border-radius: var(--r-inner); box-shadow: inset 0 -2px 0 rgb(0 0 0 / 18%); }
+.modes { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-ctl); }
+.modes span { flex: 1; height: 26px; border-radius: var(--r-inner); display: grid; place-items: center; font-size: 14px; color: var(--mute); }
+.modes span.on { background: var(--glass-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge); }
+
+.main { overflow: hidden; padding: 16px 26px 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.top { display: flex; align-items: center; gap: 12px; flex: none; }
+.hi { font: 650 22px/1.1 var(--display); letter-spacing: -.03em; color: var(--ink); display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.hi .name { font: 400 21px/1 var(--hand); letter-spacing: 0; color: var(--accent); }
+.search { margin-left: auto; width: 320px; height: 36px; display: flex; align-items: center; gap: 9px; padding: 0 7px 0 12px; border-radius: 11px; color: var(--mute); font-size: 13px; }
+.search .k { margin-left: auto; font: 500 10.5px/1 var(--mono); padding: 4px 6px; border-radius: 6px; border: 1px solid var(--edge); }
+.lock { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); white-space: nowrap; }
+.lock i { color: var(--ok); }
+
+/* =====================================================================
+   4. SHARED CONTROLS
+   ===================================================================== */
+.btn { height: 34px; padding: 0 13px; border-radius: var(--r-ctl); display: inline-flex; align-items: center; gap: 7px; font: 500 13px/1 var(--ui); color: var(--ink); background: var(--glass-2); border: 1px solid var(--edge); box-shadow: inset 0 1px 0 var(--edge-hi); white-space: nowrap; cursor: pointer; }
+.btn i { font-size: 15px; }
+.btn.sm { height: 30px; padding: 0 11px; font-size: 12.5px; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; box-shadow: 0 8px 24px -10px color-mix(in srgb, var(--accent) 70%, transparent); font-weight: 600; }
+.btn.warnp { background: var(--warn); color: var(--warn-ink); border-color: transparent; font-weight: 600; box-shadow: 0 8px 24px -10px color-mix(in srgb, var(--warn) 70%, transparent); }
+.btn .k { font: 500 10.5px/1 var(--mono); opacity: .7; margin-left: 2px; }
+.app-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: var(--r-inner); font-size: 12px; font-weight: 500; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); white-space: nowrap; }
+.app-chip i { font-size: 13px; }
+.c-editor { --c: var(--chip-editor); } .c-terminal { --c: var(--chip-terminal); } .c-prose { --c: var(--chip-prose); } .c-default { --c: var(--chip-default); }
+.warn-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: var(--r-inner); font-size: 11.5px; font-weight: 500; color: var(--warn); background: var(--warn-soft); white-space: nowrap; }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--r-ctl); background: var(--well); }
+.seg span { height: 26px; padding: 0 10px; border-radius: var(--r-inner); display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--mute); white-space: nowrap; }
+.seg span.on { background: var(--glass-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge); }
+.seg.lg span { height: 30px; padding: 0 13px; font-size: 13px; }
+.seg span i { font-size: 14px; }
+.field { height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: var(--r-ctl); background: var(--well); border: 1px solid var(--edge); color: var(--ink); font-size: 13.5px; min-width: 0; }
+.field.mono { font-family: var(--mono); font-size: 13px; }
+.field .ph-caret-down { margin-left: auto; color: var(--mute); }
+.field .ph { color: var(--mute); }
+.field.ph-empty { color: var(--mute); }
+.switch { width: 40px; height: 24px; border-radius: 12px; background: var(--well); border: 1px solid var(--edge); position: relative; flex: none; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--mute); transition: transform .2s var(--ease); }
+.switch.on { background: var(--accent); border-color: transparent; }
+.switch.on::after { transform: translateX(16px); background: var(--accent-ink); }
+.card { border-radius: var(--r-card); padding: 18px 20px; }
+.card-title { font: 650 15px/1.2 var(--display); letter-spacing: -.015em; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.card-title i { color: var(--accent-2); font-size: 16px; }
+.card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.card-head .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.lead { font-size: 14px; color: var(--body); max-width: 70ch; }
+.cap { font-size: 12px; color: var(--mute); }
+.srow { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; padding: 12px 0; }
+.srow + .srow { border-top: 1px solid var(--edge); }
+[data-mode="light"] .srow + .srow { border-top-color: rgb(20 40 70 / 8%); }
+.srow .lab { color: var(--ink); font-weight: 500; font-size: 13.5px; }
+.srow .hint { font-size: 12px; color: var(--mute); margin-top: 3px; max-width: 62ch; line-height: 1.45; }
+.scroll { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 14px; }
+mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); border-radius: 4px; padding: 0 3px; }
+
+/* =====================================================================
+   5. HOME
+   ===================================================================== */
+.last { border-radius: var(--r-hero); padding: 20px 22px 18px; position: relative; overflow: hidden; flex: none; }
+.last::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 55%); }
+.last-head { display: flex; align-items: center; gap: 10px; position: relative; }
+.last-head .tag { font: 600 12px/1 var(--ui); color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.last-head .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--mute); }
+.status-ok { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ok); font-weight: 500; }
+.last-text { position: relative; margin-top: 14px; font: 450 19px/1.55 var(--ui); color: var(--ink); letter-spacing: -.005em; max-width: 72ch; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.last-actions { position: relative; display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.last-actions .words { margin-left: auto; font-size: 12.5px; color: var(--mute); }
+.last.fail::before { background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--warn) 22%, transparent), transparent 60%); }
+.last.fail { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.last.fail .tag { color: var(--warn); }
+.fail-note { position: relative; margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); font-weight: 500; }
+.fail-note i { color: var(--warn); font-size: 16px; }
+.last.err::before { background: radial-gradient(120% 90% at 0% 0%, var(--danger-soft), transparent 60%); }
+.last.err { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.last.err .tag { color: var(--danger); }
+.err-title { position: relative; margin-top: 12px; font: 650 20px/1.25 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.err-body { position: relative; margin-top: 6px; font-size: 13.5px; color: var(--body); max-width: 68ch; }
+.err-raw { position: relative; margin-top: 8px; font: 400 11.5px/1.4 var(--mono); color: var(--mute); }
+.first-title { position: relative; margin-top: 12px; font: 650 24px/1.2 var(--display); letter-spacing: -.025em; color: var(--ink); }
+.first-body { position: relative; margin-top: 8px; font-size: 14.5px; color: var(--body); max-width: 60ch; }
+.bigkey { position: relative; display: inline-flex; align-items: center; gap: 10px; margin-top: 18px; }
+.bigkey .keycap { font-size: 15px; padding: 10px 14px 12px; border-radius: 10px; box-shadow: inset 0 -3px 0 rgb(0 0 0 / 22%); }
+
+.lower { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 250px; gap: 16px; }
+.recent { border-radius: var(--r-card); padding: 6px; display: flex; flex-direction: column; min-height: 0; }
+.recent-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px; }
+.recent-head h2 { font: 650 16px/1 var(--display); letter-spacing: -.02em; color: var(--ink); margin-right: 6px; }
+.recent-head .all { margin-left: auto; font-size: 12px; color: var(--mute); display: flex; align-items: center; gap: 4px; }
+.rows { overflow: hidden; }
+.row { display: grid; grid-template-columns: 62px 1fr auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: var(--r-row); }
+.row.hover { background: var(--glass-2); }
+.row time { font: 500 11.5px/1 var(--mono); color: var(--mute); white-space: nowrap; }
+.row .t { color: var(--ink); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.row .t.code { font-family: var(--mono); font-size: 13px; }
+.row .r { display: flex; align-items: center; gap: 8px; }
+.row .heard { font-size: 12px; color: var(--mute); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.row .heard s { text-decoration-color: var(--warn); text-decoration-thickness: 1.5px; font-family: var(--mono); }
+.row .copy { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--mute); }
+.row.hover .copy { background: var(--glass); color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge); }
+.day { font: 600 11px/1 var(--ui); color: var(--mute); padding: 10px 12px 4px; letter-spacing: .04em; text-transform: uppercase; }
+
+.stats { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.stat { border-radius: 18px; padding: 14px 16px; }
+.stat .l { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); font-weight: 500; }
+.stat .l i { font-size: 14px; color: var(--accent-2); }
+.stat .v { font: 700 30px/1 var(--display); letter-spacing: -.04em; color: var(--ink); margin-top: 9px; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 5px; }
+.stat .v small { font: 500 13px/1 var(--ui); letter-spacing: 0; color: var(--mute); }
+.stat .s { font-size: 11.5px; color: var(--mute); margin-top: 5px; }
+.speedbar { position: relative; height: 22px; margin-top: 10px; }
+.speedbar .axis { position: absolute; left: 0; right: 0; top: 10px; height: 2px; border-radius: 2px; background: var(--edge); }
+.speedbar .fill { position: absolute; left: 0; top: 9px; height: 4px; border-radius: 4px; width: 76%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
+.speedbar .mk { position: absolute; top: 4px; width: 2px; height: 14px; background: var(--mute); border-radius: 2px; }
+.speedbar .mk.you { background: var(--accent); width: 12px; height: 12px; top: 5px; border-radius: 50%; transform: translateX(-5px); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.week { display: flex; gap: 4px; margin-top: 10px; }
+.week i { flex: 1; height: 6px; border-radius: 3px; background: var(--edge); }
+.week i.on { background: var(--accent); }
+
+.sk { background: var(--glass); border: 1px solid var(--edge); border-radius: var(--r-card); position: relative; overflow: hidden; }
+.sk::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgb(255 255 255 / 6%), transparent); transform: translateX(-100%); }
+.skl { height: 12px; border-radius: 6px; background: var(--glass-2); }
+
+/* full history */
+.hist { flex: 1; min-height: 0; border-radius: var(--r-card); padding: 6px; display: flex; flex-direction: column; }
+.hist .recent-head .field { width: 280px; margin-left: auto; }
+
+/* =====================================================================
+   6. OTHER SCREENS
+   ===================================================================== */
+.page-title { font: 650 22px/1.1 var(--display); letter-spacing: -.03em; color: var(--ink); display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.page-title i { font-size: 20px; color: var(--accent); }
+
+/* dictionary */
+.tryrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.trybox { border-radius: 14px; padding: 12px 14px; background: var(--well); border: 1px solid var(--edge); min-height: 70px; }
+.trybox .lbl { font-size: 11.5px; font-weight: 600; color: var(--mute); display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.trybox .txt { font: 400 14px/1.5 var(--mono); color: var(--ink); }
+.trybox.out { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.terms { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.term { display: grid; grid-template-columns: 1fr 16px 1fr 22px; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border-radius: var(--r-row); }
+.term.hover { background: var(--glass-2); }
+.term .sp { font: 400 12.5px/1 var(--mono); color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.term .ar { color: var(--accent-2); font-size: 13px; }
+.term .wr { font: 600 13px/1 var(--mono); color: var(--ink); white-space: nowrap; }
+.term .x { color: var(--mute); font-size: 14px; opacity: 0; }
+.term.hover .x { opacity: 1; }
+.addrow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--edge); }
+[data-mode="light"] .addrow { border-top-color: rgb(20 40 70 / 8%); }
+
+/* writing style */
+.style-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 14px; align-items: start; }
+.style-side { display: flex; flex-direction: column; gap: 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.exe { font: 500 12px/1 var(--mono); padding: 6px 8px; border-radius: var(--r-inner); background: var(--well); border: 1px solid var(--edge); color: var(--body); }
+
+/* models */
+.models { display: flex; flex-direction: column; gap: 12px; }
+.model { display: grid; grid-template-columns: 44px 1fr auto auto; gap: 16px; align-items: center; border-radius: var(--r-card); padding: 16px 18px; }
+.model.active { box-shadow: inset 0 0 0 1.5px var(--accent), inset 0 1px 0 var(--edge-hi), 0 20px 50px -30px rgb(0 0 0 / 55%); }
+.model .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--well); border: 1px solid var(--edge); font-size: 20px; color: var(--accent-2); }
+.model.active .ic { color: var(--accent); }
+.model .nm { display: flex; align-items: center; gap: 8px; font: 650 17px/1.2 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.badge { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 7px; border-radius: 6px; font: 500 11px/1 var(--ui); color: var(--body); background: var(--well); border: 1px solid var(--edge); }
+.badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: transparent; }
+.badge.ok::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.model .dt { font-size: 12.5px; color: var(--body); margin-top: 5px; }
+.model .id { font: 400 11.5px/1 var(--mono); color: var(--mute); margin-top: 7px; }
+.model .nums { display: flex; gap: 20px; }
+.model .nums div { text-align: right; }
+.model .nums .k { font-size: 11px; color: var(--mute); font-weight: 500; }
+.model .nums .v { font: 500 13px/1.4 var(--mono); color: var(--ink); }
+.model .act { width: 118px; display: flex; justify-content: flex-end; }
+
+/* settings */
+.set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.slider { display: flex; align-items: center; gap: 10px; width: 210px; }
+.slider .tr { flex: 1; height: 6px; border-radius: 3px; background: var(--well); border: 1px solid var(--edge); position: relative; }
+.slider .tr b { position: absolute; left: 0; top: -1px; bottom: -1px; width: 32%; border-radius: 3px; background: var(--accent); }
+.slider .tr i { position: absolute; left: 32%; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); box-shadow: 0 2px 6px rgb(0 0 0 / 30%); }
+.slider .val { font: 500 12.5px/1 var(--mono); color: var(--ink); width: 44px; text-align: right; }
+.meter { display: flex; gap: 3px; align-items: flex-end; height: 18px; }
+.meter i { width: 4px; border-radius: 2px; background: var(--ok); }
+.meter i.off { background: var(--edge); }
+.themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 4px; }
+.tcard { border-radius: 14px; padding: 8px; border: 1px solid var(--edge); background: var(--well); }
+.tcard.on { box-shadow: inset 0 0 0 2px var(--accent); }
+.tcard .mini { height: 64px; border-radius: 9px; overflow: hidden; position: relative; background: var(--bg); }
+.tcard .mini i { position: absolute; border-radius: 50%; filter: blur(14px); }
+.tcard .mini i:nth-child(1) { width: 70px; height: 50px; left: -10px; top: -10px; background: var(--blob-1); opacity: .8; }
+.tcard .mini i:nth-child(2) { width: 90px; height: 60px; right: -20px; top: 10px; background: var(--blob-2); opacity: .8; }
+.tcard .mini i:nth-child(3) { width: 60px; height: 40px; left: 40%; bottom: -16px; background: var(--blob-3); opacity: .6; }
+.tcard .mini .gl { position: absolute; left: 22px; right: 8px; top: 9px; height: 22px; border-radius: 6px; background: var(--glass-2); border: 1px solid var(--edge); }
+.tcard .mini .sb { position: absolute; left: 0; top: 0; bottom: 0; width: 16px; background: var(--glass-strong); border-right: 1px solid var(--edge); }
+.tcard .mini .bt { position: absolute; left: 22px; top: 38px; width: 30px; height: 12px; border-radius: 4px; background: var(--accent); }
+.tcard .mini .bt2 { position: absolute; left: 56px; top: 38px; width: 22px; height: 12px; border-radius: 4px; background: var(--glass-2); border: 1px solid var(--edge); }
+.tcard .tn { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 2px; font-size: 12.5px; font-weight: 600; }
+.tcard .tn i { color: var(--accent); font-size: 15px; }
+/* the theme cards must render in the page's own ink colour, not the card theme's */
+.tcard .tn { color: var(--page-ink); }
+
+/* advanced */
+.pipe { position: relative; display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.pipe::before { content: ""; position: absolute; left: 11px; top: 14px; bottom: 14px; width: 2px; background: var(--edge); border-radius: 2px; }
+.step { position: relative; display: grid; grid-template-columns: 24px 96px 1fr auto; gap: 12px; align-items: center; padding: 7px 10px 7px 0; border-radius: var(--r-row); }
+.step .n { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--solid-2); border: 1px solid var(--edge); z-index: 1; }
+.step .n::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--mute); }
+.step.ch .n { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.step.ch .n::after { background: var(--accent); }
+.step .sn { font: 500 12px/1 var(--mono); color: var(--mute); }
+.step .so { font: 400 13px/1.4 var(--mono); color: var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step.ch .so { color: var(--ink); }
+.step .tg { font-size: 11px; font-weight: 600; color: var(--accent); }
+.kv { font: 500 12.5px/1 var(--mono); color: var(--ink); white-space: nowrap; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .anim .card, .anim .last, .anim .recent, .anim .stat, .anim .model { animation: rise .7s var(--ease) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.99); } }
+}
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="ambient" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+<div class="grain" aria-hidden="true"></div>
+
+<div class="app">
+  <!-- =============================================================== SIDEBAR -->
+  <aside class="side">
+    <div class="brand">
+      <!-- The original mark. Geometry from assets/icon-source.png (1024 grid). Never recolour. -->
+      <svg viewBox="80 112 865 800" aria-hidden="true">
+        <rect x="80"  y="424" width="85" height="177" rx="42.5"/>
+        <rect x="210" y="327" width="85" height="370" rx="42.5"/>
+        <rect x="340" y="160" width="85" height="704" rx="42.5"/>
+        <rect x="470" y="263" width="85" height="498" rx="42.5"/>
+        <rect x="600" y="112" width="85" height="800" rx="42.5"/>
+        <rect x="730" y="359" width="85" height="306" rx="42.5"/>
+        <rect x="860" y="439" width="85" height="146" rx="42.5"/>
+      </svg>
+      <span class="wordmark">OpenVoice</span>
+    </div>
+    <nav class="nav" aria-label="Sections">
+      <a href="#" data-nav="home"><i class="ph ph-house-simple"></i>Home<span class="kbd">1</span></a>
+      <a href="#" data-nav="dictionary"><i class="ph ph-book-open-text"></i>Dictionary<span class="kbd">2</span></a>
+      <a href="#" data-nav="style"><i class="ph ph-pen-nib"></i>Writing style<span class="kbd">3</span></a>
+      <a href="#" data-nav="models"><i class="ph ph-waveform"></i>Speech model<span class="kbd">4</span></a>
+      <a href="#" data-nav="settings"><i class="ph ph-sliders-horizontal"></i>Settings<span class="kbd">5</span></a>
+      <a href="#" data-nav="advanced"><i class="ph ph-flask"></i>Advanced<span class="kbd">6</span></a>
+    </nav>
+    <div class="side-foot">
+      <div class="mic glass">
+        <div class="row1"><span class="dot" id="engine-dot"></span><span id="engine-label">Ready, on this PC</span></div>
+        <div class="row2">Hold <span class="keycap">Right Ctrl</span> to talk</div>
+      </div>
+      <div class="modes glass" aria-label="Light or dark"><span data-m="light"><i class="ph ph-sun"></i></span><span data-m="system"><i class="ph ph-desktop"></i></span><span data-m="dark"><i class="ph ph-moon"></i></span></div>
+    </div>
+  </aside>
+
+  <main class="main anim">
+    <!-- =============================================================== TOP BAR -->
+    <div class="top">
+      <div class="hi" data-top="home">Good afternoon, <span class="name">Aditya</span></div>
+      <div class="page-title" data-top="history"><i class="ph ph-clock-counter-clockwise"></i>History</div>
+      <div class="page-title" data-top="dictionary"><i class="ph ph-book-open-text"></i>Dictionary</div>
+      <div class="page-title" data-top="style"><i class="ph ph-pen-nib"></i>Writing style</div>
+      <div class="page-title" data-top="models"><i class="ph ph-waveform"></i>Speech model</div>
+      <div class="page-title" data-top="settings"><i class="ph ph-sliders-horizontal"></i>Settings</div>
+      <div class="page-title" data-top="advanced"><i class="ph ph-flask"></i>Advanced</div>
+      <div class="search glass"><i class="ph ph-magnifying-glass"></i>Search what you've said<span class="k">Ctrl K</span></div>
+      <div class="lock"><i class="ph-fill ph-lock-simple"></i>Stays on this PC</div>
+    </div>
+
+    <!-- =============================================================== HOME -->
+    <section class="scroll" data-screen="home">
+      <!-- state: normal -->
+      <article class="last glass" data-state="normal" aria-label="Your last dictation">
+        <div class="last-head">
+          <span class="tag"><i class="ph-bold ph-clock-counter-clockwise"></i>Last dictation</span>
+          <span class="meta"><span class="app-chip c-prose"><i class="ph-bold ph-chat-circle"></i>Slack</span>2 min ago</span>
+          <span class="status-ok"><i class="ph-bold ph-check-circle"></i>Pasted</span>
+        </div>
+        <p class="last-text">I think we should ship the formatter changes on Friday and hold the rest until the dictionary sync is reviewed. Can you check whether the terminal profile still drops the trailing period, and send me the JSON export from this morning so I can compare the before and after?</p>
+        <div class="last-actions">
+          <button class="btn primary"><i class="ph-bold ph-copy"></i>Copy<span class="k">Ctrl C</span></button>
+          <button class="btn"><i class="ph ph-arrow-u-down-left"></i>Paste again</button>
+          <button class="btn"><i class="ph ph-pencil-simple-line"></i>Fix a word</button>
+          <span class="words">49 words, 604 ms</span>
+        </div>
+      </article>
+      <!-- state: failed (clipboard fallback) -->
+      <article class="last glass fail" data-state="failed" aria-label="Your last dictation">
+        <div class="last-head">
+          <span class="tag"><i class="ph-bold ph-warning-circle"></i>Last dictation</span>
+          <span class="meta"><span class="app-chip c-prose"><i class="ph-bold ph-envelope-simple"></i>Outlook</span>just now</span>
+        </div>
+        <p class="last-text">Can you check whether the terminal profile still drops the trailing period, and send me the JSON export from this morning so I can compare the before and after?</p>
+        <div class="fail-note"><i class="ph-fill ph-clipboard-text"></i>This didn&rsquo;t paste into Outlook, so it&rsquo;s on your clipboard.</div>
+        <div class="last-actions">
+          <button class="btn warnp"><i class="ph-bold ph-arrow-u-down-left"></i>Paste again</button>
+          <button class="btn"><i class="ph ph-copy"></i>Copy</button>
+          <button class="btn"><i class="ph ph-pencil-simple-line"></i>Fix a word</button>
+          <span class="words">29 words</span>
+        </div>
+      </article>
+      <!-- state: first run -->
+      <article class="last glass" data-state="first" aria-label="Get started">
+        <div class="last-head"><span class="tag"><i class="ph-bold ph-sparkle"></i>Ready when you are</span></div>
+        <h2 class="first-title">Click into any text box, hold the key and talk.</h2>
+        <p class="first-body">Let go and your words appear where your cursor is. They also land here, so you can copy or paste them again.</p>
+        <div class="bigkey"><span class="keycap">Right Ctrl</span><span class="cap">hold while you speak</span></div>
+      </article>
+      <!-- state: engine error -->
+      <article class="last glass err" data-state="error" aria-label="Speech engine problem">
+        <div class="last-head"><span class="tag"><i class="ph-bold ph-warning-octagon"></i>Speech engine</span></div>
+        <h2 class="err-title">Not enough memory to load the speech model</h2>
+        <p class="err-body">The speech model needs about 750 MB of memory. Close something large, a game, a browser with many tabs, another AI tool, and try again.</p>
+        <p class="err-raw">sherpa-onnx: failed to allocate 786432000 bytes</p>
+        <div class="last-actions"><button class="btn primary"><i class="ph-bold ph-arrow-clockwise"></i>Try again</button><button class="btn"><i class="ph ph-folder-open"></i>Open log folder</button></div>
+      </article>
+      <!-- state: loading -->
+      <div class="sk" data-state="loading" style="height:210px; flex:none; padding:22px">
+        <div class="skl" style="width:180px"></div><div class="skl" style="margin-top:22px; height:16px; width:92%"></div><div class="skl" style="margin-top:12px; height:16px; width:80%"></div><div class="skl" style="margin-top:12px; height:16px; width:60%"></div>
+      </div>
+
+      <div class="lower" data-lower>
+        <section class="recent glass" aria-label="Earlier dictations" data-hide-first>
+          <div class="recent-head">
+            <h2>Earlier</h2>
+            <div class="seg" role="tablist"><span class="on">All</span><span>Code</span><span>Terminal</span><span>Messages</span></div>
+            <span class="all">128 total <i class="ph ph-caret-right"></i></span>
+          </div>
+          <div class="rows">
+            <div class="day">Today</div>
+            <div class="row hover"><time>2:39 PM</time><span class="t">So we need to call useEffect here, then return null</span><span class="r"><span class="heard">heard <s>use effect</s></span><span class="app-chip c-editor"><i class="ph-bold ph-code"></i>VS Code</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+            <div class="row"><time>2:12 PM</time><span class="t code">kubectl get pods</span><span class="r"><span class="heard">heard <s>cube control</s></span><span class="app-chip c-terminal"><i class="ph-bold ph-terminal-window"></i>Terminal</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+            <div class="row"><time>11:08 AM</time><span class="t">Moving the standup to 10:30 tomorrow, same link as always.</span><span class="r"><span class="app-chip c-prose"><i class="ph-bold ph-browser"></i>Chrome</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+            <div class="day">Yesterday</div>
+            <div class="row"><time>6:05 PM</time><span class="t code">git status</span><span class="r"><span class="warn-chip"><i class="ph-bold ph-clipboard-text"></i>Not pasted, on clipboard</span><span class="app-chip c-terminal"><i class="ph-bold ph-terminal-window"></i>PowerShell</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+            <div class="row"><time>4:30 PM</time><span class="t">The resampler runs at 16 kHz mono, so the sidecar never has to guess.</span><span class="r"><span class="app-chip c-prose"><i class="ph-bold ph-note"></i>Notion</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          </div>
+        </section>
+        <section class="recent glass" data-show-first style="justify-content:center; align-items:center; text-align:center; padding:24px">
+          <i class="ph ph-clock-counter-clockwise" style="font-size:28px; color:var(--mute)"></i>
+          <div style="margin-top:10px; font:650 16px/1.2 var(--display); color:var(--ink)">Your dictations will collect here</div>
+          <div class="cap" style="margin-top:6px; max-width:36ch">Nothing leaves this PC. History is a plain file you can open, copy or delete.</div>
+        </section>
+
+        <aside class="stats" data-hide-first>
+          <div class="stat glass">
+            <div class="l"><i class="ph-bold ph-gauge"></i>Speaking speed</div>
+            <div class="v">152<small>wpm</small></div>
+            <div class="speedbar" aria-hidden="true"><div class="axis"></div><div class="fill"></div><span class="mk" style="left:20%"></span><span class="mk you" style="left:76%"></span></div>
+            <div class="s">3.8× faster than typing (40 wpm)</div>
+          </div>
+          <div class="two">
+            <div class="stat glass"><div class="l"><i class="ph-bold ph-hourglass-medium"></i>Saved</div><div class="v">2h<small>56m</small></div></div>
+            <div class="stat glass"><div class="l"><i class="ph-bold ph-flame"></i>Streak</div><div class="v">6<small>days</small></div><div class="week"><i></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div></div>
+          </div>
+          <div class="stat glass"><div class="l"><i class="ph-bold ph-text-aa"></i>Words dictated</div><div class="v">9,540</div><div class="s">About a dissertation chapter</div></div>
+        </aside>
+        <aside class="stats" data-show-first>
+          <div class="stat glass"><div class="l"><i class="ph-bold ph-lightbulb"></i>Try saying</div><div class="s" style="font-size:13px; color:var(--ink); margin-top:8px; font-family:var(--mono)">"call use effect here comma then return null"</div><div class="s" style="margin-top:8px">In VS Code that becomes useEffect, with the comma.</div></div>
+          <div class="stat glass"><div class="l"><i class="ph-bold ph-gauge"></i>Speaking speed</div><div class="v" style="color:var(--mute)">-</div><div class="s">Appears after a few dictations</div></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- =============================================================== HISTORY -->
+    <section class="scroll" data-screen="history">
+      <section class="hist glass">
+        <div class="recent-head">
+          <div class="seg" role="tablist"><span class="on">All</span><span>Code</span><span>Terminal</span><span>Messages</span></div>
+          <div class="field"><i class="ph ph-magnifying-glass"></i><span style="color:var(--mute)">Search 128 dictations</span></div>
+        </div>
+        <div class="rows">
+          <div class="day">Today</div>
+          <div class="row"><time>2:41 PM</time><span class="t">I think we should ship the formatter changes on Friday and hold the rest until the dictionary sync is reviewed. Can you check whether the terminal profile…</span><span class="r"><span class="app-chip c-prose"><i class="ph-bold ph-chat-circle"></i>Slack</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          <div class="row hover"><time>2:39 PM</time><span class="t">So we need to call useEffect here, then return null</span><span class="r"><span class="heard">heard <s>use effect</s></span><span class="app-chip c-editor"><i class="ph-bold ph-code"></i>VS Code</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          <div class="row"><time>2:12 PM</time><span class="t code">kubectl get pods</span><span class="r"><span class="heard">heard <s>cube control</s></span><span class="app-chip c-terminal"><i class="ph-bold ph-terminal-window"></i>Terminal</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          <div class="row"><time>11:08 AM</time><span class="t">Moving the standup to 10:30 tomorrow, same link as always.</span><span class="r"><span class="app-chip c-prose"><i class="ph-bold ph-browser"></i>Chrome</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          <div class="day">Yesterday</div>
+          <div class="row"><time>6:05 PM</time><span class="t code">git status</span><span class="r"><span class="warn-chip"><i class="ph-bold ph-clipboard-text"></i>Not pasted, on clipboard</span><span class="app-chip c-terminal"><i class="ph-bold ph-terminal-window"></i>PowerShell</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          <div class="row"><time>4:30 PM</time><span class="t">The resampler runs at 16 kHz mono, so the sidecar never has to guess.</span><span class="r"><span class="app-chip c-prose"><i class="ph-bold ph-note"></i>Notion</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          <div class="day">Wed 16 Sep</div>
+          <div class="row"><time>5:52 PM</time><span class="t">Thanks, that fixed it. I'll push the branch after lunch.</span><span class="r"><span class="app-chip c-prose"><i class="ph-bold ph-chat-circle"></i>Slack</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          <div class="row"><time>3:17 PM</time><span class="t code">npm run build</span><span class="r"><span class="app-chip c-terminal"><i class="ph-bold ph-terminal-window"></i>Terminal</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+          <div class="row"><time>9:44 AM</time><span class="t">Draft the release notes for 1.0.1 and keep them under a hundred words.</span><span class="r"><span class="app-chip c-default"><i class="ph-bold ph-app-window"></i>Notepad</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- =============================================================== DICTIONARY -->
+    <section class="scroll" data-screen="dictionary">
+      <p class="lead">Names, jargon and technical words often come out wrong. Tell OpenVoice what you meant once, and it will get it right from then on.</p>
+      <article class="card glass">
+        <div class="card-head"><div class="card-title"><i class="ph-bold ph-flask"></i>Try a phrase</div><span class="right cap">Uses the Messages style</span></div>
+        <div class="tryrow">
+          <div class="trybox"><div class="lbl"><i class="ph ph-microphone"></i>What OpenVoice heard</div><div class="txt">um so we need to call use effect here comma then return null</div></div>
+          <div class="trybox out"><div class="lbl"><i class="ph ph-text-t"></i>What lands at your cursor</div><div class="txt">So we need to call <mark>useEffect</mark> here<mark>,</mark> then return null.</div></div>
+        </div>
+      </article>
+      <article class="card glass" style="flex:1; min-height:0">
+        <div class="card-head"><div class="card-title"><i class="ph-bold ph-list-checks"></i>Your corrections</div><span class="cap">12</span>
+          <div class="right"><div class="field" style="width:220px; height:32px"><i class="ph ph-magnifying-glass"></i><span style="color:var(--mute); font-size:13px">Search</span></div></div></div>
+        <div class="terms">
+          <div class="term hover"><span class="sp">use effect · you seffect</span><i class="ph ph-arrow-right ar"></i><span class="wr">useEffect</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">cube control · cube cuttle</span><i class="ph ph-arrow-right ar"></i><span class="wr">kubectl</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">use state</span><i class="ph ph-arrow-right ar"></i><span class="wr">useState</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">engine x · n g inx</span><i class="ph ph-arrow-right ar"></i><span class="wr">nginx</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">type script</span><i class="ph ph-arrow-right ar"></i><span class="wr">TypeScript</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">postgres q l · post gres</span><i class="ph ph-arrow-right ar"></i><span class="wr">PostgreSQL</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">node j s · node js</span><i class="ph ph-arrow-right ar"></i><span class="wr">Node.js</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">kubernetes · cuber netties</span><i class="ph ph-arrow-right ar"></i><span class="wr">Kubernetes</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">jason · j son</span><i class="ph ph-arrow-right ar"></i><span class="wr">JSON</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">s s h</span><i class="ph ph-arrow-right ar"></i><span class="wr">ssh</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">a sync · ay sink</span><i class="ph ph-arrow-right ar"></i><span class="wr">async</span><i class="ph ph-x x"></i></div>
+          <div class="term"><span class="sp">n p m · enpiem</span><i class="ph ph-arrow-right ar"></i><span class="wr">npm</span><i class="ph ph-x x"></i></div>
+        </div>
+        <div class="addrow">
+          <div class="field ph-empty"><span>You said, e.g. use effect</span></div>
+          <div class="field ph-empty"><span>Write it as, e.g. useEffect</span></div>
+          <button class="btn primary"><i class="ph-bold ph-plus"></i>Add</button>
+        </div>
+      </article>
+      <p class="cap">OpenVoice also knows 30 built-in terms like useEffect and kubectl. Yours always win. Changes apply to your next dictation.</p>
+    </section>
+
+    <!-- =============================================================== WRITING STYLE -->
+    <section class="scroll" data-screen="style">
+      <p class="lead">The same words should look different depending on where they land. A chat message wants a capital letter and a full stop; a terminal command must have neither.</p>
+      <div class="seg lg" role="tablist" style="align-self:flex-start">
+        <span class="on"><i class="ph-bold ph-chat-circle" style="color:var(--chip-prose)"></i>Messages and documents</span>
+        <span><i class="ph-bold ph-code" style="color:var(--chip-editor)"></i>Code editors</span>
+        <span><i class="ph-bold ph-terminal-window" style="color:var(--chip-terminal)"></i>Terminals</span>
+        <span><i class="ph-bold ph-app-window" style="color:var(--chip-default)"></i>Everything else</span>
+      </div>
+      <div class="style-grid">
+        <article class="card glass">
+          <div class="card-head"><div class="card-title"><i class="ph-bold ph-sliders"></i>Rules</div><span class="right cap">Chat, email, notes, browsers</span></div>
+          <div class="srow"><div><div class="lab">Capitalise sentences</div><div class="hint">Start each sentence with a capital letter.</div></div><span class="switch on"></span></div>
+          <div class="srow"><div><div class="lab">End with a full stop</div><div class="hint">Add one if you did not say it.</div></div><span class="switch on"></span></div>
+          <div class="srow"><div><div class="lab">Remove filler words</div><div class="hint">Light removes um and uh. Aggressive also removes like, you know and basically.</div></div><div class="seg"><span>Off</span><span>Light</span><span class="on">Aggressive</span></div></div>
+          <div class="srow"><div><div class="lab">Spoken punctuation</div><div class="hint">Say "comma" or "new line" and get the symbol.</div></div><span class="switch on"></span></div>
+          <div class="srow"><div><div class="lab">Spoken naming styles</div><div class="hint">Say "camel case user name" and get userName.</div></div><span class="switch"></span></div>
+        </article>
+        <div class="style-side">
+          <article class="card glass">
+            <div class="card-head"><div class="card-title"><i class="ph-bold ph-eye"></i>What that does</div></div>
+            <div class="trybox" style="min-height:0"><div class="lbl">You say</div><div class="txt" style="color:var(--body)">um so basically the deploy is done and you know we should ship it</div></div>
+            <div class="trybox out" style="min-height:0; margin-top:8px"><div class="lbl">OpenVoice writes</div><div class="txt">The deploy is done and we should ship it.</div></div>
+          </article>
+          <article class="card glass">
+            <div class="card-head"><div class="card-title"><i class="ph-bold ph-app-window"></i>Used in these apps</div></div>
+            <div class="chips"><span class="exe">slack.exe</span><span class="exe">Discord.exe</span><span class="exe">Notion.exe</span><span class="exe">chrome.exe</span><span class="exe">msedge.exe</span><span class="exe">firefox.exe</span><span class="exe">olk.exe</span></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- =============================================================== SPEECH MODEL -->
+    <section class="scroll" data-screen="models">
+      <p class="lead"><strong style="color:var(--ink)">Standard</strong> is included and works offline from the moment you install. The other two are optional and only downloaded if you ask. Everything runs on this machine either way.</p>
+      <div class="models">
+        <article class="model glass active">
+          <span class="ic"><i class="ph-bold ph-waveform"></i></span>
+          <div><div class="nm">Standard <span class="badge ok">In use</span><span class="badge">Included</span><span class="badge">English only</span></div>
+            <div class="dt">English. Included with OpenVoice, so it is always available, even offline.</div><div class="id">parakeet-tdt-0.6b-v2</div></div>
+          <div class="nums"><div><div class="k">On disk</div><div class="v">631 MB</div></div><div><div class="k">Typical</div><div class="v">~0.5 s</div></div></div>
+          <div class="act"></div>
+        </article>
+        <article class="model glass">
+          <span class="ic"><i class="ph-bold ph-globe-hemisphere-west"></i></span>
+          <div><div class="nm">Multilingual <span class="badge">25 languages</span></div>
+            <div class="dt">25 languages, detected as you speak with nothing to configure. Same speed and size as Standard.</div><div class="id">parakeet-tdt-0.6b-v3</div></div>
+          <div class="nums"><div><div class="k">Download</div><div class="v">465 MB</div></div><div><div class="k">Typical</div><div class="v">~0.6 s</div></div></div>
+          <div class="act"><button class="btn sm"><i class="ph ph-download-simple"></i>Download</button></div>
+        </article>
+        <article class="model glass">
+          <span class="ic"><i class="ph-bold ph-feather"></i></span>
+          <div><div class="nm">Light <span class="badge">English only</span></div>
+            <div class="dt">English. A sixth of the disk and far less memory, and noticeably less accurate, for machines that cannot spare the room.</div><div class="id">whisper-tiny.en</div></div>
+          <div class="nums"><div><div class="k">Download</div><div class="v">112 MB</div></div><div><div class="k">Typical</div><div class="v">~0.5 s</div></div></div>
+          <div class="act"><button class="btn sm"><i class="ph ph-download-simple"></i>Download</button></div>
+        </article>
+      </div>
+      <p class="cap">Timings are measured on one particular laptop and are there for comparison, not as a promise.</p>
+    </section>
+
+    <!-- =============================================================== SETTINGS -->
+    <section class="scroll" data-screen="settings">
+      <div class="set-grid">
+        <article class="card glass">
+          <div class="card-head"><div class="card-title"><i class="ph-bold ph-microphone"></i>Dictation</div></div>
+          <div class="srow"><div><div class="lab">Shortcut</div><div class="hint">Hold it anywhere to talk.</div></div><div class="field" style="width:150px"><span class="keycap">Right Ctrl</span><i class="ph ph-caret-down"></i></div></div>
+          <div class="srow"><div><div class="lab">How it starts</div><div class="hint">Hold to talk cannot be left listening by accident.</div></div><div class="seg"><span class="on">Hold</span><span>Press to toggle</span></div></div>
+          <div class="srow"><div><div class="lab">Microphone</div><div class="hint">System default unless the wrong one is used.</div></div><div style="display:flex; align-items:center; gap:10px"><div class="meter" aria-hidden="true"><i style="height:6px"></i><i style="height:10px"></i><i style="height:15px"></i><i style="height:12px"></i><i class="off" style="height:8px"></i><i class="off" style="height:5px"></i></div><div class="field" style="width:150px"><span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis">System default</span><i class="ph ph-caret-down"></i></div></div></div>
+          <div class="srow"><div><div class="lab">Sound feedback</div><div class="hint">A short tone when you start and when it lands.</div></div><span class="switch on"></span></div>
+          <div class="srow"><div><div class="lab">Maximum recording</div><div class="hint">Stops on its own, so a stuck key cannot record forever.</div></div><div class="slider"><div class="tr"><b></b><i></i></div><span class="val">2 min</span></div></div>
+        </article>
+        <div style="display:flex; flex-direction:column; gap:14px">
+          <article class="card glass">
+            <div class="card-head"><div class="card-title"><i class="ph-bold ph-palette"></i>Appearance</div></div>
+            <div class="themes">
+              <div class="tcard" data-card-theme="glacier"><div class="mini"><i></i><i></i><i></i><span class="sb"></span><span class="gl"></span><span class="bt"></span><span class="bt2"></span></div><div class="tn">Glacier<i class="ph-fill ph-check-circle"></i></div></div>
+              <div class="tcard" data-card-theme="graphite"><div class="mini"><i></i><i></i><i></i><span class="sb"></span><span class="gl"></span><span class="bt"></span><span class="bt2"></span></div><div class="tn">Graphite<i class="ph-fill ph-check-circle"></i></div></div>
+              <div class="tcard" data-card-theme="lagoon"><div class="mini"><i></i><i></i><i></i><span class="sb"></span><span class="gl"></span><span class="bt"></span><span class="bt2"></span></div><div class="tn">Lagoon<i class="ph-fill ph-check-circle"></i></div></div>
+            </div>
+            <div class="srow" style="margin-top:6px"><div><div class="lab">Light or dark</div><div class="hint">System follows Windows.</div></div><div class="seg" id="mode-seg"><span data-m="light"><i class="ph ph-sun"></i>Light</span><span data-m="system"><i class="ph ph-desktop"></i>System</span><span data-m="dark"><i class="ph ph-moon"></i>Dark</span></div></div>
+            <div class="srow"><div><div class="lab">Reduce transparency</div><div class="hint">Solid panels instead of glass. On when Windows transparency is off.</div></div><span class="switch" id="solid-switch"></span></div>
+          </article>
+          <article class="card glass">
+            <div class="card-head"><div class="card-title"><i class="ph-bold ph-shield-check"></i>Privacy</div></div>
+            <div class="srow"><div><div class="lab">Keep recordings</div><div class="hint">Off: your voice is discarded once it is written out.</div></div><span class="switch"></span></div>
+            <div class="srow"><div><div class="lab">Hide secrets in history</div><div class="hint">API keys and tokens are stored as [redacted].</div></div><span class="switch on"></span></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- =============================================================== ADVANCED -->
+    <section class="scroll" data-screen="advanced">
+      <p class="lead">Nothing here is needed for everyday use. It exists so that when something looks wrong, you can see exactly why.</p>
+      <article class="card glass">
+        <div class="card-head"><div class="card-title"><i class="ph-bold ph-git-diff"></i>How a sentence is rewritten</div><span class="right cap">Code editors style</span></div>
+        <div class="field mono">um so we need to call use effect here comma then return null</div>
+        <div class="pipe">
+          <div class="step"><span class="n"></span><span class="sn">raw</span><span class="so">um so we need to call use effect here comma then return null</span><span></span></div>
+          <div class="step ch"><span class="n"></span><span class="sn">fillers</span><span class="so">so we need to call use effect here comma then return null</span><span class="tg">changed</span></div>
+          <div class="step ch"><span class="n"></span><span class="sn">dictionary</span><span class="so">so we need to call <mark>useEffect</mark> here comma then return null</span><span class="tg">changed</span></div>
+          <div class="step ch"><span class="n"></span><span class="sn">commands</span><span class="so">so we need to call useEffect here<mark>,</mark> then return null</span><span class="tg">changed</span></div>
+          <div class="step ch"><span class="n"></span><span class="sn">capitalize</span><span class="so"><mark>S</mark>o we need to call useEffect here, then return null</span><span class="tg">changed</span></div>
+        </div>
+      </article>
+      <div class="set-grid">
+        <article class="card glass">
+          <div class="card-head"><div class="card-title"><i class="ph-bold ph-folder"></i>Files</div></div>
+          <div class="srow"><div><div class="lab">Log</div><div class="hint" style="font-family:var(--mono)">%APPDATA%\OpenVoice\openvoice.log</div></div><button class="btn sm">Open folder</button></div>
+          <div class="srow"><div><div class="lab">Settings and history</div><div class="hint">Plain files you can copy or delete.</div></div><button class="btn sm">Open folder</button></div>
+        </article>
+        <article class="card glass">
+          <div class="card-head"><div class="card-title"><i class="ph-bold ph-cpu"></i>Engine</div></div>
+          <div class="srow"><div class="lab">Speech model</div><span class="kv">parakeet-tdt-0.6b-v2</span></div>
+          <div class="srow"><div class="lab">Paste instead of type above</div><span class="kv">120 characters</span></div>
+          <div class="srow"><div class="lab">Corrections</div><span class="kv">12</span></div>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const q = new URLSearchParams(location.search), d = document.documentElement;
+  const theme = q.get("theme") || "glacier", mode = q.get("mode") || "dark";
+  const screen = q.get("screen") || "home", state = q.get("state") || "normal";
+  d.dataset.theme = theme; d.dataset.mode = mode;
+  if (q.get("solid")) { d.dataset.solid = ""; document.getElementById("solid-switch").classList.add("on"); }
+  if (q.get("still")) document.querySelector(".main").classList.remove("anim");
+
+  document.querySelectorAll("[data-screen]").forEach(s => s.hidden = s.dataset.screen !== screen);
+  document.querySelectorAll("[data-top]").forEach(s => s.hidden = s.dataset.top !== screen);
+  const navFor = screen === "history" ? "home" : screen;
+  document.querySelector(`[data-nav="${navFor}"]`).setAttribute("aria-current", "page");
+
+  if (screen === "home") {
+    document.querySelectorAll("[data-state]").forEach(s => s.hidden = s.dataset.state !== state);
+    const first = state === "first";
+    document.querySelectorAll("[data-hide-first]").forEach(s => s.hidden = first);
+    document.querySelectorAll("[data-show-first]").forEach(s => s.hidden = !first);
+    if (state === "loading") document.querySelector("[data-lower]").innerHTML = '<div class="sk"></div><div style="display:flex; flex-direction:column; gap:12px"><div class="sk" style="height:120px"></div><div class="sk" style="height:110px"></div><div class="sk" style="flex:1"></div></div>';
+    if (state === "error") { const dot = document.getElementById("engine-dot"); dot.classList.add("err"); document.getElementById("engine-label").textContent = "Not running"; }
+  }
+
+  // Mode switch shows the stored choice. The reference renders the resolved mode.
+  const chosen = q.get("choice") || mode;
+  document.querySelectorAll(`[data-m="${chosen}"]`).forEach(e => e.classList.add("on"));
+  document.querySelectorAll(".tcard").forEach(c => {
+    c.dataset.theme = c.dataset.cardTheme; c.dataset.mode = mode;
+    c.style.setProperty("--page-ink", getComputedStyle(d).getPropertyValue("--ink"));
+    if (c.dataset.cardTheme === theme) c.classList.add("on");
+    else c.querySelector(".tn i").style.visibility = "hidden";
+  });
+</script>
+</body>
+</html>
