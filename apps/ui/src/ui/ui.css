@@ -1,230 +1,14 @@
 @import "./loading-dots.css";
 
-/* Primitive components. Rules and reasoning live in DESIGN.md §"Component rules".
- *
- * Two things hold this system together and are easy to erode:
- *   1. There are NO shadows. Depth is the surface ladder plus 1px hairlines.
- *   2. Green appears only on live state, the record action, and focus rings. */
-
-/* ---------------------------------------------------------------- Button -- */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--s-2);
-  height: var(--control-h);
-  padding: 0 var(--s-4);
-  border-radius: var(--r-lg);
-  border: 1px solid transparent;
-  font: 500 14px/1 var(--font-sans);
-  white-space: nowrap;
-  transition:
-    background var(--t-fast) var(--ease),
-    border-color var(--t-fast) var(--ease),
-    color var(--t-fast) var(--ease);
-}
-
-.btn[data-size="sm"] {
-  height: var(--control-h-sm);
-  padding: 0 var(--s-3);
-  font-size: 13px;
-}
-
-.btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* Primary is monochrome -- the Raycast/Warp move. Spending the accent on
-   ordinary buttons would waste the only signal that matters. */
-.btn[data-variant="primary"] {
-  background: var(--ink);
-  color: var(--canvas);
-}
-.btn[data-variant="primary"]:hover:not(:disabled) {
-  background: #ffffff;
-}
-
-.btn[data-variant="secondary"] {
-  background: var(--surface-3);
-  color: var(--ink);
-  border-color: var(--hairline-strong);
-}
-.btn[data-variant="secondary"]:hover:not(:disabled) {
-  background: var(--surface-4);
-}
-
-.btn[data-variant="ghost"] {
-  background: transparent;
-  color: var(--body);
-}
-.btn[data-variant="ghost"]:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--ink);
-}
-
-.btn[data-variant="danger"] {
-  background: transparent;
-  color: var(--danger);
-  border-color: var(--hairline-strong);
-}
-.btn[data-variant="danger"]:hover:not(:disabled) {
-  background: var(--danger-soft);
-  border-color: var(--danger);
-}
-
-/* The one button allowed to be green: it starts the microphone. */
-.btn[data-variant="record"] {
-  background: var(--live-soft);
-  color: var(--live);
-  border-color: var(--live-dim);
-}
-.btn[data-variant="record"]:hover:not(:disabled) {
-  border-color: var(--live);
-  background: rgb(68 214 44 / 18%);
-}
-
-/* ----------------------------------------------------------------- Input -- */
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-
-.input,
-.select {
-  height: var(--control-h);
-  padding: 0 var(--s-3);
-  background: var(--surface-3);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-md);
-  color: var(--ink);
-  font: 400 14px/1 var(--font-sans);
-  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
-}
-
-.input::placeholder {
-  color: var(--faint);
-}
-
-.input:focus,
-.select:focus {
-  outline: none;
-  border-color: var(--live);
-  box-shadow: 0 0 0 3px var(--live-ring);
-}
-
-/* A dropdown has to look like one.
- *
- * `appearance: none` removed the native arrow and nothing replaced it, so every
- * picker in Settings read as an uneditable text field — the padding-right below
- * was already reserving room for a chevron that was never drawn. The arrow is an
- * inline data URI rather than a file: the app ships no image assets, and the
- * Artifact-style CSP the webview runs under would block an external one.
- *
- * `--mute` is baked into the SVG because `currentColor` does not resolve inside
- * a background image. It is the same grey the rest of the secondary chrome uses. */
-.select {
-  appearance: none;
-  padding-right: var(--s-7);
-  cursor: pointer;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238f8f8f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right var(--s-3) center;
-}
-
-.select:hover {
-  border-color: var(--hairline-strong);
-}
-
-/* ---------------------------------------------------------------- Toggle -- */
-
-.toggle {
-  position: relative;
-  width: 36px;
-  height: 20px;
-  flex: none;
-  background: var(--surface-4);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-full);
-  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
-}
-
-.toggle::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: var(--r-full);
-  background: var(--mute);
-  transition: transform var(--t-base) var(--ease), background var(--t-fast) var(--ease);
-}
-
-.toggle[data-on="true"] {
-  background: var(--live-soft);
-  border-color: var(--live-dim);
-}
-.toggle[data-on="true"]::after {
-  transform: translateX(16px);
-  background: var(--live);
-}
-
-/* ----------------------------------------------------------------- Badge -- */
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  height: 20px;
-  padding: 0 var(--s-3);
-  border-radius: var(--r-full);
-  border: 1px solid var(--hairline-strong);
-  background: var(--surface-2);
-  color: var(--mute);
-  font: 500 11px/1 var(--font-sans);
-  letter-spacing: 0.3px;
-  white-space: nowrap;
-}
-
-/* Tone lives in the dot, never in the fill.
- *
- * Tinted pill backgrounds with matching borders — green-on-green, amber-on-amber —
- * are the single most recognisable marker of a generated interface, and they fight
- * the whole premise of this system: colour is supposed to mean "the microphone is
- * open", and it cannot mean that if three other things are also coloured.
- *
- * The surface and the label stay neutral. A 6px dot carries the state. */
-.badge[data-tone] {
-  background: var(--surface-2);
-  border-color: var(--hairline-strong);
-  color: var(--body);
-}
-.badge[data-tone="live"] .dot {
-  background: var(--live);
-}
-.badge[data-tone="warn"] .dot {
-  background: var(--warn);
-}
-.badge[data-tone="danger"] .dot {
-  background: var(--danger);
-}
-
-/* A live dot, for the badge and the sidebar. Pulses only while recording. */
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--r-full);
-  background: currentColor;
-  flex: none;
-}
-
-.dot[data-pulse="true"] {
-  animation: pulse 1.6s var(--ease) infinite;
-}
+/* Scoped out of the Hub (plan Task 6). The Hub has its own primitives in
+ * src/hub/ui with the same class names (.btn, .badge, .card, .notice, ...), and
+ * the Hub's legacy screens still import this file, so unscoped these rules would
+ * land on the new controls. Everything below the keyframes is nested in
+ * :where(html:not([data-window="hub"])), which matches every other window and
+ * adds zero specificity. That matters: the overlay's own stylesheets override
+ * these rules at equal specificity (overlay.css re-declares .flowbar's
+ * transition, for one), and a plain html:not(...) wrapper would silently win
+ * those ties. @keyframes cannot nest inside a style rule, so they stay on top. */
 
 @keyframes pulse {
   0%,
@@ -234,500 +18,6 @@
   50% {
     opacity: 0.35;
   }
-}
-
-/* ------------------------------------------------------------------ Card -- */
-
-.card {
-  background: var(--surface-1);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xl);
-  padding: var(--s-5);
-}
-
-.card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-4);
-  margin-bottom: var(--s-4);
-}
-
-/* -------------------------------------------------------------- Stat tile -- */
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  padding: var(--s-4) var(--s-5);
-  background: var(--surface-1);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xl);
-}
-
-.stat-value {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-2);
-}
-
-.stat-unit {
-  font: 400 13px/1 var(--font-mono);
-  color: var(--mute);
-}
-
-/* ------------------------------------------------------------------- Row -- */
-
-.row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--s-5);
-  align-items: start;
-  padding: var(--s-4) var(--s-5);
-  border-bottom: 1px solid var(--hairline);
-  transition: background var(--t-fast) var(--ease);
-}
-
-.row:last-child {
-  border-bottom: none;
-}
-
-.row:hover,
-.row:focus-within {
-  background: var(--surface-1);
-}
-
-.row-actions {
-  display: flex;
-  gap: var(--s-2);
-  opacity: 0;
-  transition: opacity var(--t-fast) var(--ease);
-}
-
-/* Revealed on hover, but always reachable by keyboard -- hover-only actions
-   that vanish for keyboard users are an accessibility failure, not a style. */
-.row:hover .row-actions,
-.row:focus-within .row-actions {
-  opacity: 1;
-}
-
-/* A row that can expand. The grid above assumes two columns on one line, so a
-   row with a panel underneath becomes a single column holding both. */
-.row-stack {
-  grid-template-columns: 1fr;
-}
-
-.row-main {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--s-5);
-  align-items: start;
-}
-
-/* --------------------------------------------------------- Fix a word ----- */
-
-.fix {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-  margin-top: var(--s-4);
-  padding: var(--s-4);
-  background: var(--surface-2);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
-}
-
-.fix-words {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-}
-
-/* Each heard word is a button because the spoken form is nearly always a couple
-   of adjacent words lifted straight out of this line. Monospace so a
-   mistranscription is read as data rather than as prose. */
-.fix-word {
-  padding: 2px var(--s-3);
-  background: var(--surface-3);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-sm);
-  color: var(--body);
-  font: 400 13px/1.5 var(--font-mono);
-  cursor: pointer;
-  transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
-}
-
-.fix-word:hover {
-  border-color: var(--live);
-  color: var(--ink);
-}
-
-.fix-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--s-3);
-}
-
-.fix-form > label {
-  flex: 1 1 180px;
-}
-
-/* ------------------------------------------------------------------ Tabs -- */
-
-.tabs {
-  display: inline-flex;
-  gap: var(--s-1);
-  padding: var(--s-1);
-  background: var(--surface-1);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
-}
-
-.tab {
-  height: 26px;
-  padding: 0 var(--s-4);
-  border-radius: var(--r-md);
-  font: 500 13px/1 var(--font-sans);
-  color: var(--mute);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
-}
-
-.tab:hover {
-  color: var(--body);
-}
-
-.tab[aria-selected="true"] {
-  background: var(--surface-3);
-  color: var(--ink);
-}
-
-/* --------------------------------------------------------------- Sidebar -- */
-
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  width: 100%;
-  height: 34px;
-  padding: 0 var(--s-4);
-  border-left: 2px solid transparent;
-  color: var(--mute);
-  font: 500 13.5px/1 var(--font-sans);
-  text-align: left;
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
-}
-
-.nav-item:hover {
-  background: var(--surface-1);
-  color: var(--body);
-}
-
-.nav-item[aria-current="page"] {
-  background: var(--surface-2);
-  color: var(--ink);
-  border-left-color: var(--live);
-}
-
-/* ------------------------------------------------------------------- Kbd -- */
-
-.kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 var(--s-2);
-  background: var(--surface-3);
-  border: 1px solid var(--hairline-strong);
-  border-bottom-width: 2px;
-  border-radius: var(--r-sm);
-  font: 500 11px/1 var(--font-mono);
-  color: var(--body);
-}
-
-/* ---------------------------------------------------------------- Notice -- */
-
-/* Same rule as the badge: one neutral surface, tone carried by a small marker.
- *
- * A tinted alert box is not more legible than a neutral one with a coloured dot —
- * it is just louder, and it spends the accent budget on chrome. Every notice here
- * reads on the same surface, so the eye compares text rather than backgrounds. */
-.notice {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  padding: var(--s-4) var(--s-5);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
-  background: var(--surface-1);
-  font: 400 13.5px/1.5 var(--font-sans);
-  color: var(--body);
-}
-
-.notice .dot {
-  width: 7px;
-  height: 7px;
-  background: var(--mute);
-}
-.notice[data-tone="live"] .dot {
-  background: var(--live);
-}
-.notice[data-tone="warn"] .dot {
-  background: var(--warn);
-}
-.notice[data-tone="danger"] .dot {
-  background: var(--danger);
-}
-
-/* -------------------------------------------------------------- Waveform --
- *
- * A scrolling seismograph, not an equaliser.
- *
- * The difference is everything. An equaliser maps frequency bands to bars, so the
- * bars jitter in place and the shape means nothing to a person. This holds a rolling
- * buffer of the last ~1.5 s of loudness: the newest sample enters at the right and
- * every older one shifts left, so a spoken syllable becomes a *shape that travels*.
- * You can see the sentence you just said moving across the bar, which is what makes
- * it feel connected to your voice rather than merely reactive.
- *
- * Bars grow from the centre line in both directions (flex `align-items: center`),
- * giving the mirrored profile of a real waveform. */
-
-.wave {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  height: 100%;
-  width: 100%;
-  overflow: hidden;
-}
-
-/* Bars are a FIXED 2px wide, never flexed.
- *
- * An earlier version used `flex: 1`, so in a wide container each bar stretched to
- * ~28px and a full border-radius turned it into an oval. A waveform is made of
- * hairlines; the moment a bar is wider than it is tall at rest, it stops reading as
- * one.
- *
- * Height is driven by `transform: scaleY()` rather than the height property:
- * transforms are composited on the GPU, so this animates at 60 fps without
- * touching layout. `transform-origin: center` gives the mirrored profile of a real
- * waveform for free. There is deliberately NO CSS transition — JavaScript
- * interpolates every frame, because a transition chasing a 30 Hz signal always
- * lags and reads as mush. */
-.wave-bar {
-  flex: none;
-  width: 2px;
-  height: 100%;
-  border-radius: var(--r-full);
-  background: var(--live);
-  /* Driven by the animation loop as a magnitude rather than a transform, so the
-     stylesheet picks the axis -- the wave runs vertically when the bar is docked
-     to a side edge. See `.flowbar[data-column]` and `Waveform`. */
-  transform: scaleY(var(--v, 0.05));
-  transform-origin: center;
-  will-change: transform;
-  backface-visibility: hidden;
-}
-
-.wave[data-idle="true"] .wave-bar {
-  background: var(--hairline-strong);
-  transition: background var(--t-base) var(--ease);
-}
-
-/* --------------------------------------------------------------- Flow Bar --
- *
- * The only interface visible while dictating, so it is sized to be read in
- * peripheral vision and ignored the rest of the time. Compact by default; it grows
- * only while listening, and the growth is itself the signal that it heard you.
- *
- * Four forms, one component:
- *
- *   full      the pill, horizontal — everything is legible
- *   compact   superwhisper's mini window — the dot, and the wave while live
- *   column    docked to a side edge, laid out vertically
- *   speaking  a column that has words to deliver unfurls back to horizontal,
- *             because a sentence you have to tilt your head to read is not a
- *             sentence you will read
- *
- * The box for every one of them is decided in `geometry()` in Overlay.tsx and
- * applied to `.overlay-hit`. Nothing here sets a width or a height that the
- * window does not already know about — the last time this file owned a height,
- * it disagreed with the window by 2px and the difference was bare, translucent
- * window. */
-
-.flowbar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--s-3);
-  /* Whatever the window is. See the note above: a constant here is a second
-     opinion about the size of something that can only have one. */
-  height: 100%;
-  width: 100%;
-  padding: 0 var(--s-4);
-  /* Nearly opaque, and no backdrop-filter.
-   *
-   * `backdrop-filter` on a transparent window samples the *window's* backdrop,
-   * not the desktop behind it — so it blurs nothing, while still forcing a
-   * compositing layer that defeats the window transparency. It was contributing
-   * to the visible rectangle. A solid fill is honest and cheaper. */
-  background: rgb(14 14 16);
-  /* Slightly brighter than the app's hairline. This border is the pill's only
-     separation: it fills its window edge to edge, so there is no room for a
-     shadow, and it has to read against a white document as well as a dark one. */
-  border: 1px solid #34343c;
-  border-radius: var(--r-full);
-  /* Specular inner highlight to guarantee perimeter readability across white documents and dark editors without spilling into window bounds. */
-  box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 8%);
-  transition:
-    border-color var(--t-base) var(--ease),
-    background-color var(--t-base) var(--ease),
-    box-shadow var(--t-base) var(--ease);
-  overflow: hidden;
-  box-sizing: border-box;
-}
-
-/* Compact.
- *
- * The honest answer to "this is in my way" is a smaller bar, not a hidden one:
- * a bar you have dismissed cannot tell you the microphone is open, which is the
- * one thing it exists to do. Everything goes except the dot and, while live, the
- * wave. Hovering brings the full pill back — see `compact` in Overlay.tsx. */
-.flowbar[data-mini="true"] {
-  gap: var(--s-2);
-  padding: 0 7px;
-  justify-content: center;
-}
-
-/* Docked to a side edge: the same pill turned through ninety degrees.
- *
- * Wispr Flow reorients its bar this way at the left and right edges, and the
- * reason is geometric rather than decorative — a horizontal pill on a vertical
- * edge either hangs off the screen or takes a bite out of whatever is maximised
- * behind it. */
-.flowbar[data-column="true"] {
-  flex-direction: column;
-  gap: var(--s-2);
-  padding: var(--s-3) 0;
-  justify-content: center;
-}
-
-/* Full chroma, not `--live-dim`.
- *
- * This border was `#1d5a13` — the darkest green in the palette — at 1px on a
- * near-black pill, and it was reviewed as "will not register in peripheral
- * vision", which is the entire job this surface has. The extra half-pixel is
- * taken out of the content box rather than added outside, so the pill's own
- * footprint is unchanged and nothing reflows around it. */
-.flowbar[data-live="true"] {
-  border-color: var(--live);
-  border-width: 1.5px;
-  /* The one shadow DESIGN.md actually grants this window, and it took until now
-   * to render because the window had no spare pixels to paint it into — the
-   * overlay reserves a margin while listening precisely so this can exist. See
-   * GLOW_MARGIN in Overlay.tsx; the radii below are sized to settle inside it
-   * rather than being clipped flat at the window edge, which would read as a
-   * hard rectangle and be worse than no glow at all.
-   *
-   * It breathes with the voice. `--level` is the peak-held meter, written every
-   * frame by the waveform's own loop onto an ancestor, so this tracks speech
-   * without a single React render. A glow that answers "is it hearing me?" from
-   * the corner of an eye is doing the job this window exists for.
-   *
-   * No spread on either layer. Spread pushes solid colour out before the blur
-   * starts, which turned this into a lime blob sitting behind the pill — very
-   * visible against a white document, and much closer to the "large flat green
-   * fill" the prohibitions rule out than to a glow. Blur alone falls off from
-   * the edge and stays a halo at every level. */
-  box-shadow:
-    inset 0 1px 0 0 rgb(255 255 255 / 8%),
-    0 0 calc(10px + 8px * var(--level, 0)) 0 var(--live-soft),
-    0 0 calc(22px + 10px * var(--level, 0)) 0 rgb(68 214 44 / 5%);
-}
-
-/* The endings that are not a silent success, and the two states that are about
-   the engine rather than about a dictation. They are deliberately different
-   colours: a clipboard fallback is the fallback working as designed, and
-   painting it the same red as a failure would teach the user to ignore red.
-
-   Border and dot only — no tinted fill. A `--danger-soft` wash over the pill's
-   near-black looked plausible on the app canvas and fell apart over a white
-   document, where it renders as a muddy grey rectangle that reads as a broken
-   component rather than a failure. It is also exactly the "tinted pill" the
-   status rule prohibits: the colour belongs in the dot. The pill widening to fit
-   a sentence is the thing that catches the eye here; the colour only has to name
-   what kind of event it was. */
-.flowbar[data-mode="failed"],
-.flowbar[data-mode="enginefail"] {
-  border-color: var(--danger);
-}
-
-.flowbar[data-mode="notice"],
-.flowbar[data-mode="loading"] {
-  border-color: var(--warn);
-}
-
-.flowbar-wave {
-  flex: 1;
-  height: 18px;
-  min-width: 0;
-}
-
-/* Turned through ninety degrees with the rest of the pill. The wave itself is
-   axis-agnostic — the animation loop writes a magnitude, not a transform — so
-   this is a layout change and not a rotation, and it needs no advance knowledge
-   of how long the column is. */
-.flowbar[data-column="true"] .flowbar-wave {
-  flex: 1;
-  width: 18px;
-  height: auto;
-  min-width: 0;
-  min-height: 0;
-}
-
-.flowbar[data-column="true"] .wave {
-  flex-direction: column;
-}
-
-.flowbar[data-column="true"] .wave-bar {
-  width: 100%;
-  height: 2px;
-  transform: scaleX(var(--v, 0.05));
-}
-
-/* Everything right of the dot. Keyed by mode in the component, so this is also
-   what carries the entrance animation. */
-.flowbar-body {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--s-3);
-  min-width: 0;
-  animation: flowbar-enter var(--t-base) var(--ease) both;
-}
-
-.flowbar[data-live="true"] .flowbar-body,
-.flowbar[data-mode="failed"] .flowbar-body,
-.flowbar[data-mode="enginefail"] .flowbar-body,
-.flowbar[data-mode="notice"] .flowbar-body,
-.flowbar[data-mode="loading"] .flowbar-body {
-  flex: 1;
-}
-
-.flowbar[data-column="true"] .flowbar-body {
-  flex-direction: column;
-  min-height: 0;
-  width: 100%;
-}
-
-/* Compact and column both shed their labels, so an empty body must not claim
-   the space the dot is centred in. */
-.flowbar[data-mini="true"] .flowbar-body:empty,
-.flowbar[data-column="true"] .flowbar-body:empty {
-  display: none;
 }
 
 /* A state change should read as the bar becoming something else, not as a label
@@ -741,214 +31,6 @@
     opacity: 1;
     transform: none;
   }
-}
-
-.flowbar-idle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--s-3);
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.flowbar-action {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-  margin-left: var(--s-1);
-}
-
-.flowbar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
-  height: 20px;
-  padding: 0 var(--s-2);
-  border-radius: var(--r-sm);
-  background: var(--surface-3);
-  border: 1px solid var(--hairline-strong);
-  color: var(--ink);
-  font: 500 11px/1 var(--font-sans);
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background var(--t-fast) var(--ease),
-    border-color var(--t-fast) var(--ease),
-    color var(--t-fast) var(--ease);
-}
-
-.flowbar-btn:hover {
-  background: var(--surface-4);
-  border-color: var(--live);
-  color: var(--live);
-}
-
-.flowbar-btn:focus-visible {
-  outline: 2px solid var(--live);
-  outline-offset: 1px;
-}
-
-.flowbar-time {
-  font: 500 12px/1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-  flex: none;
-}
-
-/* Discard, while listening.
- *
- * Quiet by default — it sits next to a running timer and a live waveform, and
- * it must not compete with either for the two seconds this state is on screen.
- * It brightens on hover, which is the only moment anyone is looking for it.
- * Not `--danger`: throwing away a sentence you did not mean to say is a normal
- * outcome, not an error, and colouring it red would put a warning next to the
- * microphone every single time it opens. */
-.flowbar-cancel,
-.flowbar-go {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  flex: none;
-  border-radius: var(--r-full);
-  color: var(--faint);
-  cursor: pointer;
-  transition:
-    color var(--t-fast) var(--ease),
-    background var(--t-fast) var(--ease);
-}
-
-.flowbar-cancel:hover,
-.flowbar-go:hover {
-  color: var(--ink);
-  background: var(--surface-4);
-}
-
-.flowbar-cancel:focus-visible,
-.flowbar-go:focus-visible {
-  outline: 2px solid var(--live);
-  outline-offset: 1px;
-}
-
-/* The one control on this window that opens a microphone, so the one thing on
-   it that may be green — and only when the pointer is on it, because a green
-   idle bar would say the microphone is already open. Wispr Flow's bar starts a
-   dictation when you click it; this is the part of the pill that says so. */
-.flowbar-go:hover {
-  color: var(--live);
-  background: var(--live-soft);
-}
-
-/* One line, truncated. The bar cannot grow to fit an arbitrary message from the
-   engine, and a wrapped second line would break the pill's height — which the
-   window is sized to exactly. The full text is in the `title`, and in the Hub. */
-.flowbar-msg {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font: 400 12px/1.3 var(--font-sans);
-  color: var(--body);
-}
-
-.flowbar[data-mode="failed"] .flowbar-msg,
-.flowbar[data-mode="enginefail"] .flowbar-msg {
-  color: var(--ink);
-}
-
-/* Still no spinner — but not motionless either. Between key-release and text
-   landing the bar previously showed a static grey word for one to three
-   seconds, which is the one stretch where the user is actually waiting on it.
-   A slow breathe says "working" without asking to be watched.
-
-   The engine's startup message does NOT breathe, though it is the same kind of
-   wait. Two reasons, and the first is the file's own argument against the
-   pulsing dot: the dot already breathes in that state, and two things saying
-   "still going" is one thing too many. The second is contrast — this is a
-   sentence rather than a single word, and a sentence spending half its life at
-   0.55 opacity is a sentence at roughly 4.2:1, which is below the floor for
-   text someone is expected to read. */
-.flowbar-working-text {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--body);
-  font: 400 12px/1.3 var(--font-sans);
-}
-
-.flowbar-mic {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--r-full);
-  background: var(--mute);
-  flex: none;
-  transition:
-    background var(--t-fast) var(--ease),
-    box-shadow var(--t-base) var(--ease);
-}
-
-/* No pulse.
- *
- * A pulsing dot next to a live waveform is two things competing to say the same
- * thing, and any re-render restarts the animation mid-cycle — which was the
- * visible flicker. The waveform already proves the microphone is open, far more
- * convincingly than a blinking light.
- *
- * The halo is not a pulse: it is static, sized off the live level by the same
- * `--level` the glow uses, so it grows with the voice rather than on a timer. */
-.flowbar[data-live="true"] .flowbar-mic {
-  background: var(--live);
-  box-shadow: 0 0 0 calc(1px + 2px * var(--level, 0)) var(--live-ring);
-}
-
-/* Between key-release and text landing. Neutral, not green: the microphone is
- * closed, and green must only ever mean it is open.
- *
- * superwhisper uses blue for this state and yellow for a loading model. The
- * yellow has a counterpart here — `--warn` already means "not wrong, but not
- * finished" — but the blue does not, and inventing one would break the rule that
- * makes the green mean anything. Neutral says the same thing without spending a
- * colour the system has not got. */
-.flowbar[data-working="true"] .flowbar-mic {
-  background: var(--body);
-}
-
-.flowbar[data-mode="failed"] .flowbar-mic,
-.flowbar[data-mode="enginefail"] .flowbar-mic {
-  background: var(--danger);
-}
-
-.flowbar[data-mode="notice"] .flowbar-mic,
-.flowbar[data-mode="loading"] .flowbar-mic {
-  background: var(--warn);
-}
-
-/* The engine is not up yet, and in the compact form the dot is the only thing
-   that can say so. Slow, so it reads as waiting rather than as alarm. */
-.flowbar[data-mode="loading"] .flowbar-mic {
-  animation: flowbar-breathe 1.8s ease-in-out infinite;
-}
-
-/* The landing.
- *
- * The one moment the whole product exists to deliver, and until now the
- * quietest point in the interaction — the pill simply shrank. A single ring
- * leaving the dot, once, is enough to answer "did that work?" from the corner
- * of an eye without asking for attention. It runs only on a clean landing; a
- * clipboard fallback gets the amber notice above instead. */
-/* Deliberately not `--ease`.
- *
- * The system curve is an exponential out — it covers ~85% of its distance in
- * the first quarter of the duration, which is right for a panel arriving and
- * wrong for a ripple: the ring reached full radius in about 60ms and then sat
- * at 3% alpha for the rest, so the one moment this window exists to confirm was
- * effectively invisible. A gentler ease-out spends the time on the part the eye
- * can actually follow. */
-.flowbar-mic[data-confirm="true"] {
-  animation: flowbar-confirm 420ms cubic-bezier(0.2, 0.6, 0.35, 1) 1;
 }
 
 @keyframes flowbar-confirm {
@@ -965,69 +47,1002 @@
   }
 }
 
-/* Stillness was asked for. The states still differ by colour, width and text —
-   only the motion goes. */
-@media (prefers-reduced-motion: reduce) {
-  .flowbar-body,
-  .flowbar-working-text,
-  .flowbar[data-mode="loading"] .flowbar-mic,
-  .flowbar-mic[data-confirm="true"] {
-    animation: none;
-  }
-}
-
-/* ------------------------------------------------------------ Empty state -- */
-
-.empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--s-3);
-  padding: var(--s-9) var(--s-5);
-  text-align: center;
-}
-
-/* ------------------------------------------------------------- Utilities -- */
-
-.hstack {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-}
-.vstack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-}
-.spacer {
-  flex: 1;
-}
-
-/* Latched: the microphone is open with nothing being held.
- *
- * Hollow, where a held session is filled. Different in kind rather than in
- * degree, and deliberately so: to the machine and to the eye these are the same
- * session, and the difference only reveals itself when you take your hand off
- * the keyboard. A bar that said "recording" in the same voice for both would
- * have already misled you by then.
- *
- * A ring reads as "held open" in a way brightness cannot — it is the same idiom
- * a latched record button uses — and it keeps the green meaning "the microphone
- * is live" rather than splitting that colour across two meanings.
- *
- * The halo is dropped with the fill. The waveform beside it is already proving
- * the microphone is open; this dot's remaining job is to say *how*. */
-.flowbar[data-latched="true"] .flowbar-mic {
-  background: transparent;
-  /* Two rings, not one.
+:where(html:not([data-window="hub"])) {
+  /* Primitive components. Rules and reasoning live in DESIGN.md §"Component rules".
    *
-   * A hollow 7px dot is distinguishable from a filled one only if you are
-   * looking for it, and this is precisely the cue you are not looking for —
-   * you find out it mattered when you notice the microphone was open. The
-   * outer halo roughly doubles the mark's visual footprint without changing a
-   * single measurement in `geometry()`, so the latched bar catches the eye at
-   * the edge of vision the way the filled dot never needs to. */
-  box-shadow:
-    inset 0 0 0 2px var(--live-hi),
-    0 0 0 3px rgb(68 214 44 / 30%);
+   * Two things hold this system together and are easy to erode:
+   *   1. There are NO shadows. Depth is the surface ladder plus 1px hairlines.
+   *   2. Green appears only on live state, the record action, and focus rings. */
+
+  /* ---------------------------------------------------------------- Button -- */
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-2);
+    height: var(--control-h);
+    padding: 0 var(--s-4);
+    border-radius: var(--r-lg);
+    border: 1px solid transparent;
+    font: 500 14px/1 var(--font-sans);
+    white-space: nowrap;
+    transition:
+      background var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease);
+  }
+
+  .btn[data-size="sm"] {
+    height: var(--control-h-sm);
+    padding: 0 var(--s-3);
+    font-size: 13px;
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Primary is monochrome -- the Raycast/Warp move. Spending the accent on
+     ordinary buttons would waste the only signal that matters. */
+  .btn[data-variant="primary"] {
+    background: var(--ink);
+    color: var(--canvas);
+  }
+  .btn[data-variant="primary"]:hover:not(:disabled) {
+    background: #ffffff;
+  }
+
+  .btn[data-variant="secondary"] {
+    background: var(--surface-3);
+    color: var(--ink);
+    border-color: var(--hairline-strong);
+  }
+  .btn[data-variant="secondary"]:hover:not(:disabled) {
+    background: var(--surface-4);
+  }
+
+  .btn[data-variant="ghost"] {
+    background: transparent;
+    color: var(--body);
+  }
+  .btn[data-variant="ghost"]:hover:not(:disabled) {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+
+  .btn[data-variant="danger"] {
+    background: transparent;
+    color: var(--danger);
+    border-color: var(--hairline-strong);
+  }
+  .btn[data-variant="danger"]:hover:not(:disabled) {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+  }
+
+  /* The one button allowed to be green: it starts the microphone. */
+  .btn[data-variant="record"] {
+    background: var(--live-soft);
+    color: var(--live);
+    border-color: var(--live-dim);
+  }
+  .btn[data-variant="record"]:hover:not(:disabled) {
+    border-color: var(--live);
+    background: rgb(68 214 44 / 18%);
+  }
+
+  /* ----------------------------------------------------------------- Input -- */
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+
+  .input,
+  .select {
+    height: var(--control-h);
+    padding: 0 var(--s-3);
+    background: var(--surface-3);
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--r-md);
+    color: var(--ink);
+    font: 400 14px/1 var(--font-sans);
+    transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+  }
+
+  .input::placeholder {
+    color: var(--faint);
+  }
+
+  .input:focus,
+  .select:focus {
+    outline: none;
+    border-color: var(--live);
+    box-shadow: 0 0 0 3px var(--live-ring);
+  }
+
+  /* A dropdown has to look like one.
+   *
+   * `appearance: none` removed the native arrow and nothing replaced it, so every
+   * picker in Settings read as an uneditable text field — the padding-right below
+   * was already reserving room for a chevron that was never drawn. The arrow is an
+   * inline data URI rather than a file: the app ships no image assets, and the
+   * Artifact-style CSP the webview runs under would block an external one.
+   *
+   * `--mute` is baked into the SVG because `currentColor` does not resolve inside
+   * a background image. It is the same grey the rest of the secondary chrome uses. */
+  .select {
+    appearance: none;
+    padding-right: var(--s-7);
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238f8f8f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right var(--s-3) center;
+  }
+
+  .select:hover {
+    border-color: var(--hairline-strong);
+  }
+
+  /* ---------------------------------------------------------------- Toggle -- */
+
+  .toggle {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    flex: none;
+    background: var(--surface-4);
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--r-full);
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  }
+
+  .toggle::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: var(--r-full);
+    background: var(--mute);
+    transition: transform var(--t-base) var(--ease), background var(--t-fast) var(--ease);
+  }
+
+  .toggle[data-on="true"] {
+    background: var(--live-soft);
+    border-color: var(--live-dim);
+  }
+  .toggle[data-on="true"]::after {
+    transform: translateX(16px);
+    background: var(--live);
+  }
+
+  /* ----------------------------------------------------------------- Badge -- */
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    height: 20px;
+    padding: 0 var(--s-3);
+    border-radius: var(--r-full);
+    border: 1px solid var(--hairline-strong);
+    background: var(--surface-2);
+    color: var(--mute);
+    font: 500 11px/1 var(--font-sans);
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+  }
+
+  /* Tone lives in the dot, never in the fill.
+   *
+   * Tinted pill backgrounds with matching borders — green-on-green, amber-on-amber —
+   * are the single most recognisable marker of a generated interface, and they fight
+   * the whole premise of this system: colour is supposed to mean "the microphone is
+   * open", and it cannot mean that if three other things are also coloured.
+   *
+   * The surface and the label stay neutral. A 6px dot carries the state. */
+  .badge[data-tone] {
+    background: var(--surface-2);
+    border-color: var(--hairline-strong);
+    color: var(--body);
+  }
+  .badge[data-tone="live"] .dot {
+    background: var(--live);
+  }
+  .badge[data-tone="warn"] .dot {
+    background: var(--warn);
+  }
+  .badge[data-tone="danger"] .dot {
+    background: var(--danger);
+  }
+
+  /* A live dot, for the badge and the sidebar. Pulses only while recording. */
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--r-full);
+    background: currentColor;
+    flex: none;
+  }
+
+  .dot[data-pulse="true"] {
+    animation: pulse 1.6s var(--ease) infinite;
+  }
+
+
+  /* ------------------------------------------------------------------ Card -- */
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-xl);
+    padding: var(--s-5);
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+    margin-bottom: var(--s-4);
+  }
+
+  /* -------------------------------------------------------------- Stat tile -- */
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding: var(--s-4) var(--s-5);
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-xl);
+  }
+
+  .stat-value {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-2);
+  }
+
+  .stat-unit {
+    font: 400 13px/1 var(--font-mono);
+    color: var(--mute);
+  }
+
+  /* ------------------------------------------------------------------- Row -- */
+
+  .row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--s-5);
+    align-items: start;
+    padding: var(--s-4) var(--s-5);
+    border-bottom: 1px solid var(--hairline);
+    transition: background var(--t-fast) var(--ease);
+  }
+
+  .row:last-child {
+    border-bottom: none;
+  }
+
+  .row:hover,
+  .row:focus-within {
+    background: var(--surface-1);
+  }
+
+  .row-actions {
+    display: flex;
+    gap: var(--s-2);
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+
+  /* Revealed on hover, but always reachable by keyboard -- hover-only actions
+     that vanish for keyboard users are an accessibility failure, not a style. */
+  .row:hover .row-actions,
+  .row:focus-within .row-actions {
+    opacity: 1;
+  }
+
+  /* A row that can expand. The grid above assumes two columns on one line, so a
+     row with a panel underneath becomes a single column holding both. */
+  .row-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .row-main {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--s-5);
+    align-items: start;
+  }
+
+  /* --------------------------------------------------------- Fix a word ----- */
+
+  .fix {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    margin-top: var(--s-4);
+    padding: var(--s-4);
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-lg);
+  }
+
+  .fix-words {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+
+  /* Each heard word is a button because the spoken form is nearly always a couple
+     of adjacent words lifted straight out of this line. Monospace so a
+     mistranscription is read as data rather than as prose. */
+  .fix-word {
+    padding: 2px var(--s-3);
+    background: var(--surface-3);
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--r-sm);
+    color: var(--body);
+    font: 400 13px/1.5 var(--font-mono);
+    cursor: pointer;
+    transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+
+  .fix-word:hover {
+    border-color: var(--live);
+    color: var(--ink);
+  }
+
+  .fix-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--s-3);
+  }
+
+  .fix-form > label {
+    flex: 1 1 180px;
+  }
+
+  /* ------------------------------------------------------------------ Tabs -- */
+
+  .tabs {
+    display: inline-flex;
+    gap: var(--s-1);
+    padding: var(--s-1);
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-lg);
+  }
+
+  .tab {
+    height: 26px;
+    padding: 0 var(--s-4);
+    border-radius: var(--r-md);
+    font: 500 13px/1 var(--font-sans);
+    color: var(--mute);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+
+  .tab:hover {
+    color: var(--body);
+  }
+
+  .tab[aria-selected="true"] {
+    background: var(--surface-3);
+    color: var(--ink);
+  }
+
+  /* --------------------------------------------------------------- Sidebar -- */
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    width: 100%;
+    height: 34px;
+    padding: 0 var(--s-4);
+    border-left: 2px solid transparent;
+    color: var(--mute);
+    font: 500 13.5px/1 var(--font-sans);
+    text-align: left;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+
+  .nav-item:hover {
+    background: var(--surface-1);
+    color: var(--body);
+  }
+
+  .nav-item[aria-current="page"] {
+    background: var(--surface-2);
+    color: var(--ink);
+    border-left-color: var(--live);
+  }
+
+  /* ------------------------------------------------------------------- Kbd -- */
+
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 var(--s-2);
+    background: var(--surface-3);
+    border: 1px solid var(--hairline-strong);
+    border-bottom-width: 2px;
+    border-radius: var(--r-sm);
+    font: 500 11px/1 var(--font-mono);
+    color: var(--body);
+  }
+
+  /* ---------------------------------------------------------------- Notice -- */
+
+  /* Same rule as the badge: one neutral surface, tone carried by a small marker.
+   *
+   * A tinted alert box is not more legible than a neutral one with a coloured dot —
+   * it is just louder, and it spends the accent budget on chrome. Every notice here
+   * reads on the same surface, so the eye compares text rather than backgrounds. */
+  .notice {
+    display: flex;
+    align-items: center;
+    gap: var(--s-4);
+    padding: var(--s-4) var(--s-5);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-lg);
+    background: var(--surface-1);
+    font: 400 13.5px/1.5 var(--font-sans);
+    color: var(--body);
+  }
+
+  .notice .dot {
+    width: 7px;
+    height: 7px;
+    background: var(--mute);
+  }
+  .notice[data-tone="live"] .dot {
+    background: var(--live);
+  }
+  .notice[data-tone="warn"] .dot {
+    background: var(--warn);
+  }
+  .notice[data-tone="danger"] .dot {
+    background: var(--danger);
+  }
+
+  /* -------------------------------------------------------------- Waveform --
+   *
+   * A scrolling seismograph, not an equaliser.
+   *
+   * The difference is everything. An equaliser maps frequency bands to bars, so the
+   * bars jitter in place and the shape means nothing to a person. This holds a rolling
+   * buffer of the last ~1.5 s of loudness: the newest sample enters at the right and
+   * every older one shifts left, so a spoken syllable becomes a *shape that travels*.
+   * You can see the sentence you just said moving across the bar, which is what makes
+   * it feel connected to your voice rather than merely reactive.
+   *
+   * Bars grow from the centre line in both directions (flex `align-items: center`),
+   * giving the mirrored profile of a real waveform. */
+
+  .wave {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  /* Bars are a FIXED 2px wide, never flexed.
+   *
+   * An earlier version used `flex: 1`, so in a wide container each bar stretched to
+   * ~28px and a full border-radius turned it into an oval. A waveform is made of
+   * hairlines; the moment a bar is wider than it is tall at rest, it stops reading as
+   * one.
+   *
+   * Height is driven by `transform: scaleY()` rather than the height property:
+   * transforms are composited on the GPU, so this animates at 60 fps without
+   * touching layout. `transform-origin: center` gives the mirrored profile of a real
+   * waveform for free. There is deliberately NO CSS transition — JavaScript
+   * interpolates every frame, because a transition chasing a 30 Hz signal always
+   * lags and reads as mush. */
+  .wave-bar {
+    flex: none;
+    width: 2px;
+    height: 100%;
+    border-radius: var(--r-full);
+    background: var(--live);
+    /* Driven by the animation loop as a magnitude rather than a transform, so the
+       stylesheet picks the axis -- the wave runs vertically when the bar is docked
+       to a side edge. See `.flowbar[data-column]` and `Waveform`. */
+    transform: scaleY(var(--v, 0.05));
+    transform-origin: center;
+    will-change: transform;
+    backface-visibility: hidden;
+  }
+
+  .wave[data-idle="true"] .wave-bar {
+    background: var(--hairline-strong);
+    transition: background var(--t-base) var(--ease);
+  }
+
+  /* --------------------------------------------------------------- Flow Bar --
+   *
+   * The only interface visible while dictating, so it is sized to be read in
+   * peripheral vision and ignored the rest of the time. Compact by default; it grows
+   * only while listening, and the growth is itself the signal that it heard you.
+   *
+   * Four forms, one component:
+   *
+   *   full      the pill, horizontal — everything is legible
+   *   compact   superwhisper's mini window — the dot, and the wave while live
+   *   column    docked to a side edge, laid out vertically
+   *   speaking  a column that has words to deliver unfurls back to horizontal,
+   *             because a sentence you have to tilt your head to read is not a
+   *             sentence you will read
+   *
+   * The box for every one of them is decided in `geometry()` in Overlay.tsx and
+   * applied to `.overlay-hit`. Nothing here sets a width or a height that the
+   * window does not already know about — the last time this file owned a height,
+   * it disagreed with the window by 2px and the difference was bare, translucent
+   * window. */
+
+  .flowbar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-3);
+    /* Whatever the window is. See the note above: a constant here is a second
+       opinion about the size of something that can only have one. */
+    height: 100%;
+    width: 100%;
+    padding: 0 var(--s-4);
+    /* Nearly opaque, and no backdrop-filter.
+     *
+     * `backdrop-filter` on a transparent window samples the *window's* backdrop,
+     * not the desktop behind it — so it blurs nothing, while still forcing a
+     * compositing layer that defeats the window transparency. It was contributing
+     * to the visible rectangle. A solid fill is honest and cheaper. */
+    background: rgb(14 14 16);
+    /* Slightly brighter than the app's hairline. This border is the pill's only
+       separation: it fills its window edge to edge, so there is no room for a
+       shadow, and it has to read against a white document as well as a dark one. */
+    border: 1px solid #34343c;
+    border-radius: var(--r-full);
+    /* Specular inner highlight to guarantee perimeter readability across white documents and dark editors without spilling into window bounds. */
+    box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 8%);
+    transition:
+      border-color var(--t-base) var(--ease),
+      background-color var(--t-base) var(--ease),
+      box-shadow var(--t-base) var(--ease);
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  /* Compact.
+   *
+   * The honest answer to "this is in my way" is a smaller bar, not a hidden one:
+   * a bar you have dismissed cannot tell you the microphone is open, which is the
+   * one thing it exists to do. Everything goes except the dot and, while live, the
+   * wave. Hovering brings the full pill back — see `compact` in Overlay.tsx. */
+  .flowbar[data-mini="true"] {
+    gap: var(--s-2);
+    padding: 0 7px;
+    justify-content: center;
+  }
+
+  /* Docked to a side edge: the same pill turned through ninety degrees.
+   *
+   * Wispr Flow reorients its bar this way at the left and right edges, and the
+   * reason is geometric rather than decorative — a horizontal pill on a vertical
+   * edge either hangs off the screen or takes a bite out of whatever is maximised
+   * behind it. */
+  .flowbar[data-column="true"] {
+    flex-direction: column;
+    gap: var(--s-2);
+    padding: var(--s-3) 0;
+    justify-content: center;
+  }
+
+  /* Full chroma, not `--live-dim`.
+   *
+   * This border was `#1d5a13` — the darkest green in the palette — at 1px on a
+   * near-black pill, and it was reviewed as "will not register in peripheral
+   * vision", which is the entire job this surface has. The extra half-pixel is
+   * taken out of the content box rather than added outside, so the pill's own
+   * footprint is unchanged and nothing reflows around it. */
+  .flowbar[data-live="true"] {
+    border-color: var(--live);
+    border-width: 1.5px;
+    /* The one shadow DESIGN.md actually grants this window, and it took until now
+     * to render because the window had no spare pixels to paint it into — the
+     * overlay reserves a margin while listening precisely so this can exist. See
+     * GLOW_MARGIN in Overlay.tsx; the radii below are sized to settle inside it
+     * rather than being clipped flat at the window edge, which would read as a
+     * hard rectangle and be worse than no glow at all.
+     *
+     * It breathes with the voice. `--level` is the peak-held meter, written every
+     * frame by the waveform's own loop onto an ancestor, so this tracks speech
+     * without a single React render. A glow that answers "is it hearing me?" from
+     * the corner of an eye is doing the job this window exists for.
+     *
+     * No spread on either layer. Spread pushes solid colour out before the blur
+     * starts, which turned this into a lime blob sitting behind the pill — very
+     * visible against a white document, and much closer to the "large flat green
+     * fill" the prohibitions rule out than to a glow. Blur alone falls off from
+     * the edge and stays a halo at every level. */
+    box-shadow:
+      inset 0 1px 0 0 rgb(255 255 255 / 8%),
+      0 0 calc(10px + 8px * var(--level, 0)) 0 var(--live-soft),
+      0 0 calc(22px + 10px * var(--level, 0)) 0 rgb(68 214 44 / 5%);
+  }
+
+  /* The endings that are not a silent success, and the two states that are about
+     the engine rather than about a dictation. They are deliberately different
+     colours: a clipboard fallback is the fallback working as designed, and
+     painting it the same red as a failure would teach the user to ignore red.
+
+     Border and dot only — no tinted fill. A `--danger-soft` wash over the pill's
+     near-black looked plausible on the app canvas and fell apart over a white
+     document, where it renders as a muddy grey rectangle that reads as a broken
+     component rather than a failure. It is also exactly the "tinted pill" the
+     status rule prohibits: the colour belongs in the dot. The pill widening to fit
+     a sentence is the thing that catches the eye here; the colour only has to name
+     what kind of event it was. */
+  .flowbar[data-mode="failed"],
+  .flowbar[data-mode="enginefail"] {
+    border-color: var(--danger);
+  }
+
+  .flowbar[data-mode="notice"],
+  .flowbar[data-mode="loading"] {
+    border-color: var(--warn);
+  }
+
+  .flowbar-wave {
+    flex: 1;
+    height: 18px;
+    min-width: 0;
+  }
+
+  /* Turned through ninety degrees with the rest of the pill. The wave itself is
+     axis-agnostic — the animation loop writes a magnitude, not a transform — so
+     this is a layout change and not a rotation, and it needs no advance knowledge
+     of how long the column is. */
+  .flowbar[data-column="true"] .flowbar-wave {
+    flex: 1;
+    width: 18px;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .flowbar[data-column="true"] .wave {
+    flex-direction: column;
+  }
+
+  .flowbar[data-column="true"] .wave-bar {
+    width: 100%;
+    height: 2px;
+    transform: scaleX(var(--v, 0.05));
+  }
+
+  /* Everything right of the dot. Keyed by mode in the component, so this is also
+     what carries the entrance animation. */
+  .flowbar-body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-3);
+    min-width: 0;
+    animation: flowbar-enter var(--t-base) var(--ease) both;
+  }
+
+  .flowbar[data-live="true"] .flowbar-body,
+  .flowbar[data-mode="failed"] .flowbar-body,
+  .flowbar[data-mode="enginefail"] .flowbar-body,
+  .flowbar[data-mode="notice"] .flowbar-body,
+  .flowbar[data-mode="loading"] .flowbar-body {
+    flex: 1;
+  }
+
+  .flowbar[data-column="true"] .flowbar-body {
+    flex-direction: column;
+    min-height: 0;
+    width: 100%;
+  }
+
+  /* Compact and column both shed their labels, so an empty body must not claim
+     the space the dot is centred in. */
+  .flowbar[data-mini="true"] .flowbar-body:empty,
+  .flowbar[data-column="true"] .flowbar-body:empty {
+    display: none;
+  }
+
+
+  .flowbar-idle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-3);
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .flowbar-action {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    margin-left: var(--s-1);
+  }
+
+  .flowbar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    height: 20px;
+    padding: 0 var(--s-2);
+    border-radius: var(--r-sm);
+    background: var(--surface-3);
+    border: 1px solid var(--hairline-strong);
+    color: var(--ink);
+    font: 500 11px/1 var(--font-sans);
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease);
+  }
+
+  .flowbar-btn:hover {
+    background: var(--surface-4);
+    border-color: var(--live);
+    color: var(--live);
+  }
+
+  .flowbar-btn:focus-visible {
+    outline: 2px solid var(--live);
+    outline-offset: 1px;
+  }
+
+  .flowbar-time {
+    font: 500 12px/1 var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    flex: none;
+  }
+
+  /* Discard, while listening.
+   *
+   * Quiet by default — it sits next to a running timer and a live waveform, and
+   * it must not compete with either for the two seconds this state is on screen.
+   * It brightens on hover, which is the only moment anyone is looking for it.
+   * Not `--danger`: throwing away a sentence you did not mean to say is a normal
+   * outcome, not an error, and colouring it red would put a warning next to the
+   * microphone every single time it opens. */
+  .flowbar-cancel,
+  .flowbar-go {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex: none;
+    border-radius: var(--r-full);
+    color: var(--faint);
+    cursor: pointer;
+    transition:
+      color var(--t-fast) var(--ease),
+      background var(--t-fast) var(--ease);
+  }
+
+  .flowbar-cancel:hover,
+  .flowbar-go:hover {
+    color: var(--ink);
+    background: var(--surface-4);
+  }
+
+  .flowbar-cancel:focus-visible,
+  .flowbar-go:focus-visible {
+    outline: 2px solid var(--live);
+    outline-offset: 1px;
+  }
+
+  /* The one control on this window that opens a microphone, so the one thing on
+     it that may be green — and only when the pointer is on it, because a green
+     idle bar would say the microphone is already open. Wispr Flow's bar starts a
+     dictation when you click it; this is the part of the pill that says so. */
+  .flowbar-go:hover {
+    color: var(--live);
+    background: var(--live-soft);
+  }
+
+  /* One line, truncated. The bar cannot grow to fit an arbitrary message from the
+     engine, and a wrapped second line would break the pill's height — which the
+     window is sized to exactly. The full text is in the `title`, and in the Hub. */
+  .flowbar-msg {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font: 400 12px/1.3 var(--font-sans);
+    color: var(--body);
+  }
+
+  .flowbar[data-mode="failed"] .flowbar-msg,
+  .flowbar[data-mode="enginefail"] .flowbar-msg {
+    color: var(--ink);
+  }
+
+  /* Still no spinner — but not motionless either. Between key-release and text
+     landing the bar previously showed a static grey word for one to three
+     seconds, which is the one stretch where the user is actually waiting on it.
+     A slow breathe says "working" without asking to be watched.
+
+     The engine's startup message does NOT breathe, though it is the same kind of
+     wait. Two reasons, and the first is the file's own argument against the
+     pulsing dot: the dot already breathes in that state, and two things saying
+     "still going" is one thing too many. The second is contrast — this is a
+     sentence rather than a single word, and a sentence spending half its life at
+     0.55 opacity is a sentence at roughly 4.2:1, which is below the floor for
+     text someone is expected to read. */
+  .flowbar-working-text {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--body);
+    font: 400 12px/1.3 var(--font-sans);
+  }
+
+  .flowbar-mic {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--r-full);
+    background: var(--mute);
+    flex: none;
+    transition:
+      background var(--t-fast) var(--ease),
+      box-shadow var(--t-base) var(--ease);
+  }
+
+  /* No pulse.
+   *
+   * A pulsing dot next to a live waveform is two things competing to say the same
+   * thing, and any re-render restarts the animation mid-cycle — which was the
+   * visible flicker. The waveform already proves the microphone is open, far more
+   * convincingly than a blinking light.
+   *
+   * The halo is not a pulse: it is static, sized off the live level by the same
+   * `--level` the glow uses, so it grows with the voice rather than on a timer. */
+  .flowbar[data-live="true"] .flowbar-mic {
+    background: var(--live);
+    box-shadow: 0 0 0 calc(1px + 2px * var(--level, 0)) var(--live-ring);
+  }
+
+  /* Between key-release and text landing. Neutral, not green: the microphone is
+   * closed, and green must only ever mean it is open.
+   *
+   * superwhisper uses blue for this state and yellow for a loading model. The
+   * yellow has a counterpart here — `--warn` already means "not wrong, but not
+   * finished" — but the blue does not, and inventing one would break the rule that
+   * makes the green mean anything. Neutral says the same thing without spending a
+   * colour the system has not got. */
+  .flowbar[data-working="true"] .flowbar-mic {
+    background: var(--body);
+  }
+
+  .flowbar[data-mode="failed"] .flowbar-mic,
+  .flowbar[data-mode="enginefail"] .flowbar-mic {
+    background: var(--danger);
+  }
+
+  .flowbar[data-mode="notice"] .flowbar-mic,
+  .flowbar[data-mode="loading"] .flowbar-mic {
+    background: var(--warn);
+  }
+
+  /* The engine is not up yet, and in the compact form the dot is the only thing
+     that can say so. Slow, so it reads as waiting rather than as alarm. */
+  .flowbar[data-mode="loading"] .flowbar-mic {
+    animation: flowbar-breathe 1.8s ease-in-out infinite;
+  }
+
+  /* The landing.
+   *
+   * The one moment the whole product exists to deliver, and until now the
+   * quietest point in the interaction — the pill simply shrank. A single ring
+   * leaving the dot, once, is enough to answer "did that work?" from the corner
+   * of an eye without asking for attention. It runs only on a clean landing; a
+   * clipboard fallback gets the amber notice above instead. */
+  /* Deliberately not `--ease`.
+   *
+   * The system curve is an exponential out — it covers ~85% of its distance in
+   * the first quarter of the duration, which is right for a panel arriving and
+   * wrong for a ripple: the ring reached full radius in about 60ms and then sat
+   * at 3% alpha for the rest, so the one moment this window exists to confirm was
+   * effectively invisible. A gentler ease-out spends the time on the part the eye
+   * can actually follow. */
+  .flowbar-mic[data-confirm="true"] {
+    animation: flowbar-confirm 420ms cubic-bezier(0.2, 0.6, 0.35, 1) 1;
+  }
+
+
+  /* Stillness was asked for. The states still differ by colour, width and text —
+     only the motion goes. */
+  @media (prefers-reduced-motion: reduce) {
+    .flowbar-body,
+    .flowbar-working-text,
+    .flowbar[data-mode="loading"] .flowbar-mic,
+    .flowbar-mic[data-confirm="true"] {
+      animation: none;
+    }
+  }
+
+  /* ------------------------------------------------------------ Empty state -- */
+
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-9) var(--s-5);
+    text-align: center;
+  }
+
+  /* ------------------------------------------------------------- Utilities -- */
+
+  .hstack {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+  }
+  .vstack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
+  .spacer {
+    flex: 1;
+  }
+
+  /* Latched: the microphone is open with nothing being held.
+   *
+   * Hollow, where a held session is filled. Different in kind rather than in
+   * degree, and deliberately so: to the machine and to the eye these are the same
+   * session, and the difference only reveals itself when you take your hand off
+   * the keyboard. A bar that said "recording" in the same voice for both would
+   * have already misled you by then.
+   *
+   * A ring reads as "held open" in a way brightness cannot — it is the same idiom
+   * a latched record button uses — and it keeps the green meaning "the microphone
+   * is live" rather than splitting that colour across two meanings.
+   *
+   * The halo is dropped with the fill. The waveform beside it is already proving
+   * the microphone is open; this dot's remaining job is to say *how*. */
+  .flowbar[data-latched="true"] .flowbar-mic {
+    background: transparent;
+    /* Two rings, not one.
+     *
+     * A hollow 7px dot is distinguishable from a filled one only if you are
+     * looking for it, and this is precisely the cue you are not looking for —
+     * you find out it mattered when you notice the microphone was open. The
+     * outer halo roughly doubles the mark's visual footprint without changing a
+     * single measurement in `geometry()`, so the latched bar catches the eye at
+     * the edge of vision the way the filled dot never needs to. */
+    box-shadow:
+      inset 0 0 0 2px var(--live-hi),
+      0 0 0 3px rgb(68 214 44 / 30%);
+  }
 }

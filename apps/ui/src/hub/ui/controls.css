@@ -1,0 +1,114 @@
+/* Hub primitives. Ported from docs/redesign/reference/reference.html:
+ *   §4 "Shared controls" (lines 198-235) verbatim, with the standard renames
+ *   (`X i` icon rules → `X svg`, `.seg span` → `.seg > button`, the caret icon
+ *   class → `.caret`), plus `.keycap` from §3 (line 181) and `.slider`, `.meter`
+ *   and `.badge` from §6 (lines 344-346, 357-364), because those are primitives.
+ * Everything after "Additions" is not in the static reference: real controls need
+ * hover, press, disabled and focus states that a picture never shows.
+ * Only the Hub chunk imports this file, so these class names never reach the
+ * overlay; the legacy ui.css is in turn scoped out of the Hub. */
+
+/* -- §4 shared controls ---------------------------------------------------- */
+.btn { height: 34px; padding: 0 13px; border-radius: var(--r-ctl); display: inline-flex; align-items: center; gap: 7px; font: 500 13px/1 var(--ui); color: var(--ink); background: var(--glass-2); border: 1px solid var(--edge); box-shadow: inset 0 1px 0 var(--edge-hi); white-space: nowrap; cursor: pointer; }
+.btn svg { font-size: 15px; }
+.btn.sm { height: 30px; padding: 0 11px; font-size: 12.5px; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; box-shadow: 0 8px 24px -10px color-mix(in srgb, var(--accent) 70%, transparent); font-weight: 600; }
+.btn.warnp { background: var(--warn); color: var(--warn-ink); border-color: transparent; font-weight: 600; box-shadow: 0 8px 24px -10px color-mix(in srgb, var(--warn) 70%, transparent); }
+.btn .k { font: 500 10.5px/1 var(--mono); opacity: .7; margin-left: 2px; }
+.app-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: var(--r-inner); font-size: 12px; font-weight: 500; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); white-space: nowrap; }
+.app-chip svg { font-size: 13px; }
+.c-editor { --c: var(--chip-editor); } .c-terminal { --c: var(--chip-terminal); } .c-prose { --c: var(--chip-prose); } .c-default { --c: var(--chip-default); }
+.warn-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: var(--r-inner); font-size: 11.5px; font-weight: 500; color: var(--warn); background: var(--warn-soft); white-space: nowrap; }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--r-ctl); background: var(--well); }
+.seg > button { height: 26px; padding: 0 10px; border-radius: var(--r-inner); display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--mute); white-space: nowrap; }
+.seg > button.on { background: var(--glass-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge); }
+.seg.lg > button { height: 30px; padding: 0 13px; font-size: 13px; }
+.seg > button svg { font-size: 14px; }
+.field { height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: var(--r-ctl); background: var(--well); border: 1px solid var(--edge); color: var(--ink); font-size: 13.5px; min-width: 0; }
+.field.mono { font-family: var(--mono); font-size: 13px; }
+.field .caret { margin-left: auto; color: var(--mute); }
+.field svg { color: var(--mute); }
+.field.ph-empty { color: var(--mute); }
+.switch { width: 40px; height: 24px; border-radius: 12px; background: var(--well); border: 1px solid var(--edge); position: relative; flex: none; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--mute); transition: transform .2s var(--ease); }
+.switch.on { background: var(--accent); border-color: transparent; }
+.switch.on::after { transform: translateX(16px); background: var(--accent-ink); }
+.card { border-radius: var(--r-card); padding: 18px 20px; }
+.card-title { font: 650 15px/1.2 var(--display); letter-spacing: -.015em; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.card-title svg { color: var(--accent-2); font-size: 16px; }
+.card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.card-head .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.lead { font-size: 14px; color: var(--body); max-width: 70ch; }
+.cap { font-size: 12px; color: var(--mute); }
+.srow { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; padding: 12px 0; }
+.srow + .srow { border-top: 1px solid var(--edge); }
+[data-mode="light"] .srow + .srow { border-top-color: rgb(20 40 70 / 8%); }
+.srow .lab { color: var(--ink); font-weight: 500; font-size: 13.5px; }
+.srow .hint { font-size: 12px; color: var(--mute); margin-top: 3px; max-width: 62ch; line-height: 1.45; }
+.scroll { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 14px; }
+mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); border-radius: 4px; padding: 0 3px; }
+
+/* -- §3 keycap ------------------------------------------------------------- */
+.keycap { white-space: nowrap; font: 600 11.5px/1 var(--mono); color: var(--ink); background: var(--glass-2); border: 1px solid var(--edge); padding: 5px 7px 6px; border-radius: var(--r-inner); box-shadow: inset 0 -2px 0 rgb(0 0 0 / 18%); }
+
+/* -- §6 badge, slider, meter ----------------------------------------------- */
+.badge { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 7px; border-radius: 6px; font: 500 11px/1 var(--ui); color: var(--body); background: var(--well); border: 1px solid var(--edge); }
+.badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: transparent; }
+.badge.ok::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.slider { display: flex; align-items: center; gap: 10px; width: 210px; }
+.slider .tr { flex: 1; height: 6px; border-radius: 3px; background: var(--well); border: 1px solid var(--edge); position: relative; }
+.slider .tr b { position: absolute; left: 0; top: -1px; bottom: -1px; width: 32%; border-radius: 3px; background: var(--accent); }
+.slider .tr i { position: absolute; left: 32%; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); box-shadow: 0 2px 6px rgb(0 0 0 / 30%); }
+.slider .val { font: 500 12.5px/1 var(--mono); color: var(--ink); width: 44px; text-align: right; }
+.meter { display: flex; gap: 3px; align-items: flex-end; height: 18px; }
+.meter i { width: 4px; border-radius: 2px; background: var(--ok); }
+.meter i.off { background: var(--edge); }
+
+/* -- Additions (plan Task 6, step 3) ---------------------------------------- */
+.seg > button, .modes > button { border: 0; background: none; cursor: pointer; font: inherit; }
+.field { position: relative; }
+.field input, .field textarea { flex: 1; min-width: 0; border: 0; background: none; outline: none; font: inherit; color: inherit; padding: 0; }
+.field input::placeholder, .field textarea::placeholder { color: var(--mute); opacity: 1; }
+.field select { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: default; }
+.fail-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: var(--r-inner); font-size: 11.5px; font-weight: 500; color: var(--danger); background: var(--danger-soft); white-space: nowrap; }
+.notice.warn { display: flex; align-items: center; gap: 12px; border-radius: 14px; padding: 12px 14px; font-size: 13px; color: var(--ink); border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: var(--warn-soft); }
+.slider [role="slider"], .slider { outline-offset: 4px; }
+
+/* -- Additions: states the reference cannot show ----------------------------- */
+/* The switch is a <button>; drop the UA button padding so the knob sits where
+   the reference puts it, and give the chip/button icons the reference's glyph
+   metrics (Phosphor sizes to 1em, so flex: none stops them shrinking). */
+.switch { padding: 0; cursor: pointer; }
+.switch:disabled { opacity: .5; cursor: default; }
+.btn svg, .app-chip svg, .warn-chip svg, .fail-chip svg, .seg > button svg, .card-title svg { flex: none; }
+.warn-chip svg, .fail-chip svg { font-size: 13px; }
+.btn:disabled:active { transform: none; }
+/* Hover is quiet: a brighter edge on glass buttons and the idle segment text
+   lifting to ink. Filled buttons brighten slightly. */
+.btn:not(.primary, .warnp):hover:not(:disabled) { border-color: var(--edge-hi); }
+.btn:is(.primary, .warnp):hover:not(:disabled) { filter: brightness(1.06); }
+.seg > button:not(.on):hover { color: var(--ink); }
+/* A select stretched over the field keeps its own text invisible; the visible
+   copy is .sel-display, which must truncate rather than push the caret out. */
+.field .sel-display { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field:has(select:disabled) { opacity: .5; }
+.field:has(select:disabled) select { cursor: default; }
+.notice .notice-ic { flex: none; font-size: 16px; color: var(--warn); }
+.notice .notice-body { flex: 1; min-width: 0; }
+.slider { cursor: pointer; }
+.slider .tr { touch-action: none; }
+
+/* Focus. The legacy global ring is 1px of logo green, which in the Hub would
+   break "green means ready/pasted/mic only"; Hub controls ring in the theme
+   accent instead, 2px so it reads on glass. The field's own input has
+   `outline: none`, so the ring moves to the whole field via :focus-within. */
+:is(.btn, .switch, .seg > button, .slider):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.slider:focus-visible { outline-offset: 4px; }
+.field:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .switch::after { transition: none; }
+  .btn:active { transform: none; }
+}

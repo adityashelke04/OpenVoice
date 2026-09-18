@@ -1,285 +1,292 @@
-/* Shared layout for Hub screens. */
+/* Scoped out of the Hub like src/ui/ui.css (see the note there): the new Hub
+ * screens reuse class names such as .model for different markup. The wrapper
+ * adds zero specificity. This file goes once the last legacy screen is
+ * rewritten (Task 15). */
 
-.screen {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-6);
-  max-width: 860px;
-}
+:where(html:not([data-window="hub"])) {
+  /* Shared layout for Hub screens. */
 
-.screen-head h1 {
-  margin: 0;
-}
+  .screen {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-6);
+    max-width: 860px;
+  }
 
-.screen-lead {
-  margin-top: var(--s-2);
-  max-width: 62ch;
-}
+  .screen-head h1 {
+    margin: 0;
+  }
 
-.screen-foot {
-  max-width: 68ch;
-}
+  .screen-lead {
+    margin-top: var(--s-2);
+    max-width: 62ch;
+  }
 
-/* ------------------------------------------------------------------ rows -- */
+  .screen-foot {
+    max-width: 68ch;
+  }
 
-.srows {
-  margin: 0 calc(var(--s-5) * -1) calc(var(--s-5) * -1);
-}
+  /* ------------------------------------------------------------------ rows -- */
 
-.srow {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--s-6);
-  padding: var(--s-4) var(--s-5);
-  border-bottom: 1px solid var(--hairline);
-}
+  .srows {
+    margin: 0 calc(var(--s-5) * -1) calc(var(--s-5) * -1);
+  }
 
-.srow:last-child {
-  border-bottom: none;
-}
+  .srow {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--s-6);
+    padding: var(--s-4) var(--s-5);
+    border-bottom: 1px solid var(--hairline);
+  }
 
-.srow-label {
-  min-width: 0;
-}
+  .srow:last-child {
+    border-bottom: none;
+  }
 
-/* Hints carry the real explanation, so they get a readable measure rather than
-   being squeezed into a column. */
-.srow-hint {
-  margin-top: 3px;
-  max-width: 64ch;
-}
+  .srow-label {
+    min-width: 0;
+  }
 
-.srow-control {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  padding-top: 2px;
-}
+  /* Hints carry the real explanation, so they get a readable measure rather than
+     being squeezed into a column. */
+  .srow-hint {
+    margin-top: 3px;
+    max-width: 64ch;
+  }
 
-/* ---------------------------------------------------------------- models -- */
+  .srow-control {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    padding-top: 2px;
+  }
 
-.model-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-}
+  /* ---------------------------------------------------------------- models -- */
 
-/* A container, not a control. The row holds its own Delete button, and an
-   interactive element cannot legally sit inside another one — so selection is a
-   button filling the row, and Delete is its sibling. */
-.model {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  width: 100%;
-  padding: var(--s-5);
-  background: var(--surface-1);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xl);
-  text-align: left;
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-}
+  .model-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
 
-.model-select {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-6);
-  min-width: 0;
-  /* Reset the button chrome; the card around it carries the appearance. */
-  margin: 0;
-  padding: 0;
-  background: none;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
+  /* A container, not a control. The row holds its own Delete button, and an
+     interactive element cannot legally sit inside another one — so selection is a
+     button filling the row, and Delete is its sibling. */
+  .model {
+    display: flex;
+    align-items: center;
+    gap: var(--s-4);
+    width: 100%;
+    padding: var(--s-5);
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-xl);
+    text-align: left;
+    transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  }
 
-.model-select:focus-visible {
-  outline: 1px solid var(--live);
-  outline-offset: 3px;
-  border-radius: var(--r-md);
-}
+  .model-select {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-6);
+    min-width: 0;
+    /* Reset the button chrome; the card around it carries the appearance. */
+    margin: 0;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
 
-.model:hover {
-  background: var(--surface-2);
-  border-color: var(--hairline-strong);
-}
+  .model-select:focus-visible {
+    outline: 1px solid var(--live);
+    outline-offset: 3px;
+    border-radius: var(--r-md);
+  }
 
-/* The selected model is the one currently listening, so it earns the accent —
-   consistent with green meaning "this is the live one". */
-.model[data-active="true"] {
-  border-color: var(--live-dim);
-}
+  .model:hover {
+    background: var(--surface-2);
+    border-color: var(--hairline-strong);
+  }
 
-.model-main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  min-width: 0;
-}
+  /* The selected model is the one currently listening, so it earns the accent —
+     consistent with green meaning "this is the live one". */
+  .model[data-active="true"] {
+    border-color: var(--live-dim);
+  }
 
-.model-detail {
-  max-width: 52ch;
-}
+  .model-main {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    min-width: 0;
+  }
 
-.model-id {
-  font-size: 11px;
-  color: var(--faint);
-}
+  .model-detail {
+    max-width: 52ch;
+  }
 
-.model-numbers {
-  display: flex;
-  gap: var(--s-6);
-  flex: none;
-  text-align: right;
-}
+  .model-id {
+    font-size: 11px;
+    color: var(--faint);
+  }
 
-/* ------------------------------------------------------------ dictionary -- */
+  .model-numbers {
+    display: flex;
+    gap: var(--s-6);
+    flex: none;
+    text-align: right;
+  }
 
-.dict-head {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: var(--s-4);
-  padding: var(--s-3) var(--s-5);
-  border-bottom: 1px solid var(--hairline-strong);
-}
+  /* ------------------------------------------------------------ dictionary -- */
 
-.dict-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: var(--s-4);
-  align-items: center;
-  padding: var(--s-3) var(--s-5);
-  border-bottom: 1px solid var(--hairline);
-}
+  .dict-head {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: var(--s-4);
+    padding: var(--s-3) var(--s-5);
+    border-bottom: 1px solid var(--hairline-strong);
+  }
 
-.dict-row:last-child {
-  border-bottom: none;
-}
+  .dict-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: var(--s-4);
+    align-items: center;
+    padding: var(--s-3) var(--s-5);
+    border-bottom: 1px solid var(--hairline);
+  }
 
-.dict-row:hover {
-  background: var(--surface-1);
-}
+  .dict-row:last-child {
+    border-bottom: none;
+  }
 
-.dict-spoken {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--mute);
-}
+  .dict-row:hover {
+    background: var(--surface-1);
+  }
 
-.dict-written {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--ink);
-}
+  .dict-spoken {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--mute);
+  }
 
-.dict-add {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: var(--s-4);
-  align-items: end;
-  padding: var(--s-5);
-  border-top: 1px solid var(--hairline);
-}
+  .dict-written {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink);
+  }
 
-/* ----------------------------------------------------------- style tabs -- */
+  .dict-add {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: var(--s-4);
+    align-items: end;
+    padding: var(--s-5);
+    border-top: 1px solid var(--hairline);
+  }
 
-.style-tabs {
-  display: inline-flex;
-  gap: var(--s-1);
-  padding: var(--s-1);
-  background: var(--surface-1);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
-  align-self: flex-start;
-}
+  /* ----------------------------------------------------------- style tabs -- */
 
-.app-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-}
+  .style-tabs {
+    display: inline-flex;
+    gap: var(--s-1);
+    padding: var(--s-1);
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-lg);
+    align-self: flex-start;
+  }
 
-.app-chip {
-  padding: 4px var(--s-3);
-  background: var(--surface-2);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-sm);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--mute);
-}
+  .app-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
 
-/* ---------------------------------------------------------------- trace -- */
+  .app-chip {
+    padding: 4px var(--s-3);
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--mute);
+  }
 
-.trace {
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
-  overflow: hidden;
-}
+  /* ---------------------------------------------------------------- trace -- */
 
-.trace-row {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: var(--s-4);
-  align-items: baseline;
-  padding: 7px var(--s-4);
-  border-bottom: 1px solid var(--hairline);
-  background: var(--canvas);
-}
+  .trace {
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+  }
 
-.trace-row:last-child {
-  border-bottom: none;
-}
+  .trace-row {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: var(--s-4);
+    align-items: baseline;
+    padding: 7px var(--s-4);
+    border-bottom: 1px solid var(--hairline);
+    background: var(--canvas);
+  }
 
-/* A changed row is the answer to "which rule did this?", so it is the one thing
-   on the screen allowed to be highlighted. */
-.trace-row[data-changed="true"] {
-  background: var(--surface-1);
-}
+  .trace-row:last-child {
+    border-bottom: none;
+  }
 
-.trace-stage {
-  text-align: right;
-  color: var(--faint);
-}
+  /* A changed row is the answer to "which rule did this?", so it is the one thing
+     on the screen allowed to be highlighted. */
+  .trace-row[data-changed="true"] {
+    background: var(--surface-1);
+  }
 
-.trace-out {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--mute);
-  word-break: break-word;
-}
+  .trace-stage {
+    text-align: right;
+    color: var(--faint);
+  }
 
-.trace-out.changed {
-  color: var(--ink);
-}
+  .trace-out {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--mute);
+    word-break: break-word;
+  }
 
-/* ------------------------------------------------------------- try it out -- */
+  .trace-out.changed {
+    color: var(--ink);
+  }
 
-.tryout {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-}
+  /* ------------------------------------------------------------- try it out -- */
 
-.tryout-result {
-  padding: var(--s-4);
-  background: var(--canvas);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--ink);
-  min-height: 44px;
-  word-break: break-word;
-}
+  .tryout {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
 
-.tryout-result[data-empty="true"] {
-  color: var(--faint);
+  .tryout-result {
+    padding: var(--s-4);
+    background: var(--canvas);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-lg);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink);
+    min-height: 44px;
+    word-break: break-word;
+  }
+
+  .tryout-result[data-empty="true"] {
+    color: var(--faint);
+  }
 }
