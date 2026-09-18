@@ -56,6 +56,9 @@ windows = { version = "0.58", features = [
     # so `disarm` can post it a WM_QUIT -- the only way to wake a thread blocked
     # in GetMessageW and get the hook uninstalled.
     "Win32_System_Threading",
+    # RegGetValueW, for the Windows build number and the Transparency effects
+    # setting that decide whether the Hub can show Mica (material.rs).
+    "Win32_System_Registry",
 ] }
 
 [lints.clippy]

@@ -1,7 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import { applyPrefs, readPrefs } from "./hub/theme";
+import { cachedMaterial, initMaterial, syncNativeTheme } from "./hub/material";
+import { applyPrefs, readPrefs, type Mode } from "./hub/theme";
 
 /** Which window this document is: `?window=hub`, `overlay`, or `sheet`. */
 const which = new URLSearchParams(location.search).get("window") ?? "hub";
@@ -22,7 +23,20 @@ document.body.dataset.window = which;
 // Same reasoning for theme: applied before the first paint, so the Hub never
 // flashes the wrong theme while React boots. Only the Hub reads/writes these
 // attributes (themes.css is keyed on them); the overlay and sheet ignore them.
-if (which === "hub") applyPrefs(readPrefs());
+if (which === "hub") {
+  applyPrefs(readPrefs());
+  // Mica or not, from last launch's answer: the window is transparent, so the page
+  // has to know before its first paint whether to draw its own backdrop. The live
+  // answer follows a moment later and corrects a stale cache (a new machine, or
+  // Transparency effects turned off since).
+  const root = document.documentElement;
+  root.dataset.material = cachedMaterial();
+  // Title bar now, while the window is still hidden (it is shown when this page
+  // finishes loading), and again once the live answer may have changed the effect.
+  const sync = () => syncNativeTheme(root.dataset.mode as Mode, "solid" in root.dataset);
+  sync();
+  void initMaterial().then(sync);
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the Hub window. Tauri v2 denies every core API unless it is granted here — custom commands registered through invoke_handler are always allowed, which is why an app with no capability file appears to half-work: commands succeed while every listen() silently fails and the interface freezes with no error anywhere. The Flow Bar overlay is deliberately NOT included: its capabilities live in overlay.json, scoped to only what its own frontend code calls. See that file for why sharing this one with the overlay was a real gap, not caution.",
+  "description": "Permissions for the Hub window. Tauri v2 denies every core API unless it is granted here — custom commands registered through invoke_handler are always allowed, which is why an app with no capability file appears to half-work: commands succeed while every listen() silently fails and the interface freezes with no error anywhere. The Flow Bar overlay is deliberately NOT included: its capabilities live in overlay.json, scoped to only what its own frontend code calls. See that file for why sharing this one with the overlay was a real gap, not caution. allow-set-theme and allow-set-effects are for hub/material.ts: the title bar follows the Hub's light/dark, and Reduce transparency clears Mica. clearEffects() has no permission of its own; it is set_effects with null.",
   "windows": ["hub"],
   "permissions": [
     "core:default",
@@ -23,6 +23,8 @@
     "core:window:allow-hide",
     "core:window:allow-set-focus",
     "core:window:allow-unminimize",
+    "core:window:allow-set-theme",
+    "core:window:allow-set-effects",
 
     "opener:default"
   ]

@@ -19,16 +19,16 @@
         "label": "hub",
         "title": "OpenVoice",
         "url": "index.html?window=hub",
-        "width": 1060,
-        "height": 720,
+        "width": 1100,
+        "height": 740,
         "minWidth": 860,
         "minHeight": 560,
         "center": true,
         "resizable": true,
         "decorations": true,
-        "theme": "Dark",
-        "backgroundColor": "#000000",
-        "visible": true
+        "transparent": true,
+        "windowEffects": { "effects": ["mica"] },
+        "visible": false
       },
       {
         "label": "overlay",

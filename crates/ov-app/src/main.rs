@@ -29,6 +29,7 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 mod clickaway;
 mod engine;
 mod history;
+mod material;
 mod models;
 mod overlay;
 mod settings;
@@ -866,6 +867,25 @@ fn main() {
         // the network until `update::check` is called, which happens either from
         // a button or from the once-per-launch check the user can turn off.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The Hub is created hidden (tauri.conf.json) and shown here, once, when its
+        // page has finished loading. It is a transparent window over Mica, and shown
+        // at creation it was solid white for ~600 ms on a cold start, until the page
+        // arrived. Shown after the load there is nothing to see but Mica and then
+        // the page; `material::repaint` is what makes the Mica show (see there).
+        // Once only, so a reload of a Hub that was closed to the tray does not pop
+        // it back up.
+        .on_page_load(|webview, payload| {
+            static SHOWN: AtomicBool = AtomicBool::new(false);
+            if webview.label() == "hub"
+                && payload.event() == tauri::webview::PageLoadEvent::Finished
+                && !SHOWN.swap(true, Ordering::SeqCst)
+            {
+                show_hub(webview.app_handle());
+                if let Some(win) = webview.app_handle().get_webview_window("hub") {
+                    material::repaint(&win);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_ready,
@@ -904,7 +924,9 @@ fn main() {
             preview_format,
             check_for_update,
             install_update,
-            restart_app
+            restart_app,
+            window_material,
+            windows_transparency
         ])
         .setup(|app| {
             // Built here rather than handed to `manage` in the builder chain: that
@@ -1167,6 +1189,20 @@ fn show_hub_cmd(app: AppHandle, tab: Option<String>) {
     if let (Some(tab), Some(win)) = (tab, app.get_webview_window("hub")) {
         let _ = win.emit("hub-navigate", tab);
     }
+}
+
+/// "mica" when the Hub is actually showing Mica behind its transparent webview,
+/// "none" when the page has to paint its own backdrop. See `material.rs`.
+#[tauri::command]
+fn window_material() -> String {
+    material::decide(material::windows_build(), material::transparency_enabled()).into()
+}
+
+/// Windows "Transparency effects". Off forces the Hub's solid panels whatever the
+/// in-app Reduce transparency switch says.
+#[tauri::command]
+fn windows_transparency() -> bool {
+    material::transparency_enabled()
 }
 
 /// Restart the app so a new speech model can be loaded.
