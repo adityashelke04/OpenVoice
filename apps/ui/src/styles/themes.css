@@ -4,9 +4,15 @@
  *  are changed, from the reference's Google Fonts names to the families
  *  this app bundles via @fontsource (see global.css).
  *
- *  Scoped to attributes the Hub sets (theme.ts): the overlay and sheet
- *  windows never tag <html> this way, so this file has no effect there. */
-:root {
+ *  The six [data-theme][data-mode] blocks below are naturally scoped: only
+ *  the Hub sets those attributes (theme.ts), so they have no effect on the
+ *  overlay or sheet windows. The reference's own top-level `:root` block is
+ *  not scoped that way, and one of its tokens, `--ease`, collides by name
+ *  with legacy tokens.css's `--ease` (same value today, but a silent retime
+ *  of the Flow Bar waiting to happen the day they diverge) which overlay.css
+ *  and ui.css consume. Scoped to `[data-window="hub"]` (set on <html> by
+ *  main.tsx before first paint) so it only ever reaches the Hub. */
+:root[data-window="hub"] {
   --brand: #44d62c;
   --brand-on-light: #2fb81a;
   --display: "Bricolage Grotesque Variable", "Bricolage Grotesque", "Geist Variable", sans-serif;
