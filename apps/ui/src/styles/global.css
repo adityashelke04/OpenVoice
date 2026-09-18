@@ -3,6 +3,7 @@
 @import "@fontsource-variable/bricolage-grotesque/opsz.css";
 @import "@fontsource/borel/400.css";
 @import "./tokens.css";
+@import "./themes.css";
 
 *,
 *::before,
