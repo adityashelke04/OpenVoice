@@ -257,32 +257,83 @@ fn get_user_name() -> Option<String> {
         .and_then(names::first_name)
 }
 
+/// RAII over a re-entry flag: [`AtomicFlagGuard::acquire`] sets it and returns
+/// `None` if it was already set, and dropping a held guard clears it.
+///
+/// Used in place of a bare swap-then-store pair so the flag is released on
+/// *every* exit from the guarded section, including a panic unwinding through
+/// it -- a poisoned `engine.lock().expect("engine")` in [`paste_again_once`]
+/// being the case that matters here. A plain `store(false)` placed after an
+/// `await` is simply never reached if the awaited future panics instead of
+/// resolving, and the flag would then read "pasting" for the rest of the
+/// process.
+struct AtomicFlagGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> AtomicFlagGuard<'a> {
+    fn acquire(flag: &'a AtomicBool) -> Option<Self> {
+        if flag.swap(true, Ordering::SeqCst) {
+            None
+        } else {
+            Some(Self { flag })
+        }
+    }
+}
+
+impl Drop for AtomicFlagGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod atomic_flag_guard_tests {
+    use super::AtomicFlagGuard;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn taking_it_twice_fails_and_dropping_frees_it() {
+        let flag = AtomicBool::new(false);
+
+        let first = AtomicFlagGuard::acquire(&flag).expect("flag was free");
+        assert!(
+            AtomicFlagGuard::acquire(&flag).is_none(),
+            "a second guard must not be handed out while the first is held"
+        );
+
+        drop(first);
+        assert!(
+            AtomicFlagGuard::acquire(&flag).is_some(),
+            "dropping the first guard must free the flag for the next caller"
+        );
+    }
+}
+
 /// Paste a history row into whichever app the user was in before the Hub.
 ///
 /// `paste_last` types into the focused window, which is the Hub itself when its
 /// button is clicked. So: minimise the Hub, wait for Windows to hand focus to the
 /// previous window, then inject through the engine's normal path.
 ///
-/// Guarded by [`AppState::pasting`] so a double click cannot start a second
-/// paste while the first is still minimising the Hub and polling for focus.
-/// The guard is cleared after [`paste_again_once`] resolves, on every path --
-/// success, a failed paste, or an early error -- because it is reset here
-/// rather than at each of that function's own return points.
+/// Guarded by [`AppState::pasting`] via [`AtomicFlagGuard`] so a double click
+/// cannot start a second paste while the first is still minimising the Hub and
+/// polling for focus. Held across the whole call to [`paste_again_once`] --
+/// including the `.await` -- so it releases on every exit: success, a failed
+/// paste, an early `?`, or a panic unwinding out of that function.
 #[tauri::command]
 async fn paste_again(app: AppHandle, text: String) -> Result<String, String> {
-    if app.state::<AppState>().pasting.swap(true, Ordering::SeqCst) {
+    let state = app.state::<AppState>();
+    let Some(_guard) = AtomicFlagGuard::acquire(&state.pasting) else {
         return Err("Already pasting.".to_string());
-    }
-    let result = paste_again_once(app.clone(), text).await;
-    app.state::<AppState>()
-        .pasting
-        .store(false, Ordering::SeqCst);
-    result
+    };
+    paste_again_once(app.clone(), text).await
 }
 
-/// The body of [`paste_again`], factored out so the re-entry guard has exactly
-/// one place to reset regardless of which of this function's several return
-/// points was taken.
+/// The body of [`paste_again`], factored out from under its [`AtomicFlagGuard`]
+/// so this function's several return points -- including an early `?` and a
+/// panic from a poisoned lock -- can all just return or unwind normally; the
+/// guard in the caller releases the flag regardless of which one happens.
 async fn paste_again_once(app: AppHandle, text: String) -> Result<String, String> {
     let engine = app
         .state::<AppState>()
