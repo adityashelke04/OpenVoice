@@ -358,6 +358,10 @@ export function tauriStub({ now = FROZEN_NOW, variant = "normal", prefs, level =
   const listeners = [];
   let nextId = 1;
 
+  // \`listen\`'s unlisten calls this synchronously when a component unmounts;
+  // without it every unmount throws before the unlisten command is sent.
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
+
   window.__TAURI_INTERNALS__ = {
     metadata: {
       currentWindow: { label: "main" },

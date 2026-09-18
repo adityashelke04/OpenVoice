@@ -229,20 +229,38 @@ async function renderApp(browser, shot, w, h, withAxe) {
     });
     await navigate(page, `${BASE}/?window=hub&screen=${shot.screen}`);
     await evaluate(page, "document.fonts.ready.then(() => true)");
-    await sleep(1200);
+
+    // Setup steps that did not happen fail the shot. A hover that silently
+    // missed, or a Dictionary field that was never typed into, produces a
+    // capture of a different state than the reference, and a diff of that
+    // proves nothing either way.
+    const setup = [];
+
+    // Rendered, not merely loaded: the shell's <main> is in the DOM and no
+    // skeleton is left (except in the loading state, whose whole point is the
+    // skeleton). Then a short settle for layout and the hover transition.
+    const loading = shot.state === "loading";
+    const ready = await evaluate(page, `(async () => {
+      const t0 = performance.now();
+      const ok = () => !!document.querySelector("main") && (${loading} || !document.querySelector(".sk, .skeleton"));
+      while (!ok() && performance.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 100));
+      return ok();
+    })()`);
+    if (!ready) setup.push(loading ? "app never rendered (no <main>)" : "app never rendered (no <main>, or a skeleton is still showing)");
+    await sleep(400);
 
     let target = null;
     if (HOVER_ROW.has(`${shot.screen}:${shot.state ?? "normal"}`)) target = "row";
     if (shot.screen === "dictionary") {
       // React owns the field's value, so the write goes through the native
       // setter and a bubbling input event (as in screenshots.mjs).
-      await evaluate(page, `(() => {
+      const typed = await evaluate(page, `(() => {
         const fields = [...document.querySelectorAll("textarea, input")];
         const byLabel = fields.find((el) => {
           const label = el.getAttribute("aria-label") || (el.labels && el.labels[0] && el.labels[0].textContent) || "";
           return /What OpenVoice heard/i.test(label);
         });
-        const el = byLabel || fields.find((i) => (i.placeholder || "").includes("call use effect"));
+        const el = byLabel;
         if (!el) return false;
         const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         Object.getOwnPropertyDescriptor(proto, "value").set.call(el, "um so we need to call use effect here comma then return null");
@@ -250,6 +268,7 @@ async function renderApp(browser, shot, w, h, withAxe) {
         el.blur();
         return true;
       })()`);
+      if (!typed) setup.push('Dictionary field "What OpenVoice heard" missing');
       target = "term";
     }
     if (target) {
@@ -266,6 +285,7 @@ async function renderApp(browser, shot, w, h, withAxe) {
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       })()`);
       if (point) await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+      else setup.push(target === "row" ? "hover target missing (no row with <time>2:39 PM</time>)" : "hover target missing (no .term)");
       await sleep(150);
     }
 
@@ -276,7 +296,7 @@ async function renderApp(browser, shot, w, h, withAxe) {
       axe = await evaluate(page, `axe.run(document, { resultTypes: ["violations"] }).then((r) =>
         r.violations.map((v) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.length })))`);
     }
-    return { png, axe };
+    return { png, axe, setup };
   } finally {
     page.close();
     await browser.send("Target.closeTarget", { targetId });
@@ -320,21 +340,22 @@ async function main() {
       const name = shotName({ ...shot, w, h }) + (region === "full" ? "" : `-${region}`);
       const r = crop(region, w, h);
       const ref = cropPng(await renderReference(browser, fonts, shot, w, h), r);
-      const { png, axe } = await renderApp(browser, shot, w, h, withAxe);
+      const { png, axe, setup } = await renderApp(browser, shot, w, h, withAxe);
       const app = cropPng(png, r);
       const res = diffPngs(ref, app);
       const axeBad = (axe ?? []).filter((v) => v.impact === "serious" || v.impact === "critical");
-      const pass = res.pass && axeBad.length === 0;
+      const pass = res.pass && axeBad.length === 0 && setup.length === 0;
       if (!pass) failed++;
 
       writeFileSync(join(OUT, `${name}-ref.png`), PNG.sync.write(ref));
       writeFileSync(join(OUT, `${name}-app.png`), PNG.sync.write(app));
       writeFileSync(join(OUT, `${name}-diff.png`), PNG.sync.write(res.diff));
-      report.push({ name, ratio: res.ratio, pass, big: res.big, clusters: res.clusters.slice(0, 10), axe });
+      report.push({ name, ratio: res.ratio, pass, big: res.big, clusters: res.clusters.slice(0, 10), axe, setup });
       writeFileSync(join(OUT, "twin-report.json"), JSON.stringify(report, null, 2));
 
       let line = `${pass ? "PASS" : "FAIL"} ${pct(res.ratio)} ${name}`;
       if (res.big.length) line += `  ${res.big.length} cluster(s) over 24x24, largest ${box(res.big.sort((p, q) => q.pixels - p.pixels)[0])}`;
+      if (setup.length) line += `  setup: ${setup.join("; ")}`;
       if (axeBad.length) line += `  axe: ${axeBad.map((v) => `${v.id}(${v.impact})`).join(", ")}`;
       console.log(line);
     }
