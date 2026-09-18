@@ -867,23 +867,13 @@ fn main() {
         // the network until `update::check` is called, which happens either from
         // a button or from the once-per-launch check the user can turn off.
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // The Hub is created hidden (tauri.conf.json) and shown here, once, when its
-        // page has finished loading. It is a transparent window over Mica, and shown
-        // at creation it was solid white for ~600 ms on a cold start, until the page
-        // arrived. Shown after the load there is nothing to see but Mica and then
-        // the page; `material::repaint` is what makes the Mica show (see there).
-        // Once only, so a reload of a Hub that was closed to the tray does not pop
-        // it back up.
+        // The Hub is created hidden (tauri.conf.json) and revealed when its page has
+        // finished loading. See `reveal_hub`.
         .on_page_load(|webview, payload| {
-            static SHOWN: AtomicBool = AtomicBool::new(false);
             if webview.label() == "hub"
                 && payload.event() == tauri::webview::PageLoadEvent::Finished
-                && !SHOWN.swap(true, Ordering::SeqCst)
             {
-                show_hub(webview.app_handle());
-                if let Some(win) = webview.app_handle().get_webview_window("hub") {
-                    material::repaint(&win);
-                }
+                reveal_hub(webview.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -970,6 +960,18 @@ fn main() {
             // UI thread. The window paints immediately and reports progress rather
             // than showing a frozen frame for several seconds.
             spawn_engine(handle.clone());
+
+            // A Hub created hidden must never stay hidden: if its page has not
+            // reported a finished load in 4 s (a stalled dev server, a WebView2
+            // that never fires the event), show it anyway. Late and possibly white
+            // beats a launch that looks like nothing happened.
+            let late = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                if reveal_hub(&late) {
+                    tracing::warn!("hub page never finished loading; shown by the fallback timer");
+                }
+            });
 
             Ok(())
         })
@@ -1215,6 +1217,28 @@ fn windows_transparency() -> bool {
 fn restart_app(app: AppHandle) {
     tracing::info!("restarting to apply a model change");
     app.restart();
+}
+
+/// Set once the Hub has been revealed for the first time, by whichever of the page
+/// load or the fallback timer gets there first.
+static HUB_REVEALED: AtomicBool = AtomicBool::new(false);
+
+/// Show the Hub for the first time. Returns whether this call did it.
+///
+/// The Hub is a transparent window over Mica. Shown at creation it was solid white
+/// for ~600 ms on a cold start, until the page arrived; shown after the load there
+/// is nothing to see but Mica and then the page, and `material::repaint` is what
+/// makes the Mica show (see there). Once only, so a reload of a Hub that was closed
+/// to the tray does not pop it back up.
+fn reveal_hub(app: &AppHandle) -> bool {
+    if HUB_REVEALED.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    show_hub(app);
+    if let Some(win) = app.get_webview_window("hub") {
+        material::repaint(&win);
+    }
+    true
 }
 
 fn show_hub(app: &AppHandle) {

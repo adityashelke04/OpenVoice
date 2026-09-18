@@ -15,18 +15,12 @@
  *  shows up in the console instead of as a title bar that silently never changes. */
 import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { windowMaterial, windowsTransparency } from "./api";
-import { applyPrefs, readPrefs, type Mode } from "./theme";
+import { applyPrefs, onApplied, readPrefs, setForcedSolid, type Mode } from "./theme";
 
 export type Material = "mica" | "none";
 
 const KEY = "ov.material";
-let solidForced = false;
-
-/** True when Windows "Transparency effects" is off: the Hub stays solid whatever
- *  the in-app switch says. Callers that re-apply prefs pass this as `forceSolid`. */
-export function isSolidForced(): boolean {
-  return solidForced;
-}
+const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export async function initMaterial(root: HTMLElement = document.documentElement): Promise<void> {
   const [answer, transparency] = await Promise.all([windowMaterial(), windowsTransparency()]);
@@ -35,10 +29,20 @@ export async function initMaterial(root: HTMLElement = document.documentElement)
   const material: Material = answer === "mica" ? "mica" : "none";
   root.dataset.material = material;
   try { localStorage.setItem(KEY, material); } catch { /* next launch starts from "none" and corrects itself here */ }
-  solidForced = transparency === false;
-  // The saved switch is left alone: turning Windows transparency back on should
-  // bring the glass back without the user having to find the in-app switch too.
-  if (solidForced) applyPrefs(readPrefs(), root, { forceSolid: true });
+  // Windows transparency off forces solid through theme.ts, so every later apply
+  // keeps it. The saved switch is left alone: turning Windows transparency back on
+  // should bring the glass back without the user having to find the in-app switch.
+  setForcedSolid(transparency === false);
+  // Re-apply so the forcing lands now, and so `followTheme` listeners re-sync the
+  // native window against the live material rather than last launch's cache.
+  applyPrefs(readPrefs(), root);
+}
+
+/** Keep the native window (title bar theme, Mica on/off) in step with every
+ *  applied prefs change: the in-app switches, another window's change, and a live
+ *  system light/dark flip. Returns the unsubscribe. */
+export function followTheme(): () => void {
+  return onApplied(syncNativeTheme);
 }
 
 /** The cached answer from the last launch, for the pre-paint tag in main.tsx. */
@@ -65,6 +69,8 @@ function attempt(what: string, run: () => Promise<void>): Promise<void> {
  *  title bar arrived dark and faded to light about half a second after the window
  *  appeared. Nothing is awaited by the caller; the window manager's replies are. */
 export function syncNativeTheme(mode: Mode, solid: boolean): void {
+  // A plain browser (dev server, screenshots without the stub) has no window to theme.
+  if (!inTauri()) return;
   const mica = document.documentElement.dataset.material === "mica";
   let win: ReturnType<typeof getCurrentWindow>;
   try {

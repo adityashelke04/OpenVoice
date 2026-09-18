@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { setMedia } from "../test/setup";
-import { __resetThemeStore, applyPrefs, DEFAULT_PREFS, readPrefs, resolveMode, setPrefs, useTheme, writePrefs } from "./theme";
+import { __resetThemeStore, applyPrefs, DEFAULT_PREFS, onApplied, readPrefs, resolveMode, setForcedSolid, setPrefs, useTheme, writePrefs } from "./theme";
 
 const DARK = "(prefers-color-scheme: dark)";
 const root = document.documentElement;
@@ -82,4 +82,56 @@ it("picks up changes from another window via the storage event", () => {
 it("setPrefs outside React also applies", () => {
   setPrefs({ solid: true });
   expect(root.dataset.solid).toBe("");
+});
+
+describe("forced solid (Windows transparency off)", () => {
+  it("survives a prefs change that does not pass forceSolid", () => {
+    setForcedSolid(true);
+    applyPrefs(readPrefs());
+    expect(root.dataset.solid).toBe("");
+    setPrefs({ theme: "lagoon" });
+    expect(root.dataset.theme).toBe("lagoon");
+    expect(root.dataset.solid).toBe("");
+    // The saved switch is untouched: only the OS forced it.
+    expect(localStorage.getItem("ov.solid")).toBe("0");
+  });
+
+  it("an explicit forceSolid still wins over the flag", () => {
+    setForcedSolid(true);
+    applyPrefs(DEFAULT_PREFS, root, { forceSolid: false });
+    expect(root.dataset.solid).toBeUndefined();
+  });
+
+  it("is cleared by the store reset", () => {
+    setForcedSolid(true);
+    __resetThemeStore();
+    applyPrefs(DEFAULT_PREFS);
+    expect(root.dataset.solid).toBeUndefined();
+  });
+});
+
+describe("onApplied", () => {
+  it("hears every applied change with the resolved mode and solid", () => {
+    const seen: [string, boolean][] = [];
+    const off = onApplied((mode, solid) => seen.push([mode, solid]));
+    setPrefs({ mode: "dark" });
+    setPrefs({ solid: true });
+    expect(seen).toEqual([["dark", false], ["dark", true]]);
+    off();
+    setPrefs({ mode: "light" });
+    expect(seen).toHaveLength(2);
+  });
+
+  // Nothing else may be subscribed (the Hub shell is not wired to useTheme yet),
+  // so registering a listener must itself start watching the system and storage.
+  it("follows a live system flip and another window's change on its own", () => {
+    const seen: string[] = [];
+    onApplied((mode) => seen.push(mode));
+    setPrefs({ mode: "system" });
+    setMedia(DARK, true);
+    expect(seen.at(-1)).toBe("dark");
+    localStorage.setItem("ov.mode", "light");
+    window.dispatchEvent(new StorageEvent("storage", { key: "ov.mode" }));
+    expect(seen.at(-1)).toBe("light");
+  });
 });

@@ -44,19 +44,47 @@ export function resolveMode(choice: ModeChoice): Mode {
   return media(DARK) ? "dark" : "light";
 }
 
+/** Windows "Transparency effects" off, as read from the registry at startup
+ *  (hub/material.ts). Kept here, not there, because every apply has to honour it:
+ *  a flag only the startup call knew about was dropped by the first theme change. */
+let forcedSolid = false;
+export function setForcedSolid(on: boolean) {
+  forcedSolid = on;
+}
+
+export type AppliedListener = (mode: Mode, solid: boolean) => void;
+const applied = new Set<AppliedListener>();
+
 export function applyPrefs(
   p: Prefs,
   root: HTMLElement = document.documentElement,
   opts: { forceDark?: boolean; forceSolid?: boolean } = {},
 ) {
+  const mode: Mode = opts.forceDark ? "dark" : resolveMode(p.mode);
   root.dataset.theme = p.theme;
-  root.dataset.mode = opts.forceDark ? "dark" : resolveMode(p.mode);
+  root.dataset.mode = mode;
   root.dataset.modeChoice = p.mode;
-  // Windows "Transparency effects" off forces solid panels whatever the switch says.
-  // `forceSolid` is the same forcing from the app side (Task 4): the OS setting is
-  // read once at startup and passed down rather than polled through a media query.
-  if (opts.forceSolid || p.solid || media(SOLID)) root.dataset.solid = "";
+  // Windows "Transparency effects" off forces solid panels whatever the switch says:
+  // through the media query where the webview supports it, and through the
+  // registry-read flag where it does not. An explicit `forceSolid` wins over both.
+  const solid = (opts.forceSolid ?? forcedSolid) || p.solid || media(SOLID);
+  if (solid) root.dataset.solid = "";
   else delete root.dataset.solid;
+  applied.forEach((f) => f(mode, solid));
+}
+
+/** Hear every applied change (resolved mode, solid), however it came about: a
+ *  setPrefs, another window's storage write, or the system flipping light/dark.
+ *  This is how the native title bar follows the page without theme.ts importing
+ *  the window code. Registering starts the system/storage watch by itself, since
+ *  nothing else may be subscribed. */
+export function onApplied(f: AppliedListener): () => void {
+  applied.add(f);
+  if (!detach) detach = attach();
+  return () => {
+    applied.delete(f);
+    if (applied.size === 0 && subscribers.size === 0) { detach?.(); detach = null; }
+  };
 }
 
 let current: Prefs | null = null;
@@ -98,7 +126,7 @@ function subscribe(f: () => void) {
   if (!detach) detach = attach();
   return () => {
     subscribers.delete(f);
-    if (subscribers.size === 0) { detach?.(); detach = null; }
+    if (subscribers.size === 0 && applied.size === 0) { detach?.(); detach = null; }
   };
 }
 
@@ -119,4 +147,6 @@ export function __resetThemeStore() {
   detach?.();
   detach = null;
   subscribers.clear();
+  applied.clear();
+  forcedSolid = false;
 }

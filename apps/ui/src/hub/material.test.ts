@@ -13,7 +13,8 @@ const win = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => win, Effect: { Mica: "mica" } }));
 
-import { initMaterial, isSolidForced, syncNativeTheme } from "./material";
+import { followTheme, initMaterial, syncNativeTheme } from "./material";
+import { __resetThemeStore, setPrefs } from "./theme";
 
 const root = document.documentElement;
 /** syncNativeTheme is fire-and-forget; let its lazy import and awaits settle. */
@@ -21,6 +22,8 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 
 beforeEach(() => {
   localStorage.clear();
+  __resetThemeStore();
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
   for (const k of ["material", "solid", "theme", "mode", "modeChoice"]) delete root.dataset[k];
   vi.clearAllMocks();
   vi.restoreAllMocks();
@@ -49,14 +52,15 @@ describe("initMaterial", () => {
     api.windowsTransparency.mockResolvedValue(false);
     await initMaterial();
     expect(root.dataset.solid).toBe("");
-    expect(isSolidForced()).toBe(true);
     expect(localStorage.getItem("ov.solid")).toBeNull();
+    // ...and it is still forced after the next prefs change, which does not know.
+    setPrefs({ theme: "lagoon" });
+    expect(root.dataset.solid).toBe("");
   });
 
   it("leaves panels glass when transparency is on", async () => {
     await initMaterial();
     expect(root.dataset.solid).toBeUndefined();
-    expect(isSolidForced()).toBe(false);
   });
 
   // The screenshot/twin Tauri stub answers every unlisted command with null. That
@@ -67,7 +71,6 @@ describe("initMaterial", () => {
     await initMaterial();
     expect(root.dataset.material).toBe("none");
     expect(root.dataset.solid).toBeUndefined();
-    expect(isSolidForced()).toBe(false);
   });
 
   it("survives storage that throws", async () => {
@@ -119,5 +122,28 @@ describe("syncNativeTheme", () => {
     expect(warn).toHaveBeenCalled();
     // A denied title bar must not stop the effect call after it.
     expect(win.setEffects).toHaveBeenCalled();
+  });
+});
+
+describe("followTheme", () => {
+  it("re-themes the title bar on every applied prefs change", async () => {
+    followTheme();
+    setPrefs({ mode: "light" });
+    expect(win.setTheme).toHaveBeenLastCalledWith("light");
+    setPrefs({ mode: "dark", solid: true });
+    expect(win.setTheme).toHaveBeenLastCalledWith("dark");
+    await settle();
+    expect(win.clearEffects).toHaveBeenCalled();
+  });
+});
+
+describe("in a plain browser", () => {
+  it("does nothing and logs nothing", async () => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    syncNativeTheme("dark", false);
+    await settle();
+    expect(win.setTheme).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 });
