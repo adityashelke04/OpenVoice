@@ -32,8 +32,10 @@ describe("Segmented", () => {
     expect(all.getAttribute("aria-selected")).toBe("true");
     fireEvent.keyDown(all, { key: "ArrowRight" });
     expect(on).toHaveBeenLastCalledWith("editor");
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Code" })); // focus follows
     fireEvent.keyDown(all, { key: "ArrowLeft" });
     expect(on).toHaveBeenLastCalledWith("terminal"); // wraps
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Terminal" }));
     fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
     expect(on).toHaveBeenLastCalledWith("terminal");
   });
@@ -101,7 +103,9 @@ describe("SelectField", () => {
     const sel = screen.getByRole("combobox", { name: "Microphone" }) as HTMLSelectElement;
     expect(sel.value).toBe("a");
     expect(sel.closest("label")!.className).toBe("field");
-    expect(screen.getByText("Microphone A", { selector: "span" })).toBeTruthy();
+    // The visible copy duplicates the select's own value, so it is hidden from
+    // assistive tech; the select alone carries name and value.
+    expect(screen.getByText("Microphone A", { selector: "span" }).getAttribute("aria-hidden")).toBe("true");
     fireEvent.change(sel, { target: { value: "b" } });
     expect(on).toHaveBeenCalledWith("b");
   });
@@ -152,11 +156,23 @@ describe("Card, SettingRow, Keycap, Badge, Notice", () => {
 describe("Slider", () => {
   const stops = [30, 60, 120, 300];
   const fmt = (v: number) => `${v}s`;
-  it("is an accessible slider positioned by value", () => {
-    const { container } = render(<Slider value={120} stops={stops} min={30} max={300} format={fmt} label="Maximum recording" onChange={() => {}} />);
+  it("is a named slider whose range spans its stops", () => {
+    render(<Slider value={120} stops={stops} min={30} max={300} format={fmt} label="Maximum recording" onChange={() => {}} />);
     const s = screen.getByRole("slider", { name: "Maximum recording" });
     expect(s.getAttribute("aria-valuemin")).toBe("30");
     expect(s.getAttribute("aria-valuemax")).toBe("300");
+  });
+  it("reports the reachable range (first and last stop), not the track's", () => {
+    const { container } = render(<Slider value={120} stops={[60, 120, 300]} min={30} max={300} format={fmt} label="Max" onChange={() => {}} />);
+    const s = screen.getByRole("slider");
+    expect(s.getAttribute("aria-valuemin")).toBe("60");
+    expect(s.getAttribute("aria-valuemax")).toBe("300");
+    // positioning still uses the track's min/max
+    expect((container.querySelector(".slider .tr b") as HTMLElement).style.width).toBe(`${((120 - 30) / 270) * 100}%`);
+  });
+  it("positions by value on the track", () => {
+    const { container } = render(<Slider value={120} stops={stops} min={30} max={300} format={fmt} label="Maximum recording" onChange={() => {}} />);
+    const s = screen.getByRole("slider", { name: "Maximum recording" });
     expect(s.getAttribute("aria-valuenow")).toBe("120");
     expect(s.getAttribute("aria-valuetext")).toBe("120s");
     expect(container.querySelector(".slider .val")!.textContent).toBe("120s");
@@ -182,7 +198,9 @@ describe("Slider", () => {
     const { container } = render(<Slider value={60} stops={stops} min={30} max={300} format={fmt} label="Max" onChange={on} />);
     const tr = container.querySelector(".slider .tr") as HTMLElement;
     tr.getBoundingClientRect = () => ({ left: 0, width: 270, top: 0, height: 6, right: 270, bottom: 6, x: 0, y: 0, toJSON() {} });
-    fireEvent.pointerDown(tr, { clientX: 260, pointerId: 1 });
+    fireEvent.pointerDown(tr, { clientX: 260, pointerId: 1, button: 2 }); // right-click: ignored
+    expect(on).not.toHaveBeenCalled();
+    fireEvent.pointerDown(tr, { clientX: 260, pointerId: 1, button: 0 });
     expect(on).toHaveBeenLastCalledWith(300);
   });
 });
@@ -197,5 +215,16 @@ describe("installTauri", () => {
     expect(t.calls.map((c) => c.cmd)).toEqual(["get_user_name", "plugin:event|listen", "unknown"]);
     t.uninstall();
     expect("__TAURI_INTERNALS__" in window).toBe(false);
+  });
+  it("supports the real listen/unlisten round trip, and only answers its own handlers", async () => {
+    const t = installTauri({});
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen("engine", () => {});
+    await expect(unlisten()).resolves.toBeUndefined();
+    expect(t.calls.map((c) => c.cmd)).toEqual(["plugin:event|listen", "plugin:event|unlisten"]);
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: string, a?: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    expect(await internals.invoke("toString", {})).toBeNull(); // inherited keys are not handlers
+    t.uninstall();
+    expect("__TAURI_EVENT_PLUGIN_INTERNALS__" in window).toBe(false);
   });
 });

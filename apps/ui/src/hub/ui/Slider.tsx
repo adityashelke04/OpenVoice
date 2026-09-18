@@ -37,6 +37,7 @@ export function Slider({ value, stops, min, max, format, label, onChange }: {
   };
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return; // a right-click opens a menu; it does not set the value
     dragging.current = true;
     e.currentTarget.setPointerCapture?.(e.pointerId);
     fromPointer(e.clientX);
@@ -50,8 +51,10 @@ export function Slider({ value, stops, min, max, format, label, onChange }: {
       role="slider"
       tabIndex={0}
       aria-label={label}
-      aria-valuemin={min}
-      aria-valuemax={max}
+      // The announced range is what the user can actually reach; `min`/`max`
+      // only lay out the track.
+      aria-valuemin={stops[0]}
+      aria-valuemax={stops[stops.length - 1]}
       aria-valuenow={value}
       aria-valuetext={format(value)}
       onKeyDown={onKey}

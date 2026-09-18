@@ -17,7 +17,8 @@ export function SelectField({ value, options, onChange, display, width, label, d
   const shown = display ?? options.find((o) => o.value === value)?.label ?? "";
   return (
     <label className="field" style={width ? { width } : undefined}>
-      <span className="sel-display">{shown}</span>
+      {/* Hidden from assistive tech: the select already announces its value. */}
+      <span className="sel-display" aria-hidden>{shown}</span>
       <CaretDown className="caret" aria-hidden />
       <select aria-label={label} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}

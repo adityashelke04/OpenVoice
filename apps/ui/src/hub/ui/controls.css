@@ -65,7 +65,10 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
 .meter i.off { background: var(--edge); }
 
 /* -- Additions (plan Task 6, step 3) ---------------------------------------- */
-.seg > button, .modes > button { border: 0; background: none; cursor: pointer; font: inherit; }
+/* Longhands, not `font: inherit`: this rule has the same specificity as the
+   ported `.seg > button` above and comes later, so the shorthand would reset
+   the reference's 12px/500 (13px on .lg) back to the parent's 14px/400. */
+.seg > button, .modes > button { border: 0; background: none; cursor: pointer; font-family: inherit; line-height: inherit; }
 .field { position: relative; }
 .field input, .field textarea { flex: 1; min-width: 0; border: 0; background: none; outline: none; font: inherit; color: inherit; padding: 0; }
 .field input::placeholder, .field textarea::placeholder { color: var(--mute); opacity: 1; }
