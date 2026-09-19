@@ -148,7 +148,7 @@ export function Hub() {
   } else if (!settings) {
     // Settings arrive asynchronously; a blank pane for a beat reads as broken.
     body = (
-      <div className="legacy-scroll">
+      <div className="legacy-scroll legacy-screen">
         <div className="sk" style={{ height: 140 }} />
         <div className="sk" style={{ height: 140 }} />
       </div>
@@ -160,7 +160,7 @@ export function Hub() {
     body = <ProfilesScreen settings={settings} patch={patch} />;
   } else {
     body = (
-      <div className="legacy-scroll">
+      <div className="legacy-scroll legacy-screen">
         {screen === "models" && <ModelsScreen settings={settings} patch={patch} />}
         {screen === "settings" && <SettingsScreen settings={settings} patch={patch} error={settingsError} levelRef={levelRef} />}
         {screen === "advanced" && <AdvancedScreen settings={settings} />}
@@ -194,7 +194,6 @@ export function Hub() {
         onNavigate={setScreen}
         lastRow={lastRow}
         onCopyLast={() => void lastAct.copy()}
-        onPasteLast={() => void lastAct.paste()}
       />
     </MotionConfig>
   );

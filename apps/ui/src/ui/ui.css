@@ -47,7 +47,7 @@
   }
 }
 
-:where(html:not([data-window="hub"])) {
+:where(html:not([data-window="hub"]), .legacy-screen) {
   /* Primitive components. Rules and reasoning live in DESIGN.md §"Component rules".
    *
    * Two things hold this system together and are easy to erode:

@@ -59,7 +59,7 @@ afterEach(() => {
 });
 
 describe("Home", () => {
-  it("shows the last dictation with Copy, Paste again and Fix a word", async () => {
+  it("shows the last dictation with Copy and Fix a word", async () => {
     tauri = bridge();
     renderHome();
     expect(await screen.findByText(ROWS[0].final_text)).toBeTruthy();
@@ -70,7 +70,7 @@ describe("Home", () => {
     expect(within(card).getByText("2 min ago")).toBeTruthy();
     expect(within(card).getByText("Pasted").closest(".status-ok")).toBeTruthy();
     const buttons = within(card).getAllByRole("button");
-    expect(buttons.map((b) => b.textContent)).toEqual(["CopyCtrl C", "Paste again", "Fix a word"]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["CopyCtrl C", "Fix a word"]);
     expect(buttons[0].className).toBe("btn primary");
     expect(within(card).getByText("49 words, 604 ms")).toBeTruthy();
   });
@@ -94,50 +94,6 @@ describe("Home", () => {
     expect(within(card).getByRole("button", { name: /^Copy/ }).textContent).toBe("CopyCtrl C");
   });
 
-  it("Paste again calls paste_again with the row text and says Pasted", async () => {
-    tauri = bridge();
-    renderHome();
-    await screen.findByText(ROWS[0].final_text);
-    const card = lastCard();
-    await act(async () => { fireEvent.click(within(card).getByRole("button", { name: "Paste again" })); });
-    expect(tauri.calls).toContainEqual({ cmd: "paste_again", args: { text: ROWS[0].final_text } });
-    expect(await within(card).findByRole("button", { name: "Pasted" })).toBeTruthy();
-  });
-
-  it("Paste again that fell back to the clipboard leaves the label and adds no toast of its own", async () => {
-    tauri = bridge(ROWS, { paste_again: () => "copied" });
-    renderHome();
-    await screen.findByText(ROWS[0].final_text);
-    const card = lastCard();
-    await act(async () => { fireEvent.click(within(card).getByRole("button", { name: "Paste again" })); });
-    expect(within(card).getByRole("button", { name: "Paste again" })).toBeTruthy();
-    expect(within(card).queryByRole("button", { name: "Pasted" })).toBeNull();
-    expect(toasts()).toEqual([]);
-  });
-
-  it("Paste again that fails says so in a danger toast", async () => {
-    tauri = bridge(ROWS, { paste_again: () => Promise.reject("The speech engine is not running, so nothing can be pasted.") });
-    renderHome();
-    await screen.findByText(ROWS[0].final_text);
-    await act(async () => { fireEvent.click(within(lastCard()).getByRole("button", { name: "Paste again" })); });
-    expect(toasts().map((t) => [t.tone, t.message])).toEqual([["danger", "The speech engine is not running, so nothing can be pasted."]]);
-    expect(within(lastCard()).getByRole("button", { name: "Paste again" })).toBeTruthy();
-  });
-
-  it("Paste again is one call at a time: disabled while pending", async () => {
-    let finish: (v: string) => void = () => {};
-    tauri = bridge(ROWS, { paste_again: () => new Promise<string>((r) => { finish = r; }) });
-    renderHome();
-    await screen.findByText(ROWS[0].final_text);
-    const button = within(lastCard()).getByRole("button", { name: "Paste again" }) as HTMLButtonElement;
-    await act(async () => { fireEvent.click(button); });
-    expect(button.disabled).toBe(true);
-    await act(async () => { fireEvent.click(button); });
-    expect(tauri.calls.filter((c) => c.cmd === "paste_again")).toHaveLength(1);
-    await act(async () => { finish("pasted"); });
-    expect((within(lastCard()).getByRole("button", { name: "Pasted" }) as HTMLButtonElement).disabled).toBe(false);
-  });
-
   it("Copy that fails says so in a danger toast and does not claim Copied", async () => {
     tauri = bridge();
     renderHome();
@@ -150,16 +106,16 @@ describe("Home", () => {
     expect(within(lastCard()).queryByRole("button", { name: "Copied" })).toBeNull();
   });
 
-  it("failed paste: amber card, Paste again is primary, clipboard note", async () => {
+  it("failed paste: amber card, Copy is the amber primary, clipboard note", async () => {
     tauri = bridge([FAILED_ROW, ...ROWS.slice(1)]);
     renderHome();
     await screen.findByText(FAILED_ROW.final_text);
     const card = lastCard();
     expect(card.classList.contains("fail")).toBe(true);
     const first = within(card).getAllByRole("button")[0];
-    expect(first.textContent).toBe("Paste again");
+    expect(first.textContent).toBe("CopyCtrl C");
     expect(first.className).toBe("btn warnp");
-    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual(["Paste again", "Copy", "Fix a word"]);
+    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual(["CopyCtrl C", "Fix a word"]);
     expect(within(card).getByText("This didn’t paste into Outlook, so it’s on your clipboard.")).toBeTruthy();
     expect(within(card).getByText("29 words")).toBeTruthy();
     expect(within(card).getByText("just now")).toBeTruthy();
@@ -286,10 +242,10 @@ describe("Home", () => {
     fireEvent.click(rowA);
     expect(a.getAttribute("aria-expanded")).toBe("true");
     const more = rowA.querySelector(".row-more") as HTMLElement;
-    expect(within(more).getAllByRole("button").map((x) => x.textContent)).toEqual(["Copy", "Paste again", "Fix a word"]);
+    expect(within(more).getAllByRole("button").map((x) => x.textContent)).toEqual(["Copy", "Fix a word"]);
     expect(within(more).getAllByRole("button").every((x) => x.classList.contains("sm"))).toBe(true);
-    await act(async () => { fireEvent.click(within(more).getByRole("button", { name: "Paste again" })); });
-    expect(tauri.calls).toContainEqual({ cmd: "paste_again", args: { text: "So we need to call useEffect here, then return null" } });
+    await act(async () => { fireEvent.click(within(more).getByRole("button", { name: "Copy" })); });
+    expect(writeText()).toHaveBeenCalledWith("So we need to call useEffect here, then return null");
     expect(a.getAttribute("aria-expanded")).toBe("true"); // an action inside does not collapse it
     // Opening another row closes the first.
     fireEvent.click(b);

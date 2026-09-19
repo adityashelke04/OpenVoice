@@ -18,10 +18,9 @@ const HIST_ROW: Row = {
 
 /** A thin harness: an "opener" button owns focus and open state, the way the
  *  search button and Ctrl+K really open the palette. */
-function Harness({ onNavigate = () => {}, onCopyLast = () => {}, onPasteLast = () => {}, lastRow }: {
+function Harness({ onNavigate = () => {}, onCopyLast = () => {}, lastRow }: {
   onNavigate?: (id: string) => void;
   onCopyLast?: () => void;
-  onPasteLast?: () => void;
   lastRow?: Row;
 }) {
   const [open, setOpen] = useState(false);
@@ -34,7 +33,6 @@ function Harness({ onNavigate = () => {}, onCopyLast = () => {}, onPasteLast = (
         onNavigate={onNavigate as never}
         lastRow={lastRow}
         onCopyLast={onCopyLast}
-        onPasteLast={onPasteLast}
       />
     </div>
   );
@@ -123,20 +121,6 @@ describe("CommandPalette", () => {
     await waitFor(() => expect(screen.getByText("kubectl get pods")).toBeTruthy());
     fireEvent.click(screen.getByText("kubectl get pods"));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("kubectl get pods"));
-  });
-
-  it("Ctrl+Enter on a History row pastes it again", async () => {
-    const { calls } = withTauri({ get_history: () => [HIST_ROW], paste_again: () => "pasted" });
-    render(<Harness />);
-    openPalette();
-    const input = screen.getByPlaceholderText(placeholder);
-    fireEvent.change(input, { target: { value: "ku" } });
-    await waitFor(() => expect(screen.getByText("kubectl get pods")).toBeTruthy());
-    // The History row is the last item in the list; End moves cmdk's own
-    // highlight to it without triggering a select the way a click would.
-    fireEvent.keyDown(input, { key: "End" });
-    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
-    await waitFor(() => expect(calls.some((c) => c.cmd === "paste_again" && c.args?.text === "kubectl get pods")).toBe(true));
   });
 
   it("Copy last dictation calls onCopyLast and closes", async () => {

@@ -3,7 +3,7 @@
  * adds zero specificity. This file goes once the last legacy screen is
  * rewritten (Task 15). */
 
-:where(html:not([data-window="hub"])) {
+:where(html:not([data-window="hub"]), .legacy-screen) {
   /* Shared layout for Hub screens. */
 
   .screen {

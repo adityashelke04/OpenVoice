@@ -22,12 +22,12 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Command } from "cmdk";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  ClockCounterClockwise, Copy, Desktop, FolderOpen, Moon, Palette, Sun, ArrowUDownLeft,
+  ClockCounterClockwise, Copy, Desktop, FolderOpen, Moon, Palette, Sun,
 } from "@phosphor-icons/react";
 import { AppChip } from "./ui";
 import { getHistory } from "./api";
 import { NAV, type ScreenId } from "./nav";
-import { copyText, pasteText } from "./home/useCopyPaste";
+import { copyText } from "./home/useCopyPaste";
 import { openDataDir } from "../engine/settings";
 import { rowKey } from "./history";
 import { clockTime } from "./time";
@@ -47,10 +47,9 @@ export interface CommandPaletteProps {
   onNavigate: (id: ScreenId) => void;
   lastRow?: Row;
   onCopyLast: () => void;
-  onPasteLast: () => void;
 }
 
-export function CommandPalette({ open, onClose, onNavigate, lastRow, onCopyLast, onPasteLast }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onNavigate, lastRow, onCopyLast }: CommandPaletteProps) {
   const { setTheme, setMode } = useTheme();
   const [query, setQuery] = useState("");
   const [historyRows, setHistoryRows] = useState<Row[]>([]);
@@ -108,7 +107,6 @@ export function CommandPalette({ open, onClose, onNavigate, lastRow, onCopyLast,
 
   const actionItems: Entry[] = [
     ...(lastRow ? [{ value: "action:copy-last", label: "Copy last dictation", icon: <Copy aria-hidden />, onSelect: onCopyLast }] : []),
-    ...(lastRow ? [{ value: "action:paste-last", label: "Paste last dictation again", icon: <ArrowUDownLeft aria-hidden />, onSelect: onPasteLast }] : []),
     ...THEMES.map((t): Entry => ({
       value: `action:theme-${t}`, label: `Theme: ${THEME_LABEL[t]}`, icon: <Palette aria-hidden />, onSelect: () => setTheme(t),
     })),
@@ -123,13 +121,6 @@ export function CommandPalette({ open, onClose, onNavigate, lastRow, onCopyLast,
       e.preventDefault();
       onClose();
       return;
-    }
-    if (e.key === "Enter" && e.ctrlKey) {
-      const row = historyRows.find((r) => `hist:${rowKey(r)}` === activeValue);
-      if (row) {
-        e.preventDefault();
-        select(() => void pasteText(row.final_text));
-      }
     }
   };
 
