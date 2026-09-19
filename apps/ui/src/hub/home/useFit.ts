@@ -3,20 +3,30 @@
  *  The list has no scrollbar of its own: History is where scrolling lives. So
  *  after layout every row whose bottom would cross the container's is hidden
  *  outright, and a day label left with no visible row under it goes too, or the
- *  list would end on "YESTERDAY" and nothing. The open row is never hidden: it
- *  is the one the user is looking at, so it clips instead.
+ *  list would end on "YESTERDAY" and nothing.
+ *
+ *  Except while a row is open. An open row (and its Fix a word panel) can be
+ *  taller than the space below it, and clipping the actions the user just asked
+ *  for is worse than a scrollbar. So while any row is open nothing is hidden,
+ *  the list scrolls (Earlier sets `.rows.scrolling`), and the open row scrolls
+ *  itself into view (`revealInList`). Closing it returns to the fitted list,
+ *  scrolled back to the top.
  *
  *  Re-runs after every render that changes `deps` and whenever the container
  *  resizes (window resize, the card above growing). Everything is un-hidden
  *  first, so a taller window gets its rows back. */
 import { useLayoutEffect, type DependencyList, type RefObject } from "react";
 
+const anyOpen = (box: HTMLElement) => box.querySelector('[aria-expanded="true"]') !== null;
+
 export function fitChildren(box: HTMLElement) {
   const kids = [...box.children] as HTMLElement[];
   for (const k of kids) k.hidden = false;
+  if (anyOpen(box)) return;
+  box.scrollTop = 0;
   const limit = box.getBoundingClientRect().bottom;
   for (const k of kids) {
-    if (k.classList.contains("day") || k.getAttribute("aria-expanded") === "true") continue;
+    if (k.classList.contains("day")) continue;
     if (k.getBoundingClientRect().bottom > limit + 0.5) k.hidden = true;
   }
   // A day label needs at least one visible row before the next label.
@@ -28,6 +38,18 @@ export function fitChildren(box: HTMLElement) {
     }
     k.hidden = !shown;
   });
+}
+
+/** Scroll the list holding `el` just enough to show it ("nearest"), or its top
+ *  if it is taller than the list. Only the list moves: `scrollIntoView` would
+ *  also scroll the page's overflow-hidden ancestors when the row is taller than
+ *  they are, shifting the whole screen. */
+export function revealInList(el: HTMLElement) {
+  const list = el.closest<HTMLElement>(".rows");
+  if (!list) return;
+  const b = list.getBoundingClientRect(), r = el.getBoundingClientRect();
+  if (r.top < b.top) list.scrollTop -= b.top - r.top;
+  else if (r.bottom > b.bottom) list.scrollTop += Math.min(r.bottom - b.bottom, r.top - b.top);
 }
 
 export function useFit(ref: RefObject<HTMLElement | null>, deps: DependencyList) {

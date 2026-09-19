@@ -29,6 +29,7 @@ export function Actions({ act, kind, fixOpen, onFix }: {
       key="paste"
       size={size}
       variant={kind === "failed" ? "warn" : "default"}
+      disabled={act.pasting}
       icon={act.pasted ? <Check weight="bold" aria-hidden /> : <ArrowUDownLeft weight={kind === "failed" ? "bold" : "regular"} aria-hidden />}
       onClick={() => void act.paste()}
     >

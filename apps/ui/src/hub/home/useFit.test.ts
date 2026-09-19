@@ -8,7 +8,7 @@ function box(bottom: number, kids: [cls: string, top: number, bottom: number, op
   for (const [cls, t, b, open] of kids) {
     const k = document.createElement("div");
     k.className = cls;
-    if (open) k.setAttribute("aria-expanded", "true");
+    if (open) { const t = document.createElement("button"); t.setAttribute("aria-expanded", "true"); k.appendChild(t); }
     k.getBoundingClientRect = () => ({ top: t, bottom: b } as DOMRect);
     el.appendChild(k);
   }
@@ -30,9 +30,19 @@ describe("fitChildren", () => {
     fitChildren(el);
     expect(hidden(el)).toEqual([false, false, false]);
   });
-  it("never hides the open row", () => {
-    const el = box(100, [["day", 0, 25], ["row", 25, 73], ["row", 73, 200, true]]);
+  it("hides nothing while a row is open: the list scrolls instead", () => {
+    const el = box(100, [["day", 0, 25], ["row", 25, 73], ["row", 73, 200, true], ["day", 200, 225], ["row", 225, 273]]);
+    let top = 55;
+    Object.defineProperty(el, "scrollTop", { configurable: true, get: () => top, set: (v: number) => { top = v; } });
     fitChildren(el);
-    expect(hidden(el)).toEqual([false, false, false]);
+    expect(hidden(el)).toEqual([false, false, false, false, false]);
+    expect(top).toBe(55); // the open row's scroll position is kept
+  });
+  it("returns to the top when it fits again", () => {
+    const el = box(100, [["day", 0, 25], ["row", 25, 73]]);
+    let top = 55;
+    Object.defineProperty(el, "scrollTop", { configurable: true, get: () => top, set: (v: number) => { top = v; } });
+    fitChildren(el);
+    expect(top).toBe(0);
   });
 });

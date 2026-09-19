@@ -28,7 +28,9 @@ export function Earlier({ rows, filter, onFilter, total, onOpenHistory, dict, no
   now: number;
   patch: (fn: (s: Settings) => void) => void;
 }) {
-  const [open, setOpen] = useState<string | null>(null);
+  const [picked, setOpen] = useState<string | null>(null);
+  // A row that left the list (new filter, new dictation) is no longer open.
+  const open = picked && rows.some((r) => rowKey(r) === picked) ? picked : null;
   const box = useRef<HTMLDivElement>(null);
   useFit(box, [rows, open, now]);
 
@@ -41,7 +43,7 @@ export function Earlier({ rows, filter, onFilter, total, onOpenHistory, dict, no
           {total.toLocaleString("en-US")} total <CaretRight aria-hidden />
         </button>
       </div>
-      <div className="rows" ref={box}>
+      <div className={open ? "rows scrolling" : "rows"} ref={box}>
         {groupByDay(rows, now).flatMap((g) => [
           <div key={`d${g.key}`} className="day">{g.label}</div>,
           ...g.rows.map((r) => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { HomeScreen } from "./HomeScreen";
 import { installTauri } from "../../test/tauri";
+import { dismissToast, getToasts } from "../toast";
 import { DICTIONARY, FAILED_ROW, NOW, ROWS, TOTALS } from "../../test/fixtures";
 import type { LiveView } from "../../engine/useLiveEngine";
 import type { Settings } from "../../engine/settings";
@@ -37,11 +38,18 @@ function renderHome(view: Partial<LiveView> = {}) {
 
 const lastCard = () => screen.getByRole("article", { name: "Your last dictation" });
 
+/** The toast store's current contents (read without rendering, so it is safe inside waitFor). */
+const toasts = () => [...getToasts()];
+/** A row's disclosure button (time + text), found from its text. */
+const toggleOf = (text: string) => (screen.getByText(text).closest(".row") as HTMLElement).querySelector(".row-toggle") as HTMLButtonElement;
+
 let tauri: ReturnType<typeof installTauri> | null = null;
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["Date"] });
+  // Date only, and advancing with real time so waitFor can still time out.
+  vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
   vi.setSystemTime(NOW);
   writeText().mockClear();
+  toasts().forEach((t) => dismissToast(t.id));
 });
 afterEach(() => {
   tauri?.uninstall();
@@ -104,6 +112,42 @@ describe("Home", () => {
     await act(async () => { fireEvent.click(within(card).getByRole("button", { name: "Paste again" })); });
     expect(within(card).getByRole("button", { name: "Paste again" })).toBeTruthy();
     expect(within(card).queryByRole("button", { name: "Pasted" })).toBeNull();
+    expect(toasts()).toEqual([]);
+  });
+
+  it("Paste again that fails says so in a danger toast", async () => {
+    tauri = bridge(ROWS, { paste_again: () => Promise.reject("The speech engine is not running, so nothing can be pasted.") });
+    renderHome();
+    await screen.findByText(ROWS[0].final_text);
+    await act(async () => { fireEvent.click(within(lastCard()).getByRole("button", { name: "Paste again" })); });
+    expect(toasts().map((t) => [t.tone, t.message])).toEqual([["danger", "The speech engine is not running, so nothing can be pasted."]]);
+    expect(within(lastCard()).getByRole("button", { name: "Paste again" })).toBeTruthy();
+  });
+
+  it("Paste again is one call at a time: disabled while pending", async () => {
+    let finish: (v: string) => void = () => {};
+    tauri = bridge(ROWS, { paste_again: () => new Promise<string>((r) => { finish = r; }) });
+    renderHome();
+    await screen.findByText(ROWS[0].final_text);
+    const button = within(lastCard()).getByRole("button", { name: "Paste again" }) as HTMLButtonElement;
+    await act(async () => { fireEvent.click(button); });
+    expect(button.disabled).toBe(true);
+    await act(async () => { fireEvent.click(button); });
+    expect(tauri.calls.filter((c) => c.cmd === "paste_again")).toHaveLength(1);
+    await act(async () => { finish("pasted"); });
+    expect((within(lastCard()).getByRole("button", { name: "Pasted" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("Copy that fails says so in a danger toast and does not claim Copied", async () => {
+    tauri = bridge();
+    renderHome();
+    await screen.findByText(ROWS[0].final_text);
+    writeText().mockRejectedValueOnce(new Error("Document is not focused."));
+    await act(async () => { fireEvent.click(within(lastCard()).getByRole("button", { name: /^Copy/ })); });
+    const [t] = toasts();
+    expect(t.tone).toBe("danger");
+    expect(t.message).toContain("Document is not focused.");
+    expect(within(lastCard()).queryByRole("button", { name: "Copied" })).toBeNull();
   });
 
   it("failed paste: amber card, Paste again is primary, clipboard note", async () => {
@@ -145,6 +189,18 @@ describe("Home", () => {
     await waitFor(() => expect(within(earlier).queryByText("kubectl get pods")).toBeNull());
     expect(within(earlier).getByText("So we need to call useEffect here, then return null")).toBeTruthy();
     expect(within(earlier).getByRole("tab", { name: "Code" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("a filtered read that fails keeps the rows and the tab, and says why", async () => {
+    tauri = bridge(ROWS, { get_history: (a: any) => (a?.profile ? Promise.reject("database is locked") : ROWS) });
+    renderHome();
+    await screen.findByText(ROWS[0].final_text);
+    const earlier = screen.getByRole("region", { name: "Earlier dictations" });
+    fireEvent.click(within(earlier).getByRole("tab", { name: "Code" }));
+    await waitFor(() => expect(toasts().map((t) => [t.tone, t.message])).toEqual([["danger", "database is locked"]]));
+    expect(within(earlier).getByText("kubectl get pods")).toBeTruthy();
+    expect(within(earlier).getByText("git status")).toBeTruthy();
+    await waitFor(() => expect(within(earlier).getByRole("tab", { name: "All" }).getAttribute("aria-selected")).toBe("true"));
   });
 
   it("Earlier leaves the last dictation out even when the filter matches it", async () => {
@@ -193,33 +249,92 @@ describe("Home", () => {
     const row = screen.getByText("kubectl get pods").closest(".row") as HTMLElement;
     await act(async () => { fireEvent.click(within(row).getByRole("button", { name: "Copy" })); });
     expect(writeText()).toHaveBeenCalledWith("kubectl get pods");
-    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(toggleOf("kubectl get pods").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("rows are disclosures: time and text are a button that controls the open panel", async () => {
+    tauri = bridge();
+    renderHome();
+    await screen.findByText(ROWS[0].final_text);
+    const row = screen.getByText("So we need to call useEffect here, then return null").closest(".row") as HTMLElement;
+    const toggle = within(row).getByRole("button", { name: /2:39 PM\s*So we need to call useEffect/ });
+    expect(toggle.className).toBe("row-toggle");
+    expect(toggle.getAttribute("type")).toBe("button"); // a real button: Enter and Space work natively
+    expect(toggle.querySelector("time")!.textContent).toBe("2:39 PM");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const more = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(more.className).toBe("row-more");
+    expect(row.contains(more)).toBe(true);
+    expect(more.hidden).toBe(true);
+    // The copy button is a sibling of the toggle, never inside it.
+    expect(toggle.querySelector("button")).toBeNull();
+    expect(within(row).getByRole("button", { name: "Copy" }).closest(".row-toggle")).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(more.hidden).toBe(false);
   });
 
   it("clicking a row expands it with the same actions; one open at a time", async () => {
     tauri = bridge();
     renderHome();
     await screen.findByText(ROWS[0].final_text);
-    const a = screen.getByText("So we need to call useEffect here, then return null").closest(".row") as HTMLElement;
-    const b = screen.getByText("kubectl get pods").closest(".row") as HTMLElement;
+    const a = toggleOf("So we need to call useEffect here, then return null");
+    const b = toggleOf("kubectl get pods");
+    const rowA = a.closest(".row") as HTMLElement;
     expect(a.getAttribute("aria-expanded")).toBe("false");
-    expect(a.getAttribute("tabindex")).toBe("0");
-    fireEvent.click(a);
+    // A click on the row's bare background toggles too (mouse convenience).
+    fireEvent.click(rowA);
     expect(a.getAttribute("aria-expanded")).toBe("true");
-    const more = a.querySelector(".row-more") as HTMLElement;
-    expect(more).toBeTruthy();
+    const more = rowA.querySelector(".row-more") as HTMLElement;
     expect(within(more).getAllByRole("button").map((x) => x.textContent)).toEqual(["Copy", "Paste again", "Fix a word"]);
     expect(within(more).getAllByRole("button").every((x) => x.classList.contains("sm"))).toBe(true);
     await act(async () => { fireEvent.click(within(more).getByRole("button", { name: "Paste again" })); });
     expect(tauri.calls).toContainEqual({ cmd: "paste_again", args: { text: "So we need to call useEffect here, then return null" } });
     expect(a.getAttribute("aria-expanded")).toBe("true"); // an action inside does not collapse it
-    // Keyboard: Enter on another row opens it and closes the first.
-    fireEvent.keyDown(b, { key: "Enter" });
+    // Opening another row closes the first.
+    fireEvent.click(b);
     expect(b.getAttribute("aria-expanded")).toBe("true");
     expect(a.getAttribute("aria-expanded")).toBe("false");
-    expect(a.querySelector(".row-more")).toBeNull();
-    fireEvent.keyDown(b, { key: " " });
+    expect((rowA.querySelector(".row-more") as HTMLElement).hidden).toBe(true);
+    expect(within(rowA.querySelector(".row-more") as HTMLElement).queryAllByRole("button")).toHaveLength(0);
+    fireEvent.click(b);
     expect(b.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("an open row and its Fix panel stay reachable: the list scrolls them into view", async () => {
+    tauri = bridge();
+    renderHome();
+    await screen.findByText(ROWS[0].final_text);
+    const earlier = screen.getByRole("region", { name: "Earlier dictations" });
+    const list = earlier.querySelector(".rows") as HTMLElement;
+    let scrollTop = 0;
+    Object.defineProperty(list, "scrollTop", { configurable: true, get: () => scrollTop, set: (v: number) => { scrollTop = v; } });
+    // Layout: the list shows 0..300; the Notion row sits at 260..308, and with
+    // Fix a word open it reaches down to 460.
+    let openBottom = 380;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === list) return { top: 0, bottom: 300 } as DOMRect;
+      if (this.classList.contains("row") && this.classList.contains("open")) return { top: 260 - scrollTop, bottom: openBottom - scrollTop } as DOMRect;
+      return { top: 0, bottom: 0 } as DOMRect;
+    });
+    try {
+      const toggle = toggleOf("The resampler runs at 16 kHz mono, so the sidecar never has to guess.");
+      fireEvent.click(toggle);
+      expect(list.classList.contains("scrolling")).toBe(true);
+      expect([...list.children].some((k) => (k as HTMLElement).hidden)).toBe(false); // no fitting while open
+      expect(scrollTop).toBe(80); // bottom edge brought into view
+      const more = toggle.closest(".row")!.querySelector(".row-more") as HTMLElement;
+      openBottom = 460;
+      fireEvent.click(within(more).getByRole("button", { name: "Fix a word" }));
+      expect(within(more).getByRole("button", { name: "Save" })).toBeTruthy();
+      expect(scrollTop).toBe(160);
+      // Closing returns to the fitted, unscrolled list.
+      fireEvent.click(toggle);
+      expect(list.classList.contains("scrolling")).toBe(false);
+      expect(scrollTop).toBe(0);
+    } finally {
+      rect.mockRestore();
+    }
   });
 
   it("Fix a word teaches the dictionary from the heard words", async () => {
@@ -259,8 +374,13 @@ describe("Home", () => {
     field.focus();
     await act(async () => { fireEvent.keyDown(field, { key: "c", code: "KeyC", ctrlKey: true }); });
     expect(writeText()).toHaveBeenCalledTimes(1);
-    // Ctrl+Shift+C is not a copy.
+    // Focus in the Earlier list: that row is what the user is on, not the card.
     field.blur();
+    toggleOf("kubectl get pods").focus();
+    await act(async () => { fireEvent.keyDown(toggleOf("kubectl get pods"), { key: "c", code: "KeyC", ctrlKey: true }); });
+    expect(writeText()).toHaveBeenCalledTimes(1);
+    toggleOf("kubectl get pods").blur();
+    // Ctrl+Shift+C is not a copy.
     await act(async () => { fireEvent.keyDown(document.body, { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true }); });
     expect(writeText()).toHaveBeenCalledTimes(1);
   });

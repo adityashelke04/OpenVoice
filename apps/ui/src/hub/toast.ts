@@ -40,6 +40,9 @@ function subscribe(f: () => void) {
   return () => { subscribers.delete(f); };
 }
 
+/** The toasts showing right now, outside React (tests, and code that must not subscribe). */
+export const getToasts = (): readonly Toast[] => toasts;
+
 export function useToasts(): Toast[] {
   return useSyncExternalStore(subscribe, () => toasts, () => toasts);
 }

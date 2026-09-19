@@ -21,7 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import { AppChip, Button, Keycap } from "../ui";
 import { appDisplay } from "../apps";
-import { outcomeInfo, wordCount } from "../history";
+import { outcomeInfo, rowKey, wordCount } from "../history";
 import { relativeTime } from "../time";
 import { openDataDir, retryEngine, type Settings } from "../../engine/settings";
 import type { Row } from "../../engine/stats";
@@ -44,7 +44,7 @@ export function LastCard({ variant, row, now, shortcut, error, patch }: {
   if (variant === "error") return <ErrorCard error={error ?? ""} />;
   if (variant === "first" || !row) return <FirstCard shortcut={shortcut} />;
   // Keyed by the dictation, so a new one arrives with Fix closed and the clamp back on.
-  return <DictationCard key={`${row.created_at}:${row.final_text.length}`} row={row} failed={variant === "failed"} now={now} patch={patch} />;
+  return <DictationCard key={rowKey(row)} row={row} failed={variant === "failed"} now={now} patch={patch} />;
 }
 
 /** True when focus is somewhere that owns Ctrl+C itself. */
@@ -69,6 +69,8 @@ function DictationCard({ row, failed, now, patch }: { row: Row; failed: boolean;
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().length > 0) return;
     if (inEditable(document.activeElement)) return;
+    // Focus on an Earlier row means that row is what the user is on, not the card.
+    if (document.activeElement?.closest(".rows")) return;
     e.preventDefault();
     void copy();
   }, [copy]);

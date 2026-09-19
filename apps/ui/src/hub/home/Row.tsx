@@ -3,11 +3,15 @@
  *
  *  The row is one line: time, text, then what is worth knowing about it (what
  *  the dictionary corrected, whether it failed to paste, which app) and a copy
- *  button. Clicking anywhere else opens it in place, with the whole text and the
- *  same three actions as the Last dictation card. The markup keeps
- *  `<time>` inside `.row`: the twin harness hovers the row whose time reads
- *  "2:39 PM". */
-import { useState, type KeyboardEvent, type MouseEvent } from "react";
+ *  button. It is a disclosure: the time and text are one real button
+ *  (`.row-toggle`, spanning the first two grid columns through a subgrid) that
+ *  opens the row in place, with the whole text and the same three actions as
+ *  the Last dictation card. The copy button is its sibling, never nested in it.
+ *  A click anywhere else on the row toggles too, as a mouse convenience.
+ *
+ *  `<time>` stays inside `.row`: the twin harness hovers the row whose time
+ *  reads "2:39 PM". */
+import { useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { Check, Copy } from "@phosphor-icons/react";
 import { AppChip, StatusChip } from "../ui";
 import { dictionaryHits, outcomeInfo } from "../history";
@@ -17,6 +21,7 @@ import type { Row as RowData } from "../../engine/stats";
 import { Actions } from "./Actions";
 import { useCopyPaste } from "./useCopyPaste";
 import { FixPanel } from "./FixPanel";
+import { revealInList } from "./useFit";
 
 export function Row({ row, dict, open, onToggle, patch }: {
   row: RowData;
@@ -30,23 +35,38 @@ export function Row({ row, dict, open, onToggle, patch }: {
   const [fixing, setFixing] = useState(false);
   const kind = outcomeInfo(row);
   const hit = dictionaryHits(row, dict)[0];
+  const moreId = useId();
+  const el = useRef<HTMLDivElement>(null);
 
-  // Controls inside the row (its copy button, the open panel) do their own
-  // thing; only a click on the row itself opens or closes it.
+  // Closing the row also closes its Fix panel, so it reopens as it first did.
+  const toggle = () => {
+    if (open) setFixing(false);
+    onToggle();
+  };
+  // Controls inside the row do their own thing; a click on the row's bare
+  // background opens or closes it like the toggle does.
   const onClick = (e: MouseEvent<HTMLDivElement>) => {
     if ((e.target as Element).closest("button, input, textarea, a, .row-more")) return;
-    onToggle();
-  };
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-    e.preventDefault();
-    onToggle();
+    toggle();
   };
 
+  // An open row near the bottom of the list scrolls into view, and again
+  // whenever it grows (Fix a word opening, the text rewrapping).
+  useLayoutEffect(() => {
+    const node = el.current;
+    if (!open || !node) return;
+    revealInList(node);
+    let ro: ResizeObserver | undefined;
+    try { ro = new ResizeObserver(() => revealInList(node)); ro.observe(node); } catch { /* revealed once */ }
+    return () => ro?.disconnect();
+  }, [open, fixing]);
+
   return (
-    <div className="row" tabIndex={0} aria-expanded={open} onClick={onClick} onKeyDown={onKeyDown}>
-      <time dateTime={new Date(row.created_at).toISOString()}>{clockTime(row.created_at)}</time>
-      <span className={row.profile === "terminal" ? "t code" : "t"}>{row.final_text}</span>
+    <div ref={el} className={open ? "row open" : "row"} onClick={onClick}>
+      <button type="button" className="row-toggle" aria-expanded={open} aria-controls={moreId} onClick={toggle}>
+        <time dateTime={new Date(row.created_at).toISOString()}>{clockTime(row.created_at)}</time>
+        <span className={row.profile === "terminal" ? "t code" : "t"}>{row.final_text}</span>
+      </button>
       <span className="r">
         {hit && <span className="heard">heard <s>{hit.spoken}</s></span>}
         {kind !== "delivered" && <StatusChip kind={kind} />}
@@ -55,15 +75,17 @@ export function Row({ row, dict, open, onToggle, patch }: {
           {act.copied ? <Check weight="bold" aria-hidden /> : <Copy aria-hidden />}
         </button>
       </span>
-      {open && (
-        <div className="row-more">
-          <p className={row.profile === "terminal" ? "full code" : "full"}>{row.final_text}</p>
-          {fixing && <FixPanel row={row} patch={patch} onDone={() => setFixing(false)} />}
-          <div className="acts">
-            <Actions act={act} kind="row" fixOpen={fixing} onFix={() => setFixing((f) => !f)} />
-          </div>
-        </div>
-      )}
+      <div className="row-more" id={moreId} hidden={!open}>
+        {open && (
+          <>
+            <p className={row.profile === "terminal" ? "full code" : "full"}>{row.final_text}</p>
+            {fixing && <FixPanel row={row} patch={patch} onDone={() => setFixing(false)} />}
+            <div className="acts">
+              <Actions act={act} kind="row" fixOpen={fixing} onFix={() => setFixing((f) => !f)} />
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

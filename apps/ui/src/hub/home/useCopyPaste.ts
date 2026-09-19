@@ -16,6 +16,8 @@ export const MORPH_MS = 1400;
 export interface CopyPaste {
   copied: boolean;
   pasted: boolean;
+  /** A Paste again call is in flight; the button is disabled until it ends. */
+  pasting: boolean;
   copy: () => Promise<void>;
   paste: () => Promise<void>;
 }
@@ -23,6 +25,10 @@ export interface CopyPaste {
 export function useCopyPaste(text: string): CopyPaste {
   const [copied, setCopied] = useState(false);
   const [pasted, setPasted] = useState(false);
+  const [pasting, setPasting] = useState(false);
+  // A ref as well as state: a second click can land before React re-renders the
+  // disabled button, and two overlapping pastes would each minimise the Hub.
+  const inFlight = useRef(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
@@ -41,12 +47,18 @@ export function useCopyPaste(text: string): CopyPaste {
   }, [text, flash]);
 
   const paste = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPasting(true);
     try {
       if ((await pasteAgain(text)) === "pasted") flash(setPasted);
     } catch (e) {
       pushToast({ tone: "danger", message: String(e) });
+    } finally {
+      inFlight.current = false;
+      setPasting(false);
     }
   }, [text, flash]);
 
-  return { copied, pasted, copy, paste };
+  return { copied, pasted, pasting, copy, paste };
 }

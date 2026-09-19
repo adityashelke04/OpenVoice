@@ -11,10 +11,11 @@
  *  The state is chosen, in order: the engine is down (error), the first answers
  *  have not arrived (loading), there is nothing yet (first), the last dictation
  *  did not land (failed), otherwise normal. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ClockCounterClockwise } from "@phosphor-icons/react";
 import { getHistory, getTotals, type ProfileFilter } from "../api";
 import { outcomeInfo, rowKey } from "../history";
+import { pushToast } from "../toast";
 import type { LiveView } from "../../engine/useLiveEngine";
 import type { Settings } from "../../engine/settings";
 import type { Row, Totals } from "../../engine/stats";
@@ -48,10 +49,17 @@ export function HomeScreen({ view, settings, patch, now, onOpenHistory }: {
     return () => { live = false; };
   }, [view.sessions]);
 
+  // The filter last shown successfully. A filtered read that fails puts the
+  // tab back on it and keeps its rows on screen, with a toast saying why,
+  // rather than showing an empty list that reads as "nothing here".
+  const shown = useRef<ProfileFilter>("all");
   useEffect(() => {
-    if (filter === "all") return;
+    if (filter === "all") { shown.current = "all"; return; }
     let live = true;
-    getHistory({ limit: 200, profile: filter }).then((rows) => live && setFiltered({ filter, rows: rows ?? [] }), () => {});
+    getHistory({ limit: 200, profile: filter }).then(
+      (rows) => { if (!live) return; shown.current = filter; setFiltered({ filter, rows: rows ?? [] }); },
+      (e) => { if (!live) return; pushToast({ tone: "danger", message: String(e) }); setFilter(shown.current); },
+    );
     return () => { live = false; };
   }, [filter, view.sessions]);
 
@@ -88,7 +96,12 @@ export function HomeScreen({ view, settings, patch, now, onOpenHistory }: {
   }
 
   const lastKey = last ? rowKey(last) : null;
-  const source = filter === "all" ? rows : filtered?.filter === filter ? filtered.rows : [];
+  // While a new filter's rows are on their way, the previous list stays up.
+  const source = filter === "all"
+    ? rows
+    : filtered?.filter === filter
+      ? filtered.rows
+      : shown.current !== "all" && filtered?.filter === shown.current ? filtered.rows : rows;
   const earlier = source.filter((r) => rowKey(r) !== lastKey);
   const first = state === "first" || (state === "error" && !last);
 
