@@ -6,7 +6,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shotName, clusters, dilate, verdict, crop, matrix } from "./twin-lib.mjs";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+import { shotName, clusters, dilate, judge, verdict, crop, matrix } from "./twin-lib.mjs";
 
 test("shot names match render-reference.mjs", () => {
   assert.equal(shotName({ screen: "home", state: "normal", theme: "glacier", mode: "dark", w: 1100, h: 740 }), "home-glacier-dark-1100x740");
@@ -44,17 +47,59 @@ test("matrix covers the render-reference.mjs set and filters by flag", () => {
   ]);
 });
 
-test("verdict fails a whole line of text present on one side only, but not a hairline edge", () => {
-  // The missing "5:52 PM Thanks, that fixed it…" row: dilated into one 313x12 cluster.
-  const line = verdict({ ratio: 0.0025, clusters: [{ w: 313, h: 12, pixels: 977 }] });
-  assert.equal(line.pass, false);
-  assert.equal(line.big.length, 1);
-  assert.equal(verdict({ ratio: 0.0025, clusters: [{ w: 12, h: 60, pixels: 200 }] }).pass, false); // a column of glyphs
-  assert.equal(verdict({ ratio: 0.001, clusters: [{ w: 218, h: 1, pixels: 218 }] }).pass, true);   // a card edge re-rasterised
+/* Real pixels: the error-state Earlier list's last day (label + row), cropped
+ * 560x70 from twin shots (home-error glacier dark). The app shows the row; the
+ * reference before d129723 did not; the reference after it does. pngjs and
+ * pixelmatch are the same packages twin-check resolves from apps/ui. */
+const require = createRequire(new URL("../apps/ui/package.json", import.meta.url));
+const { PNG } = require("pngjs");
+const pixelmatch = (await import(pathToFileURL(require.resolve("pixelmatch")).href)).default;
+const fixture = (name) => PNG.sync.read(readFileSync(new URL(`./fixtures/twin-error-row-${name}.png`, import.meta.url)));
+const judgePair = (a, b) => judge({ a: a.data, b: b.data, out: Buffer.alloc(a.data.length), w: a.width, h: a.height, pixelmatch });
+
+test("a row missing from the reference fails the twin (real pixels)", () => {
+  const res = judgePair(fixture("app"), fixture("ref-before"));
+  assert.equal(res.pass, false);
+  // The row's text is one dilated cluster, long and dense: a line of text.
+  assert.ok(res.big.some((c) => c.w > 300 && c.h <= 14), JSON.stringify(res.big));
+});
+
+test("the same row present on both sides passes (real pixels)", () => {
+  const res = judgePair(fixture("app"), fixture("ref-after"));
+  assert.equal(res.pass, true, JSON.stringify(res.big));
+});
+
+/** One cluster through the verdict: does it fail the shot? */
+const fails = (c) => !verdict({ ratio: 0.001, clusters: [c] }).pass;
+
+test("verdict fails text present on one side only: a row, a chip label, a short word, a time", () => {
+  // Clusters measured from the error twin run against the old reference (the
+  // missing "Wed 16 Sep / 5:52 PM Thanks, that fixed it… / Slack" row).
+  assert.equal(fails({ w: 313, h: 12, pixels: 977 }), true); // the row's text
+  assert.equal(fails({ w: 29, h: 9, pixels: 142 }), true);   // the "Slack" chip label
+  assert.equal(fails({ w: 26, h: 8, pixels: 58 }), true);    // "5:52" of the time
+  assert.equal(fails({ w: 13, h: 8, pixels: 52 }), true);    // "PM"
+  assert.equal(fails({ w: 34, h: 8, pixels: 111 }), true);   // half the day label
+  assert.equal(fails({ w: 24, h: 8, pixels: 98 }), true);    // the other half
+  assert.equal(fails({ w: 47, h: 12, pixels: 150 }), true);  // a short word ("git status")
+  assert.equal(fails({ w: 12, h: 60, pixels: 200 }), true);  // a column of glyphs
+});
+
+test("verdict fails a wrong or missing icon: a small solid block", () => {
+  assert.equal(fails({ w: 10, h: 11, pixels: 90 }), true);   // the 13px clipboard icon against an 11.5px one
+  assert.equal(fails({ w: 12, h: 12, pixels: 100 }), true);
+  assert.equal(fails({ w: 8, h: 8, pixels: 32 }), true);     // 64 px area, half filled: the smallest that fails
+});
+
+test("verdict passes sparse icon-edge speckle and hairline card edges", () => {
+  assert.equal(fails({ w: 10, h: 11, pixels: 46 }), false);  // SVG vs icon-font edges on one glyph
+  assert.equal(fails({ w: 8, h: 11, pixels: 34 }), false);
+  assert.equal(fails({ w: 7, h: 7, pixels: 40 }), false);    // solid, but under 64 px of area
+  assert.equal(fails({ w: 218, h: 1, pixels: 218 }), false); // a card edge re-rasterised
   // The same edge with a speck at each rounded corner, joined by dilation: a
   // 240x6 box, but still about one red pixel per column (home-error glacier dark).
-  assert.equal(verdict({ ratio: 0.001, clusters: [{ w: 240, h: 6, pixels: 245 }] }).pass, true);
-  assert.equal(verdict({ ratio: 0.001, clusters: [{ w: 47, h: 12, pixels: 150 }] }).pass, true);   // a short word or chip label
+  assert.equal(fails({ w: 240, h: 6, pixels: 245 }), false);
+  assert.equal(fails({ w: 228, h: 2, pixels: 221 }), false);
 });
 
 test("dilate grows each red pixel into a (2r+1) square, clipped at the edges", () => {

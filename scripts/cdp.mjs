@@ -95,7 +95,7 @@ export async function targetUrl(port = 9222) {
 
 /** Start headless Chrome and attach to the browser target. `profile` must be a
  *  directory on a drive with room (the callers put it under `<repo>/target/`). */
-export async function launchChrome({ port = 9222, dpr = 1, profile }) {
+export async function launchChrome({ port = 9222, dpr = 1, profile, args = [] }) {
   if (!CHROME) throw new Error("Chrome not found; add its path to scripts/cdp.mjs");
   const chrome = spawn(
     CHROME,
@@ -108,6 +108,7 @@ export async function launchChrome({ port = 9222, dpr = 1, profile }) {
       "--no-first-run",
       "--no-default-browser-check",
       `--user-data-dir=${profile}`,
+      ...args,
       "about:blank",
     ],
     { stdio: "ignore" },

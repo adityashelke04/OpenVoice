@@ -99,24 +99,55 @@ export function clusters(mask, w, h, { dilate: r = 0 } = {}) {
 export const MAX_RATIO = 0.005, MAX_CLUSTER = 24;
 /** Diff pixels up to 2 * DILATE apart form one cluster (see `clusters`). */
 export const DILATE = 3;
-/** A line of text present on one side only. A text line is only ~12 px tall,
- *  so the 24x24 rule never sees it, even dilated into one cluster. It is
- *  caught by shape instead: at least LINE_LENGTH long, and on average at least
- *  LINE_DENSITY red pixels per pixel of length (glyphs stack several red
- *  pixels in each column; the missing "5:52 PM Thanks, that fixed it…" row is
- *  313x12 with 977 red, about 3 per column). A re-rasterised card edge is one
- *  red pixel per column, even when dilation joins specks at its rounded
- *  corners into a taller box. Re-hinted text is painted yellow by pixelmatch
- *  and never counts. On every passing shot the largest real cluster is about
- *  11x11. */
-export const LINE_LENGTH = 2 * MAX_CLUSTER, LINE_DENSITY = 2;
+/** Spec 10.3 also says a wrong icon, a missing chip or a shifted row fails, and
+ *  none of those is 24 px tall. Two shape rules catch them.
+ *
+ *  Text: longer than MAX_CLUSTER and at least LINE_DENSITY red pixels per pixel
+ *  of length. Glyphs stack several red pixels in every column (a missing chip
+ *  label is 29x9 with 142 red, about 5 per column; the missing "Thanks, that
+ *  fixed it…" line 313x12 with 977, about 3). A re-rasterised card edge is one
+ *  red pixel per column, even when dilation joins the specks at its rounded
+ *  corners into a taller box.
+ *
+ *  Icon: no longer than MAX_CLUSTER, at least ICON_AREA px of box, and at least
+ *  ICON_FILL of the box red. A different or missing glyph is a solid block;
+ *  the same glyph drawn by the icon font on one side and SVG on the other
+ *  differs only along its edges, well under half its box.
+ *
+ *  Re-hinted text is painted yellow by pixelmatch and never counts. */
+export const LINE_DENSITY = 2, ICON_AREA = 64, ICON_FILL = 0.5;
 export function verdict({ ratio, clusters }) {
   const big = clusters.filter((c) => {
-    const length = Math.max(c.w, c.h);
-    return (c.w > MAX_CLUSTER && c.h > MAX_CLUSTER)
-      || (length >= LINE_LENGTH && (c.pixels ?? 0) / length >= LINE_DENSITY);
+    const length = Math.max(c.w, c.h), area = c.w * c.h, px = c.pixels ?? 0;
+    if (c.w > MAX_CLUSTER && c.h > MAX_CLUSTER) return true;
+    if (length > MAX_CLUSTER) return px / length >= LINE_DENSITY;
+    return area >= ICON_AREA && px / area >= ICON_FILL;
   });
   return { pass: ratio <= MAX_RATIO && big.length === 0, big };
+}
+
+/** The whole decision for one pair of same-sized RGBA buffers: pixelmatch
+ *  paints `out` (red = differs, yellow = anti-aliasing, which is excluded),
+ *  the red pixels become a mask, the mask is clustered with dilation, and the
+ *  verdict is read off the clusters. `pixelmatch` is passed in so this file
+ *  stays free of npm packages; twin-check and the tests hand it the same one. */
+export function judge({ a, b, out, w, h, pixelmatch }) {
+  const n = pixelmatch(a, b, out, w, h, {
+    threshold: 0.1,
+    includeAA: false,
+    diffColor: [255, 0, 0],
+    aaColor: [255, 255, 0],
+  });
+  const mask = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const p = i * 4;
+    mask[i] = out[p] === 255 && out[p + 1] === 0 && out[p + 2] === 0 ? 1 : 0;
+  }
+  // Dilated first, so a text line present on one side only is one cluster
+  // rather than a row of glyph-sized specks that each pass.
+  const blobs = clusters(mask, w, h, { dilate: DILATE }).sort((p, q) => q.pixels - p.pixels);
+  const ratio = n / (w * h);
+  return { ratio, clusters: blobs, ...verdict({ ratio, clusters: blobs }) };
 }
 
 /** Regions for `--region`: the 224 px sidebar and the 68 px top bar are shared

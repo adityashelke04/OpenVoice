@@ -45,7 +45,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchChrome, openPage, sleep } from "./cdp.mjs";
 import { tauriStub } from "./screenshot-fixtures.mjs";
-import { DILATE, clusters, crop, matrix, shotName, verdict } from "./twin-lib.mjs";
+import { crop, judge, matrix, shotName } from "./twin-lib.mjs";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const OUT = join(REPO, "docs", "redesign", "twin");
@@ -88,22 +88,7 @@ function diffPngs(a, b) {
   }
   const { width: w, height: h } = a;
   const diff = new PNG({ width: w, height: h });
-  const n = pixelmatch(a.data, b.data, diff.data, w, h, {
-    threshold: 0.1,
-    includeAA: false,
-    diffColor: [255, 0, 0],
-    aaColor: [255, 255, 0],
-  });
-  const mask = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++) {
-    const p = i * 4;
-    mask[i] = diff.data[p] === 255 && diff.data[p + 1] === 0 && diff.data[p + 2] === 0 ? 1 : 0;
-  }
-  // Dilated first, so a text line present on one side only is one cluster
-  // rather than a row of glyph-sized specks that each pass (twin-lib.mjs).
-  const blobs = clusters(mask, w, h, { dilate: DILATE }).sort((p, q) => q.pixels - p.pixels);
-  const ratio = n / (w * h);
-  return { diff, ratio, clusters: blobs, ...verdict({ ratio, clusters: blobs }) };
+  return { diff, ...judge({ a: a.data, b: b.data, out: diff.data, w, h, pixelmatch }) };
 }
 
 const pct = (r) => `${(r * 100).toFixed(2)}%`;
@@ -349,7 +334,13 @@ async function main() {
 
   mkdirSync(OUT, { recursive: true });
   const fonts = fontScript(referenceFonts());
-  const { chrome, browser } = await launchChrome({ port: PORT, dpr: 1, profile: join(REPO, "target", "twin-profile") });
+  // Grayscale text anti-aliasing on both sides. With LCD (subpixel) AA, the
+  // reference's icon-font glyphs on an opaque (solid) surface get colour
+  // fringes that the app's SVG icons can never have: the same glyph at the
+  // same place then diffs as a solid block (seen: the Last dictation tag
+  // icon, 10x10 with 51 red, in home graphite-light-solid only). Text is
+  // text on both sides and is unaffected either way.
+  const { chrome, browser } = await launchChrome({ port: PORT, dpr: 1, profile: join(REPO, "target", "twin-profile"), args: ["--disable-lcd-text"] });
   const report = [];
   let failed = 0;
   try {
