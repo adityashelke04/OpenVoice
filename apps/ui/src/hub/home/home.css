@@ -76,7 +76,8 @@
 .recent-head .all:hover { color: var(--ink); }
 .recent-head .all svg { font-size: 12px; }
 .row { cursor: pointer; }
-.row .copy svg { font-size: 15px; }
+/* The reference sizes nothing here: its icon is the body's 14px. */
+.row .copy svg { font-size: 14px; }
 /* The disclosure button carries the time and text across the first two grid
    columns (subgrid keeps the reference's 62px / 1fr and 12px gap). Its focus
    ring is drawn on the whole row, which is what it opens. */

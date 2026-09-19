@@ -86,7 +86,12 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
 .switch { padding: 0; cursor: pointer; }
 .switch:disabled { opacity: .5; cursor: default; }
 .btn svg, .app-chip svg, .warn-chip svg, .fail-chip svg, .seg > button svg, .card-title svg { flex: none; }
-.warn-chip svg, .fail-chip svg { font-size: 13px; }
+/* The reference gives `.warn-chip i` no size of its own, so the icon is the
+   chip's 11.5px text size (1em), not the app chip's 13px. At that size the
+   icon font's glyph sits a pixel above its em box (the font's vertical
+   metrics, rounded); the SVG fills its box exactly, so it is lifted to match.
+   Measured with the twin: without the lift the glyph is a solid 8x11 diff. */
+.warn-chip svg, .fail-chip svg { transform: translateY(-1px); }
 .btn:disabled:active { transform: none; }
 /* Hover is quiet: a brighter edge on glass buttons and the idle segment text
    lifting to ink. Filled buttons brighten slightly. */
