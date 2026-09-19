@@ -145,7 +145,13 @@ function ErrorCard({ error }: { error: string }) {
   const missing = /speech model|no speech model|not found|incomplete|not installed/i.test(error);
   const [retrying, setRetrying] = useState(false);
   const timer = useRef<number | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  // The engine coming back unmounts this card while retry_engine may still be
+  // answering; nothing is scheduled for a card that is gone.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; clearTimeout(timer.current); };
+  }, []);
   const retry = async () => {
     setRetrying(true);
     try {
@@ -153,7 +159,7 @@ function ErrorCard({ error }: { error: string }) {
     } catch { /* the engine card and this one stay up; the poller reports the outcome */ } finally {
       // Held until the poller sees the outcome; releasing it at once would let
       // someone queue a second attempt behind the first.
-      timer.current = window.setTimeout(() => setRetrying(false), 4000);
+      if (mounted.current) timer.current = window.setTimeout(() => setRetrying(false), 4000);
     }
   };
   const [title, body] = memory

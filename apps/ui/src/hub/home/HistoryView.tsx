@@ -72,11 +72,16 @@ export function HistoryView({ view, settings, patch, now, onClose }: {
   // Escape: a search with text in it is cleared first (at once, not after the
   // debounce), then the next Escape goes back to Home. A handler that already
   // dealt with the key (a dialog on top) marks it handled and this leaves it.
+  // Any other field (a row's Fix a word inputs, anything later) owns its own
+  // Escape: leaving the screen would throw away what was being typed there.
   const state = useRef({ text, onClose });
   state.current = { text, onClose };
+  const search = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+      const t = e.target instanceof Element ? e.target : null;
+      if (t && t !== search.current && t.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
       if (state.current.text) {
         setText("");
         setReq((r) => (r.query === "" ? r : { ...r, query: "", limit: PAGE }));
@@ -92,13 +97,21 @@ export function HistoryView({ view, settings, patch, now, onClose }: {
   const settled = page?.key === keyOf(req);
   // A page that came back as long as it was asked to be may have more behind it.
   const more = settled && page!.rows.length >= req.limit;
+  const shownLimit = page?.req.limit;
   const onScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
     if (!more) return;
     const el = e.currentTarget;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM) {
-      setReq((r) => ({ ...r, limit: r.limit + PAGE }));
+      // Only from the page on screen: a burst of scroll events asks once.
+      setReq((r) => (r.limit === shownLimit ? { ...r, limit: r.limit + PAGE } : r));
     }
-  }, [more]);
+  }, [more, shownLimit]);
+
+  // A new filter or search is a new list, read from its top.
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (list.current) list.current.scrollTop = 0;
+  }, [req.filter, req.query]);
 
   const open = picked && rows.some((r) => rowKey(r) === picked) ? picked : null;
   const shownQuery = page?.req.query ?? "";
@@ -111,6 +124,7 @@ export function HistoryView({ view, settings, patch, now, onClose }: {
         <div className="recent-head">
           <Segmented value={req.filter} options={FILTERS} onChange={onFilter} label="Filter by kind of app" />
           <Field
+            ref={search}
             icon={<MagnifyingGlass aria-hidden />}
             type="search"
             placeholder={placeholder}
@@ -121,7 +135,7 @@ export function HistoryView({ view, settings, patch, now, onClose }: {
             autoComplete="off"
           />
         </div>
-        <div className="rows" onScroll={onScroll}>
+        <div className="rows" ref={list} onScroll={onScroll}>
           {page && rows.length === 0 ? (
             <div className="hist-empty" role="status">
               {shownQuery ? (

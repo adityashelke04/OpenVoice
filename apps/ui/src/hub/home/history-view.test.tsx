@@ -164,6 +164,96 @@ describe("History view", () => {
     expect(container.querySelectorAll(".row")).toHaveLength(400);
   });
 
+  it("Escape in a row's Fix a word field closes the fix panel only: no leaving, no clearing the search", async () => {
+    tauri = bridge();
+    const { onClose } = renderHistory();
+    await flush();
+    const search = screen.getByPlaceholderText("Search 128 dictations") as HTMLInputElement;
+    fireEvent.change(search, { target: { value: "kube" } });
+    await act(async () => { vi.advanceTimersByTime(180); });
+    await flush();
+    const row = screen.getByText("kubectl get pods").closest(".row") as HTMLElement;
+    fireEvent.click(row.querySelector(".row-toggle")!);
+    const fixButton = within(row).getByRole("button", { name: "Fix a word" });
+    fireEvent.click(fixButton);
+    const said = within(row).getByRole("textbox", { name: "You said" }) as HTMLInputElement;
+    said.focus();
+    fireEvent.change(said, { target: { value: "cube cont" } });
+    fireEvent.keyDown(said, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(search.value).toBe("kube");
+    expect(historyCalls().at(-1)).toMatchObject({ query: "kube" });
+    expect(within(row).queryByRole("textbox", { name: "You said" })).toBeNull();
+    expect(document.activeElement).toBe(within(row).getByRole("button", { name: "Fix a word" }));
+  });
+
+  it("Escape in any other editable field is left to that field", async () => {
+    tauri = bridge();
+    const { onClose } = renderHistory();
+    await flush();
+    const other = document.createElement("textarea");
+    document.body.appendChild(other);
+    other.focus();
+    fireEvent.keyDown(other, { key: "Escape" });
+    other.remove();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("a slow answer to an older search never replaces a newer one", async () => {
+    let releaseKu: (rows: Row[]) => void = () => {};
+    tauri = installTauri({
+      get_history: (a: any) => a?.query === "ku"
+        ? new Promise<Row[]>((r) => { releaseKu = r; })
+        : a?.query ? ROWS.filter((r) => r.final_text.includes(a.query)) : ROWS,
+      get_totals: () => TOTALS,
+    });
+    renderHistory();
+    await flush();
+    const input = screen.getByPlaceholderText("Search 128 dictations");
+    fireEvent.change(input, { target: { value: "ku" } });
+    await act(async () => { vi.advanceTimersByTime(180); });
+    fireEvent.change(input, { target: { value: "kube" } });
+    await act(async () => { vi.advanceTimersByTime(180); });
+    await flush();
+    expect(screen.getByText("kubectl get pods")).toBeTruthy();
+    await act(async () => { releaseKu([ROWS[5]]); });
+    await flush();
+    expect(screen.getByText("kubectl get pods")).toBeTruthy();
+    expect(screen.queryByText(ROWS[5].final_text)).toBeNull();
+  });
+
+  it("scroll events before the next page lands ask for it once", async () => {
+    const many: Row[] = Array.from({ length: 500 }, (_, i) => ({ ...ROWS[1], created_at: NOW - (i + 1) * 60_000, final_text: `dictation ${i}` }));
+    tauri = bridge(many);
+    const { container } = renderHistory();
+    await flush();
+    const list = container.querySelector(".hist .rows") as HTMLElement;
+    Object.defineProperty(list, "scrollHeight", { configurable: true, value: 8000 });
+    Object.defineProperty(list, "clientHeight", { configurable: true, value: 500 });
+    list.scrollTop = 7500;
+    fireEvent.scroll(list);
+    fireEvent.scroll(list);
+    fireEvent.scroll(list);
+    await flush();
+    expect(historyCalls().map((a) => a.limit)).toEqual([200, 400]);
+  });
+
+  it("a new filter or search starts the list at the top", async () => {
+    tauri = bridge();
+    const { container } = renderHistory();
+    await flush();
+    const list = container.querySelector(".hist .rows") as HTMLElement;
+    list.scrollTop = 300;
+    await act(async () => { fireEvent.click(screen.getByRole("tab", { name: "Code" })); });
+    await flush();
+    expect(list.scrollTop).toBe(0);
+    list.scrollTop = 300;
+    fireEvent.change(screen.getByPlaceholderText("Search 128 dictations"), { target: { value: "use" } });
+    await act(async () => { vi.advanceTimersByTime(180); });
+    await flush();
+    expect(list.scrollTop).toBe(0);
+  });
+
   it("a short last page asks for nothing more", async () => {
     tauri = bridge();
     const { container } = renderHistory();

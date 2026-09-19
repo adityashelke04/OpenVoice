@@ -473,6 +473,20 @@ describe("Home", () => {
     expect((screen.getByRole("button", { name: "Try again" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("a retry that answers after the card is gone schedules nothing", async () => {
+    let answer: (v: boolean) => void = () => {};
+    tauri = bridge(ROWS, { retry_engine: () => new Promise<boolean>((r) => { answer = r; }) });
+    const { unmount } = renderHome({ error: "sherpa-onnx: failed to allocate 786432000 bytes" });
+    await screen.findByRole("article", { name: "Speech engine problem" });
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Try again" })); });
+    await act(async () => { await vi.dynamicImportSettled(); });
+    unmount();
+    await act(async () => { answer(true); for (let i = 0; i < 5; i++) await Promise.resolve(); });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("Open log folder calls open_data_dir", async () => {
     tauri = bridge(ROWS, { open_data_dir: () => null });
     renderHome({ error: "sherpa-onnx: failed to allocate 786432000 bytes" });

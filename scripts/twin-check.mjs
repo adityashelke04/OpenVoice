@@ -45,11 +45,13 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchChrome, openPage, sleep } from "./cdp.mjs";
 import { tauriStub } from "./screenshot-fixtures.mjs";
-import { clusters, crop, matrix, shotName, verdict } from "./twin-lib.mjs";
+import { DILATE, clusters, crop, matrix, shotName, verdict } from "./twin-lib.mjs";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const OUT = join(REPO, "docs", "redesign", "twin");
-const REFERENCE = pathToFileURL(join(REPO, "docs", "redesign", "reference", "reference.html")).href;
+// OV_REFERENCE_HTML points the check at another copy of the reference, e.g. an
+// older one, to prove the check fails where the two disagree.
+const REFERENCE = pathToFileURL(process.env.OV_REFERENCE_HTML ?? join(REPO, "docs", "redesign", "reference", "reference.html")).href;
 const BASE = process.env.OV_UI_URL ?? "http://localhost:5199";
 const PORT = 9223; // not screenshots.mjs's 9222, so the two can run side by side
 
@@ -97,7 +99,9 @@ function diffPngs(a, b) {
     const p = i * 4;
     mask[i] = diff.data[p] === 255 && diff.data[p + 1] === 0 && diff.data[p + 2] === 0 ? 1 : 0;
   }
-  const blobs = clusters(mask, w, h).sort((p, q) => q.pixels - p.pixels);
+  // Dilated first, so a text line present on one side only is one cluster
+  // rather than a row of glyph-sized specks that each pass (twin-lib.mjs).
+  const blobs = clusters(mask, w, h, { dilate: DILATE }).sort((p, q) => q.pixels - p.pixels);
   const ratio = n / (w * h);
   return { diff, ratio, clusters: blobs, ...verdict({ ratio, clusters: blobs }) };
 }
@@ -116,7 +120,7 @@ async function compare(fileA, fileB, region) {
   const out = join(OUT, `compare-${basename(fileA, ".png")}-vs-${basename(fileB, ".png")}-diff.png`);
   writeFileSync(out, PNG.sync.write(res.diff));
   console.log(`${res.pass ? "PASS" : "FAIL"} ${pct(res.ratio)} ${basename(fileA)} vs ${basename(fileB)}`);
-  console.log(`  clusters: ${res.clusters.length}, over 24x24: ${res.big.length}`);
+  console.log(`  clusters: ${res.clusters.length}, over 24x24 or a text line: ${res.big.length}`);
   for (const c of res.clusters.slice(0, 10)) console.log(`  ${box(c)} (${c.pixels} px)`);
   console.log(`  diff: ${out}`);
   return res.pass;
@@ -367,7 +371,7 @@ async function main() {
       writeFileSync(join(OUT, reportFile), JSON.stringify(report, null, 2));
 
       let line = `${pass ? "PASS" : "FAIL"} ${pct(res.ratio)} ${name}`;
-      if (res.big.length) line += `  ${res.big.length} cluster(s) over 24x24, largest ${box(res.big.sort((p, q) => q.pixels - p.pixels)[0])}`;
+      if (res.big.length) line += `  ${res.big.length} cluster(s) over 24x24 or a text line, largest ${box(res.big.sort((p, q) => q.pixels - p.pixels)[0])}`;
       if (setup.length) line += `  setup: ${setup.join("; ")}`;
       if (axeBad.length) line += `  axe: ${axeBad.map((v) => `${v.id}(${v.impact})`).join(", ")}`;
       console.log(line);

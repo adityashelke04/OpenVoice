@@ -14,7 +14,7 @@
  * Logic ported from the old Hub's FixRow; only the styling (and an em dash in
  * the caption) changed.
  */
-import { useId, useState } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Button, Field } from "../ui";
 import { addDictionaryTerm, type Settings } from "../../engine/settings";
 import type { Row } from "../../engine/stats";
@@ -27,18 +27,36 @@ export function FixPanel({ row, patch, onDone }: {
   const id = useId();
   const [heard, setHeard] = useState("");
   const [written, setWritten] = useState("");
+  const panel = useRef<HTMLDivElement>(null);
 
   const words = row.raw_text.split(/\s+/).filter(Boolean);
   const canSave = heard.trim().length > 0 && written.trim().length > 0;
 
+  // However the panel closes, focus goes back to the Fix a word button that
+  // opened it, rather than falling to the page when the panel unmounts.
+  const close = () => {
+    const opener = panel.current?.closest(".row, .last")?.querySelector<HTMLElement>(".fix-toggle");
+    onDone();
+    opener?.focus();
+  };
+
   const save = () => {
     if (!canSave) return;
     patch((s) => { addDictionaryTerm(s, heard, written); });
-    onDone();
+    close();
+  };
+
+  // Escape belongs to the panel while focus is in it: it closes the panel and
+  // nothing else. Marked handled so screen-level Escape (History's "back to
+  // Home", its search clearing) leaves it alone.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    close();
   };
 
   return (
-    <div className="fix">
+    <div className="fix" ref={panel} onKeyDown={onKeyDown}>
       <div className="cap">OpenVoice heard this. Click the words it got wrong.</div>
       <div className="chips">
         {words.map((w, i) => (
@@ -64,7 +82,7 @@ export function FixPanel({ row, patch, onDone }: {
           />
         </div>
         <Button variant="primary" size="sm" onClick={save} disabled={!canSave}>Save</Button>
-        <Button size="sm" onClick={onDone}>Cancel</Button>
+        <Button size="sm" onClick={close}>Cancel</Button>
       </div>
       <p className="cap">Applies to the next thing you dictate. Nothing already written changes.</p>
     </div>

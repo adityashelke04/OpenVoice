@@ -37,7 +37,7 @@ export function Actions({ act, kind, fixOpen, onFix }: {
     </Button>
   );
   const fixBtn = (
-    <Button key="fix" size={size} icon={<PencilSimpleLine aria-hidden />} aria-expanded={fixOpen} onClick={onFix}>
+    <Button key="fix" className="fix-toggle" size={size} icon={<PencilSimpleLine aria-hidden />} aria-expanded={fixOpen} onClick={onFix}>
       Fix a word
     </Button>
   );
