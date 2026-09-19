@@ -21,6 +21,7 @@ import type { Settings } from "../../engine/settings";
 import type { Row, Totals } from "../../engine/stats";
 import { Earlier } from "./Earlier";
 import { LastCard } from "./LastCard";
+import { HomeSkeleton } from "./Skeleton";
 import { StatsColumn } from "./StatsColumn";
 import "./home.css";
 
@@ -73,27 +74,7 @@ export function HomeScreen({ view, settings, patch, now, onOpenHistory }: {
         ? "first"
         : outcomeInfo(last) !== "delivered" ? "failed" : "normal";
 
-  if (state === "loading") {
-    // Skeleton shapes as the reference draws them (lines 499-502 and 750).
-    return (
-      <section className="scroll">
-        <div className="sk sk-hero">
-          <div className="skl" style={{ width: 180 }} />
-          <div className="skl" style={{ marginTop: 22, height: 16, width: "92%" }} />
-          <div className="skl" style={{ marginTop: 12, height: 16, width: "80%" }} />
-          <div className="skl" style={{ marginTop: 12, height: 16, width: "60%" }} />
-        </div>
-        <div className="lower">
-          <div className="sk" />
-          <div className="sk-col">
-            <div className="sk" style={{ height: 120 }} />
-            <div className="sk" style={{ height: 110 }} />
-            <div className="sk" style={{ flex: 1 }} />
-          </div>
-        </div>
-      </section>
-    );
-  }
+  if (state === "loading") return <HomeSkeleton />;
 
   const lastKey = last ? rowKey(last) : null;
   // While a new filter's rows are on their way, the previous list stays up.

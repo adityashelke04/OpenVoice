@@ -1,5 +1,16 @@
 import type { Row } from "../engine/stats";
 import { dayLabel, daysBetween } from "./time";
+import type { ProfileFilter } from "./api";
+/** The filter tabs over history (Home's Earlier and the History view), in reference order. */
+export const FILTERS: { value: ProfileFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "editor", label: "Code" },
+  { value: "terminal", label: "Terminal" },
+  { value: "prose", label: "Messages" },
+];
+/** Newest first. Search answers come back in relevance order (FTS rank), and a
+ *  day-grouped list needs them by time or the same day would appear twice. */
+export const newestFirst = (rows: Row[]) => [...rows].sort((a, b) => b.created_at - a.created_at);
 export type OutcomeKind = "delivered" | "clipboard" | "failed";
 export function outcomeInfo(row: Pick<Row, "outcome">): OutcomeKind {
   if (row.outcome === "delivered") return "delivered";

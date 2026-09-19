@@ -4,19 +4,12 @@
 import { useRef, useState } from "react";
 import { CaretRight } from "@phosphor-icons/react";
 import { Segmented } from "../ui";
-import { groupByDay, rowKey } from "../history";
+import { FILTERS, groupByDay, rowKey } from "../history";
 import type { ProfileFilter } from "../api";
 import type { DictEntry, Settings } from "../../engine/settings";
 import type { Row as RowData } from "../../engine/stats";
 import { Row } from "./Row";
 import { useFit } from "./useFit";
-
-const FILTERS: { value: ProfileFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "editor", label: "Code" },
-  { value: "terminal", label: "Terminal" },
-  { value: "prose", label: "Messages" },
-];
 
 export function Earlier({ rows, filter, onFilter, total, onOpenHistory, dict, now, patch }: {
   rows: RowData[];

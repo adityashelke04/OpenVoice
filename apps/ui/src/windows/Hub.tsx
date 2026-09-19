@@ -29,6 +29,7 @@ import { useHubKeys } from "../hub/useHubKeys";
 import { isStill } from "../hub/useMedia";
 import { useSettings } from "../hub/useSettings";
 import { HomeScreen } from "../hub/home/HomeScreen";
+import { HistoryView } from "../hub/home/HistoryView";
 import "../hub/shell.css";
 
 export type { ScreenId };
@@ -43,7 +44,7 @@ export function initialScreen(search: string = typeof location === "undefined" ?
 const STILL = isStill();
 
 /** The clock Home's "2 min ago" reads: it wakes on each minute boundary, and
- *  only while Home is on screen, so no other screen pays for it. */
+ *  only while Home or History is on screen, so no other screen pays for it. */
 function useMinuteNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -81,7 +82,8 @@ export function Hub() {
   // already open this state so only the component is missing.
   const [palette, setPalette] = useState(false);
   const now = useHourlyNow();
-  const minute = useMinuteNow(screen === "home");
+  // History reads it too: its day headings ("Today", "Yesterday") turn over at midnight.
+  const minute = useMinuteNow(screen === "home" || screen === "history");
 
   useEffect(() => {
     let live = true;
@@ -127,8 +129,7 @@ export function Hub() {
   if (screen === "home") {
     body = <HomeScreen view={view} settings={settings} patch={patch} now={minute} onOpenHistory={() => setScreen("history")} />;
   } else if (screen === "history") {
-    // The History view arrives in Task 9; until then it is an empty pane.
-    body = <section className="scroll" />;
+    body = <HistoryView view={view} settings={settings} patch={patch} now={minute} onClose={() => setScreen("home")} />;
   } else if (!settings) {
     // Settings arrive asynchronously; a blank pane for a beat reads as broken.
     body = (

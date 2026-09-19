@@ -420,30 +420,105 @@ describe("Home", () => {
     await waitFor(() => expect(tauri!.calls.filter((c) => c.cmd === "get_history").length).toBeGreaterThan(before));
   });
 
-  it("first run: no rows shows the get-started card", async () => {
+  it("first run: the get-started card, the empty panel and the Try saying tile", async () => {
     tauri = bridge([], { get_totals: () => ({ sessions: 0, words: 0, speakingMs: 0, topApp: null, activeDays: [] }) });
-    renderHome();
-    expect(await screen.findByText("Ready when you are")).toBeTruthy();
-    expect(screen.getByText("Click into any text box, hold the key and talk.")).toBeTruthy();
+    renderHome({ ready: { ...VIEW.ready!, shortcut: "Right Alt" } });
+    const card = await screen.findByRole("article", { name: "Get started" });
+    expect(within(card).getByText("Ready when you are")).toBeTruthy();
+    expect(within(card).getByRole("heading", { name: "Click into any text box, hold the key and talk." })).toBeTruthy();
+    expect(within(card).getByText("Let go and your words appear where your cursor is. They also land here, so you can copy or paste them again.")).toBeTruthy();
+    // The keycap names the real shortcut, not the reference's default.
+    expect(card.querySelector(".bigkey .keycap")?.textContent).toBe("Right Alt");
+    expect(within(card).getByText("hold while you speak")).toBeTruthy();
     expect(screen.getByText("Your dictations will collect here")).toBeTruthy();
+    expect(screen.getByText("Nothing leaves this PC. History is a plain file you can open, copy or delete.")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Earlier dictations" })).toBeNull();
+    expect(screen.getByText("Try saying")).toBeTruthy();
+    expect(screen.getByText("\"call use effect here comma then return null\"")).toBeTruthy();
+    expect(screen.getByText("In VS Code that becomes useEffect, with the comma.")).toBeTruthy();
+    const speed = screen.getByText("Speaking speed").closest(".stat") as HTMLElement;
+    expect(speed.querySelector(".v")?.textContent).toBe("-");
+    expect(within(speed).getByText("Appears after a few dictations")).toBeTruthy();
+    // No streak, saved or words tiles before there is anything to count.
+    expect(screen.queryByText("Streak")).toBeNull();
   });
 
-  it("engine error: says what failed and offers Try again; Earlier still renders", async () => {
+  it("engine error (memory): red card, plain copy, raw error, and Earlier still renders", async () => {
     tauri = bridge(ROWS, { retry_engine: () => true });
     renderHome({ error: "sherpa-onnx: failed to allocate 786432000 bytes" });
-    expect(await screen.findByText("Not enough memory to load the speech model")).toBeTruthy();
-    expect(screen.getByText("sherpa-onnx: failed to allocate 786432000 bytes")).toBeTruthy();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Try again" })); });
-    expect(tauri.calls.some((c) => c.cmd === "retry_engine")).toBe(true);
+    const card = await screen.findByRole("article", { name: "Speech engine problem" });
+    expect(card.className).toBe("last glass err");
+    expect(within(card).getByText("Speech engine")).toBeTruthy();
+    expect(within(card).getByRole("heading", { name: "Not enough memory to load the speech model" })).toBeTruthy();
+    const body = within(card).getByText(/The speech model needs about 750 MB of memory/);
+    expect(body.textContent).toBe("The speech model needs about 750 MB of memory. Close something large, a game, a browser with many tabs, another AI tool, and try again.");
+    expect(card.textContent).not.toMatch(/\u2014/);
+    expect(within(card).getByText("sherpa-onnx: failed to allocate 786432000 bytes").className).toBe("err-raw");
     expect(await screen.findByRole("region", { name: "Earlier dictations" })).toBeTruthy();
+    expect(screen.getByText("Speaking speed")).toBeTruthy();
   });
 
-  it("loading: skeletons until both history and totals answer", async () => {
+  it("Try again calls retry_engine and holds for 4 s as Trying again…", async () => {
+    tauri = bridge(ROWS, { retry_engine: () => true });
+    renderHome({ error: "sherpa-onnx: failed to allocate 786432000 bytes" });
+    await screen.findByRole("article", { name: "Speech engine problem" });
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Try again" })); });
+    expect(tauri.calls.filter((c) => c.cmd === "retry_engine")).toHaveLength(1);
+    expect((screen.getByRole("button", { name: "Trying again…" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { vi.advanceTimersByTime(3_900); });
+    expect((screen.getByRole("button", { name: "Trying again…" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect((screen.getByRole("button", { name: "Try again" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("Open log folder calls open_data_dir", async () => {
+    tauri = bridge(ROWS, { open_data_dir: () => null });
+    renderHome({ error: "sherpa-onnx: failed to allocate 786432000 bytes" });
+    const open = await screen.findByRole("button", { name: "Open log folder" });
+    await act(async () => { fireEvent.click(open); });
+    expect(tauri.calls.some((c) => c.cmd === "open_data_dir")).toBe(true);
+  });
+
+  it.each([
+    ["no speech model found in the resources folder"],
+    // The real error ov-asr raises when the model folder is missing (crates/ov-asr/src/locate.rs).
+    ["the parakeet-tdt-0.6b-v2 model is not installed. Expected it in C:\\Users\\x\\AppData\\Roaming\\ai.openvoice\\models\\parakeet-tdt-0.6b-v2."],
+  ])("engine error (missing model): %s", async (error) => {
+    tauri = bridge();
+    renderHome({ error });
+    expect(await screen.findByRole("heading", { name: "The speech model could not be found" })).toBeTruthy();
+    expect(screen.getByText("The speech model is missing from the installation. Reinstalling OpenVoice will restore it; it ships inside the installer, so this needs no download.")).toBeTruthy();
+    expect(screen.getByText(error)).toBeTruthy();
+  });
+
+  it("engine error (anything else): the generic copy", async () => {
+    tauri = bridge();
+    renderHome({ error: "the audio device went away" });
+    expect(await screen.findByRole("heading", { name: "The speech engine could not start" })).toBeTruthy();
+    expect(screen.getByText("The full details are in the log file.")).toBeTruthy();
+  });
+
+  it("loading: the reference's skeleton shapes until both history and totals answer", async () => {
     tauri = installTauri({ get_history: () => new Promise(() => {}), get_totals: () => TOTALS });
     const { container } = renderHome();
     await act(async () => {});
-    expect(container.querySelectorAll(".sk").length).toBeGreaterThan(0);
+    // The 210px hero with four bars, the list panel, three stat blocks.
+    expect(container.querySelectorAll(".sk")).toHaveLength(5);
+    expect(container.querySelector(".sk.sk-hero")?.querySelectorAll(".skl")).toHaveLength(4);
+    // Announced once as busy, not read out as a pile of empty boxes.
+    expect(container.querySelector("[aria-busy='true']")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Earlier" })).toBeNull();
+    expect(screen.queryByRole("article")).toBeNull();
+  });
+
+  it("loading: totals that never answer keep the skeleton too", async () => {
+    tauri = installTauri({ get_history: () => ROWS, get_totals: () => new Promise(() => {}) });
+    const { container } = renderHome();
+    await act(async () => {});
+    expect(container.querySelectorAll(".sk")).toHaveLength(5);
+    expect(screen.queryByText(ROWS[0].final_text)).toBeNull();
   });
 });
+

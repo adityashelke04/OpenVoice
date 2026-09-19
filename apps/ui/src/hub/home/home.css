@@ -127,3 +127,25 @@
 /* Loading: the reference's skeleton shapes (lines 499-502 and 750). */
 .sk-hero { height: 210px; flex: none; padding: 22px; }
 .sk-col { display: flex; flex-direction: column; gap: 12px; }
+
+/* -- §5 full history (reference lines 304-306) ----------------------------- */
+.hist { flex: 1; min-height: 0; border-radius: var(--r-card); padding: 6px; display: flex; flex-direction: column; }
+.hist .recent-head .field { width: 280px; margin-left: auto; }
+
+/* History is where scrolling lives (useFit.ts): its list scrolls, quietly. */
+.hist .rows { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--edge) transparent; }
+.hist .field input[type="search"]::-webkit-search-cancel-button { display: none; }
+.hist-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; }
+.hist-empty-title { font: 650 16px/1.2 var(--display); color: var(--ink); overflow-wrap: anywhere; }
+.hist-empty .cap { max-width: 44ch; }
+.hist-empty .btn { margin-top: 8px; }
+
+/* First run: the big keycap presses itself three times after the card rises,
+   then rests. Shown only when motion is welcome and not under ?still=1. */
+@media (prefers-reduced-motion: no-preference) {
+  .anim .bigkey .keycap { animation: keypress 1.2s var(--ease) .9s 3; }
+  @keyframes keypress {
+    0%, 45%, 100% { transform: none; box-shadow: inset 0 -3px 0 rgb(0 0 0 / 22%); }
+    15%, 30% { transform: translateY(2px); box-shadow: inset 0 -1px 0 rgb(0 0 0 / 22%), inset 0 2px 5px rgb(0 0 0 / 20%); }
+  }
+}

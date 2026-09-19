@@ -138,7 +138,11 @@ function FirstCard({ shortcut }: { shortcut: string }) {
  *  old Hub's StartupError, without its em dashes. */
 function ErrorCard({ error }: { error: string }) {
   const memory = /malloc|out of memory|allocat|cuda error|cublas/i.test(error);
-  const missing = /speech model|no speech model|not found|incomplete/i.test(error);
+  // "not installed" is what ov-asr actually says when the model folder is
+  // missing ("the parakeet-tdt-0.6b-v2 model is not installed. Expected it
+  // in …", crates/ov-asr/src/locate.rs); the older phrases stay for the
+  // sidecar's own wording.
+  const missing = /speech model|no speech model|not found|incomplete|not installed/i.test(error);
   const [retrying, setRetrying] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
