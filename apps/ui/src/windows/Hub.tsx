@@ -26,6 +26,7 @@ import { TopBar } from "../hub/TopBar";
 import { Toasts } from "../hub/Toasts";
 import { pushToast } from "../hub/toast";
 import { useHubKeys } from "../hub/useHubKeys";
+import { isStill } from "../hub/useMedia";
 import { useSettings } from "../hub/useSettings";
 import { LegacyHome } from "../hub/home/LegacyHome";
 import "../hub/shell.css";
@@ -39,7 +40,7 @@ export function initialScreen(search: string = typeof location === "undefined" ?
 }
 
 /** `?still=1`: no screen-enter motion at all, for screenshots and the twin. */
-const STILL = typeof location !== "undefined" && !!new URLSearchParams(location.search).get("still");
+const STILL = isStill();
 
 /** The clock the greeting reads. It only has to be right to the hour, so it
  *  wakes once at the top of each hour rather than ticking. */

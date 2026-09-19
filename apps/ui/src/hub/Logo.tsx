@@ -7,8 +7,13 @@
  *  behind its left neighbour, so the mark reads as a waveform travelling across
  *  it. A ring buffer of the last 400 ms of samples feeds that delay. The loop
  *  writes `style.transform` directly and never touches React state, and it only
- *  exists while listening: idle, the mark is a plain static SVG (idle CPU ~ 0). */
+ *  exists while listening: idle, the mark is a plain static SVG (idle CPU ~ 0).
+ *
+ *  Under prefers-reduced-motion and ?still=1 the loop never starts. Neither
+ *  the media query nor MotionConfig reaches a hand-written transform, so the
+ *  component asks both itself. */
 import { useEffect, useRef } from "react";
+import { isStill, REDUCED_MOTION, useMedia } from "./useMedia";
 
 const BARS: [x: number, y: number, h: number][] = [
   [80, 424, 177], [210, 327, 370], [340, 160, 704], [470, 263, 498],
@@ -16,12 +21,14 @@ const BARS: [x: number, y: number, h: number][] = [
 ];
 const DELAY_MS = 40, WINDOW_MS = 400;
 
-export function Logo({ levelRef, listening }: { levelRef: { readonly current: number }; listening: boolean }) {
+export function Logo({ levelRef, listening, still = isStill() }: { levelRef: { readonly current: number }; listening: boolean; still?: boolean }) {
   const svg = useRef<SVGSVGElement>(null);
+  const reduce = useMedia(REDUCED_MOTION);
+  const animate = listening && !still && !reduce;
 
   useEffect(() => {
     const rects = svg.current ? [...svg.current.querySelectorAll("rect")] : [];
-    if (!listening) return;
+    if (!animate) return;
     const samples: { t: number; v: number }[] = [];
     let raf = 0;
     const at = (t: number) => {
@@ -40,10 +47,10 @@ export function Logo({ levelRef, listening }: { levelRef: { readonly current: nu
       cancelAnimationFrame(raf);
       rects.forEach((r) => { r.style.transform = ""; });
     };
-  }, [listening, levelRef]);
+  }, [animate, levelRef]);
 
   return (
-    <svg ref={svg} className="logo" viewBox="80 112 865 800" aria-hidden="true" data-live={listening || undefined}>
+    <svg ref={svg} className="logo" viewBox="80 112 865 800" aria-hidden="true" data-live={animate || undefined}>
       {BARS.map(([x, y, h]) => <rect key={x} x={x} y={y} width="85" height={h} rx="42.5" />)}
     </svg>
   );

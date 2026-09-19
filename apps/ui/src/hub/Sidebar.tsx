@@ -13,6 +13,7 @@ import { Keycap } from "./ui";
 import { Logo } from "./Logo";
 import { NAV, type ScreenId } from "./nav";
 import { useTheme, type ModeChoice } from "./theme";
+import { ICON_RAIL, useMedia } from "./useMedia";
 
 export { NAV };
 
@@ -41,6 +42,9 @@ export interface SidebarProps {
 
 export function Sidebar({ screen, onNavigate, engine, shortcut, levelRef, listening }: SidebarProps) {
   const { prefs, setMode } = useTheme();
+  // Labels are hidden in the icon rail, so only there do the items need a
+  // tooltip; at full width a title would repeat the visible label on hover.
+  const rail = useMedia(ICON_RAIL);
   // The full history is Home's list, opened wider; Home stays the current section.
   const current = screen === "history" ? "home" : screen;
 
@@ -61,7 +65,7 @@ export function Sidebar({ screen, onNavigate, engine, shortcut, levelRef, listen
               className="nav-item"
               aria-current={on ? "page" : undefined}
               aria-keyshortcuts={`Control+${key}`}
-              title={label}
+              title={rail ? label : undefined}
               onClick={() => onNavigate(id)}
             >
               {on && <motion.span className="nav-pill" layoutId="nav-pill" transition={{ type: "spring", stiffness: 500, damping: 40 }} aria-hidden="true" />}
@@ -74,7 +78,7 @@ export function Sidebar({ screen, onNavigate, engine, shortcut, levelRef, listen
       </nav>
 
       <div className="side-foot">
-        <div className="mic glass" title={ENGINE_LABEL[engine]}>
+        <div className="mic glass" title={rail ? ENGINE_LABEL[engine] : undefined}>
           <div className="row1" role="status">
             <span className={`dot${engine === "error" ? " err" : engine === "starting" ? " idle" : ""}`} aria-hidden="true" />
             <span>{ENGINE_LABEL[engine]}</span>

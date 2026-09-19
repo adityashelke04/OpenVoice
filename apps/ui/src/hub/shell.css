@@ -12,6 +12,9 @@ html[data-window="hub"], html[data-window="hub"] body { background: var(--bg); }
 html[data-window="hub"] body { color: var(--body); font: 400 14px/1.5 var(--ui); font-feature-settings: normal; text-rendering: auto; -webkit-font-smoothing: antialiased; overflow: hidden; }
 html[data-window="hub"] :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 html[data-window="hub"] ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--ink); }
+/* global.css draws the skip link in the legacy tokens (a green --live border);
+ * green is the logo's and "ready" only, so the Hub's uses its own theme. */
+html[data-window="hub"] .skip-link { z-index: 30; top: 12px; left: 12px; padding: 9px 13px; background: var(--solid); border: 1px solid var(--edge); border-radius: var(--r-ctl); box-shadow: inset 0 0 0 1px var(--accent); color: var(--ink); font: 500 13px/1 var(--ui); text-decoration: none; }
 
 /* Mica: the window itself is the backdrop, so the page is see-through and only
  * tints it per theme (spec 4.4). The ambient blobs would double it. */

@@ -20,7 +20,9 @@
  * rendered" check still applies, and a full-page run refuses the flag: a full
  * shot without its hover or typing would prove nothing.
  *
- * Output: docs/redesign/twin/<name>-{ref,app,diff}.png and twin-report.json, one
+ * Output: docs/redesign/twin/<name>-{ref,app,diff}.png and twin-report.json
+ * (twin-report-<region>.json for a region run; shots run with --no-setup are
+ * marked `noSetup: true`), one
  * line per shot on stdout, exit 1 if any shot failed. <name> is the file stem
  * `render-reference.mjs` uses, plus `-<region>` when a region is cropped.
  *
@@ -329,6 +331,8 @@ async function main() {
   const withAxe = flag("axe");
   const noSetup = flag("no-setup");
   if (noSetup && region === "full") throw new Error("--no-setup is only for --region sidebar|top: a full-page shot without its hover or typing proves nothing");
+  // One report per region, so a sidebar run and a top run both survive.
+  const reportFile = region === "full" ? "twin-report.json" : `twin-report-${region}.json`;
 
   // Fail early and clearly. Without this every capture is a screenshot of
   // Chrome's own connection-error page, diffed against the reference.
@@ -359,8 +363,8 @@ async function main() {
       writeFileSync(join(OUT, `${name}-ref.png`), PNG.sync.write(ref));
       writeFileSync(join(OUT, `${name}-app.png`), PNG.sync.write(app));
       writeFileSync(join(OUT, `${name}-diff.png`), PNG.sync.write(res.diff));
-      report.push({ name, ratio: res.ratio, pass, big: res.big, clusters: res.clusters.slice(0, 10), axe, setup });
-      writeFileSync(join(OUT, "twin-report.json"), JSON.stringify(report, null, 2));
+      report.push({ name, ratio: res.ratio, pass, big: res.big, clusters: res.clusters.slice(0, 10), axe, setup, ...(noSetup ? { noSetup: true } : {}) });
+      writeFileSync(join(OUT, reportFile), JSON.stringify(report, null, 2));
 
       let line = `${pass ? "PASS" : "FAIL"} ${pct(res.ratio)} ${name}`;
       if (res.big.length) line += `  ${res.big.length} cluster(s) over 24x24, largest ${box(res.big.sort((p, q) => q.pixels - p.pixels)[0])}`;
