@@ -11,7 +11,14 @@
  *   npm run dev:ui                                   # in one terminal (port 5199)
  *   npm run twin -- [--size 1100x740] [--only <screen>] [--state <state>]
  *                   [--theme t] [--mode m] [--region full|sidebar|top] [--axe]
+ *                   [--no-setup]
  *   npm run twin -- --compare a.png b.png [--region r]   # plain two-image diff
+ *
+ * --no-setup skips the hover and typing steps, and so their setup errors. It is
+ * for region runs (--region sidebar|top) while the screens those steps need are
+ * not built yet; the sidebar and top bar do not depend on them. The "app never
+ * rendered" check still applies, and a full-page run refuses the flag: a full
+ * shot without its hover or typing would prove nothing.
  *
  * Output: docs/redesign/twin/<name>-{ref,app,diff}.png and twin-report.json, one
  * line per shot on stdout, exit 1 if any shot failed. <name> is the file stem
@@ -219,7 +226,7 @@ async function renderReference(browser, fonts, shot, w, h) {
  *  the first dictionary term in their hover state. */
 const HOVER_ROW = new Set(["home:normal", "home:failed", "home:error", "history:normal"]);
 
-async function renderApp(browser, shot, w, h, withAxe) {
+async function renderApp(browser, shot, w, h, withAxe, noSetup = false) {
   const { page, targetId } = await openPage(browser, PORT);
   try {
     await page.send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false });
@@ -250,8 +257,8 @@ async function renderApp(browser, shot, w, h, withAxe) {
     await sleep(400);
 
     let target = null;
-    if (HOVER_ROW.has(`${shot.screen}:${shot.state ?? "normal"}`)) target = "row";
-    if (shot.screen === "dictionary") {
+    if (!noSetup && HOVER_ROW.has(`${shot.screen}:${shot.state ?? "normal"}`)) target = "row";
+    if (!noSetup && shot.screen === "dictionary") {
       // React owns the field's value, so the write goes through the native
       // setter and a bubbling input event (as in screenshots.mjs).
       const typed = await evaluate(page, `(() => {
@@ -320,6 +327,8 @@ async function main() {
   const shots = matrix({ only: arg("only"), state: arg("state"), theme: arg("theme"), mode: arg("mode") });
   if (shots.length === 0) throw new Error("no shots match those flags");
   const withAxe = flag("axe");
+  const noSetup = flag("no-setup");
+  if (noSetup && region === "full") throw new Error("--no-setup is only for --region sidebar|top: a full-page shot without its hover or typing proves nothing");
 
   // Fail early and clearly. Without this every capture is a screenshot of
   // Chrome's own connection-error page, diffed against the reference.
@@ -340,7 +349,7 @@ async function main() {
       const name = shotName({ ...shot, w, h }) + (region === "full" ? "" : `-${region}`);
       const r = crop(region, w, h);
       const ref = cropPng(await renderReference(browser, fonts, shot, w, h), r);
-      const { png, axe, setup } = await renderApp(browser, shot, w, h, withAxe);
+      const { png, axe, setup } = await renderApp(browser, shot, w, h, withAxe, noSetup);
       const app = cropPng(png, r);
       const res = diffPngs(ref, app);
       const axeBad = (axe ?? []).filter((v) => v.impact === "serious" || v.impact === "critical");

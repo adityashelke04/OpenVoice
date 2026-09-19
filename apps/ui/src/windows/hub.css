@@ -1,62 +1,9 @@
-.hub {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
-  height: 100%;
-}
-
-/* ------------------------------------------------------------------- nav -- */
-
-.hub-nav {
-  display: flex;
-  flex-direction: column;
-  background: var(--canvas);
-  border-right: 1px solid var(--hairline);
-  padding-top: var(--s-3);
-}
-
-.hub-brand {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  padding: var(--s-3) var(--s-4) var(--s-5);
-}
-
-/* The brand mark is the live waveform: five bars that move when the microphone
-   is open. The identity and the state indicator are the same object. */
-.hub-brand > div:first-child {
-  width: 22px;
-  height: 16px;
-  flex: none;
-}
-
-.nav-item:disabled {
-  color: var(--disabled);
-  cursor: default;
-}
-
-.nav-item:disabled:hover {
-  background: transparent;
-  color: var(--disabled);
-}
-
-.nav-soon {
-  margin-left: auto;
-  font: 500 10px/1 var(--font-sans);
-  letter-spacing: 0.3px;
-  color: var(--faint);
-}
-
-.hub-nav-foot {
-  margin-top: auto;
-  padding: var(--s-5) var(--s-4);
-  border-top: 1px solid var(--hairline);
-}
-
 /* ------------------------------------------------------------------ main -- */
 
-.hub-main {
+.legacy-home {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: var(--s-7);
   display: flex;
   flex-direction: column;
   gap: var(--s-6);
@@ -230,39 +177,9 @@
   margin: 0 calc(var(--s-5) * -1) calc(var(--s-5) * -1);
 }
 
-/* Narrow window: a tighter sidebar, not an icon rail.
- *
- * This used to collapse to 64px — an icon-bar width, in a sidebar that has no
- * icons. The labels stayed, so "Writing style" and "Speech model" simply ran out
- * of the sidebar and across the content beside it. 148px is the width at which
- * the longest label still fits at 12px, and the ellipsis below is the backstop
- * for a label longer than any shipped today. */
-@media (max-width: 900px) {
-  .hub {
-    grid-template-columns: 148px 1fr;
-  }
-  .hub-brand span,
-  .nav-item {
-    font-size: 12px;
-  }
-  .nav-soon {
-    display: none;
-  }
-}
-
-/* Nothing in the sidebar may spill into the page beside it, whatever it is
-   called. Applies at every width, so a future label cannot reintroduce this. */
-.hub-nav {
-  overflow: hidden;
-}
-
-.hub-brand span,
-.nav-item {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
+/* The old sidebar's rules (.hub, .hub-nav, .nav-item sizing) were removed with
+ * it in Task 7: the new shell's sidebar reuses the class name .nav-item, and
+ * these unscoped rules would have landed on it. This file goes in Task 8. */
 
 /* --------------------------------------------------------------- first run --
  *
