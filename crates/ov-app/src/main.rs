@@ -20,8 +20,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use ov_core::event::Event;
+use ov_core::event::{Event, NoticeLevel};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -29,8 +30,11 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 mod clickaway;
 mod engine;
 mod history;
+mod material;
 mod models;
+mod names;
 mod overlay;
+mod paste_again;
 mod settings;
 mod taplatch;
 mod topmost;
@@ -166,24 +170,34 @@ impl From<ov_core::ports::Utterance> for HistoryRow {
     }
 }
 
-/// Recent history, or full-text search when `query` is given.
+/// Recent history, or full-text search when `query` is given, optionally
+/// restricted to one formatting profile.
 ///
 /// Search happens in SQLite rather than by filtering in JavaScript: the previous
 /// version fetched 200 rows and matched them client-side, so anything older than
 /// the last 200 sessions was simply unfindable.
+///
+/// `""` and `"all"` mean the same thing as omitting `profile` altogether: the
+/// Hub's "All" pill has to round-trip through `Option<String>` in TypeScript,
+/// and the empty string is what a cleared search field naturally becomes on the
+/// way here.
 #[tauri::command]
 fn get_history(
     state: tauri::State<'_, AppState>,
     limit: Option<usize>,
     query: Option<String>,
+    profile: Option<String>,
 ) -> Vec<HistoryRow> {
-    use ov_core::ports::HistoryStore;
     let limit = limit.unwrap_or(200);
     let store = &state.store;
+    let profile = profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "all");
 
     let rows = match query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
-        Some(q) => store.search(q, limit),
-        None => store.recent(limit),
+        Some(q) => store.search_filtered(q, limit, profile),
+        None => store.recent_filtered(limit, profile),
     };
 
     rows.unwrap_or_else(|e| {
@@ -230,6 +244,153 @@ fn paste_last(state: tauri::State<'_, AppState>) {
     }
 }
 
+/// The Home screen's greeting, from the Windows account name.
+///
+/// `None` when the environment variable is missing or is not a name anything
+/// can be extracted from -- the greeting then falls back to a generic one
+/// rather than showing "Hi, !".
+#[tauri::command]
+fn get_user_name() -> Option<String> {
+    std::env::var("USERNAME")
+        .ok()
+        .as_deref()
+        .and_then(names::first_name)
+}
+
+/// RAII over a re-entry flag: [`AtomicFlagGuard::acquire`] sets it and returns
+/// `None` if it was already set, and dropping a held guard clears it.
+///
+/// Used in place of a bare swap-then-store pair so the flag is released on
+/// *every* exit from the guarded section, including a panic unwinding through
+/// it -- a poisoned `engine.lock().expect("engine")` in [`paste_again_once`]
+/// being the case that matters here. A plain `store(false)` placed after an
+/// `await` is simply never reached if the awaited future panics instead of
+/// resolving, and the flag would then read "pasting" for the rest of the
+/// process.
+struct AtomicFlagGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> AtomicFlagGuard<'a> {
+    fn acquire(flag: &'a AtomicBool) -> Option<Self> {
+        if flag.swap(true, Ordering::SeqCst) {
+            None
+        } else {
+            Some(Self { flag })
+        }
+    }
+}
+
+impl Drop for AtomicFlagGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod atomic_flag_guard_tests {
+    use super::AtomicFlagGuard;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn taking_it_twice_fails_and_dropping_frees_it() {
+        let flag = AtomicBool::new(false);
+
+        let first = AtomicFlagGuard::acquire(&flag).expect("flag was free");
+        assert!(
+            AtomicFlagGuard::acquire(&flag).is_none(),
+            "a second guard must not be handed out while the first is held"
+        );
+
+        drop(first);
+        assert!(
+            AtomicFlagGuard::acquire(&flag).is_some(),
+            "dropping the first guard must free the flag for the next caller"
+        );
+    }
+}
+
+/// Paste a history row into whichever app the user was in before the Hub.
+///
+/// `paste_last` types into the focused window, which is the Hub itself when its
+/// button is clicked. So: minimise the Hub, wait for Windows to hand focus to the
+/// previous window, then inject through the engine's normal path.
+///
+/// Guarded by [`AppState::pasting`] via [`AtomicFlagGuard`] so a double click
+/// cannot start a second paste while the first is still minimising the Hub and
+/// polling for focus. Held across the whole call to [`paste_again_once`] --
+/// including the `.await` -- so it releases on every exit: success, a failed
+/// paste, an early `?`, or a panic unwinding out of that function.
+#[tauri::command]
+async fn paste_again(app: AppHandle, text: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let Some(_guard) = AtomicFlagGuard::acquire(&state.pasting) else {
+        return Err("Already pasting.".to_string());
+    };
+    paste_again_once(app.clone(), text).await
+}
+
+/// The body of [`paste_again`], factored out from under its [`AtomicFlagGuard`]
+/// so this function's several return points -- including an early `?` and a
+/// panic from a poisoned lock -- can all just return or unwind normally; the
+/// guard in the caller releases the flag regardless of which one happens.
+async fn paste_again_once(app: AppHandle, text: String) -> Result<String, String> {
+    let engine = app
+        .state::<AppState>()
+        .engine
+        .lock()
+        .expect("engine")
+        .clone()
+        .ok_or_else(|| "The speech engine is not running, so nothing can be pasted.".to_string())?;
+    let hub = app
+        .get_webview_window("hub")
+        .ok_or("The Hub window is missing.")?;
+    let hub_hwnd = hub.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    hub.minimize().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let moved = paste_again::poll_until(
+            Duration::from_millis(600),
+            Duration::from_millis(20),
+            || paste_again::focus_moved(paste_again::foreground_hwnd(), hub_hwnd),
+        );
+
+        // Copy to the clipboard and say so, rather than injecting. Used both when
+        // focus never left the Hub, and as the fallback when it did but the
+        // injection itself still failed.
+        let copy_instead = |engine: &engine::Engine| match ov_input::set_clipboard_text(&text) {
+            Ok(()) => {
+                engine.notice(
+                    NoticeLevel::Info,
+                    "Copied. Click where you want it and press Ctrl+V.",
+                );
+                Ok("copied".to_string())
+            }
+            Err(e) => {
+                // Not the dictated text -- only the failure -- so a log line about
+                // a clipboard error never doubles as a transcript leak.
+                tracing::warn!(error = %e, "clipboard fallback failed; nothing was pasted or copied");
+                Err("Could not paste or copy the text.".to_string())
+            }
+        };
+
+        if moved {
+            // The target window has just regained focus and needs a moment to
+            // restore keyboard focus to its own caret before typing into it --
+            // without this, the OS-level focus change can be observed here before
+            // the target has actually routed keyboard input to its text field.
+            std::thread::sleep(Duration::from_millis(40));
+            match engine.paste_text(&text) {
+                Ok(()) => Ok("pasted".to_string()),
+                Err(_) => copy_instead(&engine),
+            }
+        } else {
+            copy_instead(&engine)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn open_data_dir(app: AppHandle) {
     let dir = history::data_dir();
@@ -244,6 +405,10 @@ struct AppState {
     /// Whether a start attempt is in flight, so a retry cannot begin a second one
     /// beside it. Two live engines would mean two sidecars and two hotkey hooks.
     starting: AtomicBool,
+    /// Whether a `paste_again` is in flight, so a double click cannot start a
+    /// second one that minimises the Hub again mid-poll and races the first for
+    /// the clipboard and the target window's focus.
+    pasting: AtomicBool,
     /// Set while a model is being fetched from the Models screen.
     ///
     /// Recorded rather than emitted as an event: a 465 MB transfer can start
@@ -271,6 +436,7 @@ impl Default for AppState {
             error: Mutex::new(None),
             // The launch attempt begins immediately, so this starts true.
             starting: AtomicBool::new(true),
+            pasting: AtomicBool::new(false),
             download: Mutex::new(None),
             booted: Mutex::new(None),
             overlay: overlay::Overlay::new(),
@@ -866,6 +1032,15 @@ fn main() {
         // the network until `update::check` is called, which happens either from
         // a button or from the once-per-launch check the user can turn off.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The Hub is created hidden (tauri.conf.json) and revealed when its page has
+        // finished loading. See `reveal_hub`.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "hub"
+                && payload.event() == tauri::webview::PageLoadEvent::Finished
+            {
+                reveal_hub(webview.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_ready,
@@ -879,6 +1054,8 @@ fn main() {
             clear_history,
             get_log_path,
             paste_last,
+            get_user_name,
+            paste_again,
             open_data_dir,
             overlay_placement,
             overlay_move,
@@ -904,7 +1081,9 @@ fn main() {
             preview_format,
             check_for_update,
             install_update,
-            restart_app
+            restart_app,
+            window_material,
+            windows_transparency
         ])
         .setup(|app| {
             // Built here rather than handed to `manage` in the builder chain: that
@@ -948,6 +1127,18 @@ fn main() {
             // UI thread. The window paints immediately and reports progress rather
             // than showing a frozen frame for several seconds.
             spawn_engine(handle.clone());
+
+            // A Hub created hidden must never stay hidden: if its page has not
+            // reported a finished load in 4 s (a stalled dev server, a WebView2
+            // that never fires the event), show it anyway. Late and possibly white
+            // beats a launch that looks like nothing happened.
+            let late = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                if reveal_hub(&late) {
+                    tracing::warn!("hub page never finished loading; shown by the fallback timer");
+                }
+            });
 
             Ok(())
         })
@@ -1169,6 +1360,20 @@ fn show_hub_cmd(app: AppHandle, tab: Option<String>) {
     }
 }
 
+/// "mica" when the Hub is actually showing Mica behind its transparent webview,
+/// "none" when the page has to paint its own backdrop. See `material.rs`.
+#[tauri::command]
+fn window_material() -> String {
+    material::decide(material::windows_build(), material::transparency_enabled()).into()
+}
+
+/// Windows "Transparency effects". Off forces the Hub's solid panels whatever the
+/// in-app Reduce transparency switch says.
+#[tauri::command]
+fn windows_transparency() -> bool {
+    material::transparency_enabled()
+}
+
 /// Restart the app so a new speech model can be loaded.
 ///
 /// Changing the model means tearing down the sidecar and loading different
@@ -1179,6 +1384,28 @@ fn show_hub_cmd(app: AppHandle, tab: Option<String>) {
 fn restart_app(app: AppHandle) {
     tracing::info!("restarting to apply a model change");
     app.restart();
+}
+
+/// Set once the Hub has been revealed for the first time, by whichever of the page
+/// load or the fallback timer gets there first.
+static HUB_REVEALED: AtomicBool = AtomicBool::new(false);
+
+/// Show the Hub for the first time. Returns whether this call did it.
+///
+/// The Hub is a transparent window over Mica. Shown at creation it was solid white
+/// for ~600 ms on a cold start, until the page arrived; shown after the load there
+/// is nothing to see but Mica and then the page, and `material::repaint` is what
+/// makes the Mica show (see there). Once only, so a reload of a Hub that was closed
+/// to the tray does not pop it back up.
+fn reveal_hub(app: &AppHandle) -> bool {
+    if HUB_REVEALED.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    show_hub(app);
+    if let Some(win) = app.get_webview_window("hub") {
+        material::repaint(&win);
+    }
+    true
 }
 
 fn show_hub(app: &AppHandle) {

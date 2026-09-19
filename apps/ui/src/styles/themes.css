@@ -1,0 +1,108 @@
+/** Hub theme tokens: three themes (glacier, graphite, lagoon) x light/dark,
+ *  copied verbatim from docs/redesign/reference/reference.html section 1
+ *  (lines 34-127), keyed on [data-theme][data-mode]. Only the font tokens
+ *  are changed, from the reference's Google Fonts names to the families
+ *  this app bundles via @fontsource (see global.css).
+ *
+ *  The six [data-theme][data-mode] blocks below are naturally scoped: only
+ *  the Hub sets those attributes (theme.ts), so they have no effect on the
+ *  overlay or sheet windows. The reference's own top-level `:root` block is
+ *  not scoped that way, and one of its tokens, `--ease`, collides by name
+ *  with legacy tokens.css's `--ease` (same value today, but a silent retime
+ *  of the Flow Bar waiting to happen the day they diverge) which overlay.css
+ *  and ui.css consume. Scoped to `[data-window="hub"]` (set on <html> by
+ *  main.tsx before first paint) so it only ever reaches the Hub. */
+:root[data-window="hub"] {
+  --brand: #44d62c;
+  --brand-on-light: #2fb81a;
+  --display: "Bricolage Grotesque Variable", "Bricolage Grotesque", "Geist Variable", sans-serif;
+  --ui: "Geist Variable", "Geist", "Segoe UI Variable Text", sans-serif;
+  --mono: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
+  --hand: "Borel", cursive;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+  --blur: 26px;
+  --r-card: 20px; --r-hero: 22px; --r-row: 12px; --r-ctl: 10px; --r-inner: 7px;
+  --sidebar: 224px;
+}
+
+/* ---- Glacier ---- */
+[data-theme="glacier"][data-mode="dark"] {
+  --bg: #070b14;
+  --blob-1: #0e7a6a; --blob-2: #1d3fa8; --blob-3: #22c7e8; --blob-4: #2a8f2a;
+  --glass: rgb(255 255 255 / 6%); --glass-2: rgb(255 255 255 / 9%); --glass-strong: rgb(14 20 34 / 62%);
+  --solid: #0e1422; --solid-2: #152035;
+  --edge: rgb(255 255 255 / 11%); --edge-hi: rgb(255 255 255 / 20%);
+  --ink: #eef3fa; --body: #bcc6d6; --mute: #8390a6;
+  --accent: #5ad7f0; --accent-2: #8aa8ff; --accent-ink: #04121a;
+  --ok: #44d62c; --warn: #f5b454; --warn-soft: rgb(245 180 84 / 14%); --warn-ink: #1d1204;
+  --danger: #ff6b6b; --danger-soft: rgb(255 107 107 / 14%);
+  --chip-editor: #8aa8ff; --chip-terminal: #5ad7f0; --chip-prose: #7ee0b8; --chip-default: #c3cad6;
+  --well: rgb(0 0 0 / 18%);
+}
+[data-theme="glacier"][data-mode="light"] {
+  --bg: #e9eff6;
+  --blob-1: #9fe6d6; --blob-2: #a9bdfb; --blob-3: #9fe4f5; --blob-4: #b9eeb0;
+  --glass: rgb(255 255 255 / 55%); --glass-2: rgb(255 255 255 / 72%); --glass-strong: rgb(255 255 255 / 70%);
+  --solid: #ffffff; --solid-2: #f3f6fa;
+  --edge: rgb(255 255 255 / 80%); --edge-hi: rgb(255 255 255 / 95%);
+  --ink: #0d1726; --body: #33415a; --mute: #5d6b82;
+  --accent: #0a7fa3; --accent-2: #3552c9; --accent-ink: #ffffff;
+  --ok: #178a2b; --warn: #a3620a; --warn-soft: rgb(245 170 60 / 20%); --warn-ink: #ffffff;
+  --danger: #c42b2b; --danger-soft: rgb(220 60 60 / 12%);
+  --chip-editor: #3552c9; --chip-terminal: #0a7fa3; --chip-prose: #0f7a5a; --chip-default: #4d5a6e;
+  --well: rgb(20 40 70 / 6%);
+}
+/* ---- Graphite ---- */
+[data-theme="graphite"][data-mode="dark"] {
+  --bg: #0b0c0f;
+  --blob-1: #1a2330; --blob-2: #232a36; --blob-3: #1b3a2a; --blob-4: #2a3140;
+  --glass: rgb(255 255 255 / 5%); --glass-2: rgb(255 255 255 / 8%); --glass-strong: rgb(20 22 27 / 70%);
+  --solid: #15171b; --solid-2: #1c1f24;
+  --edge: rgb(255 255 255 / 9%); --edge-hi: rgb(255 255 255 / 16%);
+  --ink: #f1f2f4; --body: #c3c6cc; --mute: #8b9099;
+  --accent: #44d62c; --accent-2: #9fb3c8; --accent-ink: #061303;
+  --ok: #44d62c; --warn: #e8a94a; --warn-soft: rgb(232 169 74 / 13%); --warn-ink: #1d1204;
+  --danger: #ff6b6b; --danger-soft: rgb(255 107 107 / 13%);
+  --chip-editor: #a9b8ff; --chip-terminal: #7fd6e6; --chip-prose: #9fe0a8; --chip-default: #c3c6cc;
+  --well: rgb(0 0 0 / 22%);
+}
+[data-theme="graphite"][data-mode="light"] {
+  --bg: #eceef1;
+  --blob-1: #dfe4ea; --blob-2: #d6dce4; --blob-3: #d7ecd9; --blob-4: #e3e7ee;
+  --glass: rgb(255 255 255 / 60%); --glass-2: rgb(255 255 255 / 78%); --glass-strong: rgb(255 255 255 / 75%);
+  --solid: #ffffff; --solid-2: #f4f5f7;
+  --edge: rgb(255 255 255 / 85%); --edge-hi: #ffffff;
+  --ink: #111316; --body: #3a3f47; --mute: #646b75;
+  --accent: #178a2b; --accent-2: #4a5d73; --accent-ink: #ffffff;
+  --ok: #178a2b; --warn: #9a5c08; --warn-soft: rgb(232 160 60 / 20%); --warn-ink: #ffffff;
+  --danger: #c42b2b; --danger-soft: rgb(220 60 60 / 12%);
+  --chip-editor: #3f55c4; --chip-terminal: #0b7890; --chip-prose: #1e7a3a; --chip-default: #4a5058;
+  --well: rgb(20 30 40 / 6%);
+}
+/* ---- Lagoon ---- */
+[data-theme="lagoon"][data-mode="dark"] {
+  --bg: #04110f;
+  --blob-1: #0f8a5c; --blob-2: #0b5f73; --blob-3: #3fd49a; --blob-4: #1a3f86;
+  --glass: rgb(255 255 255 / 6%); --glass-2: rgb(255 255 255 / 9%); --glass-strong: rgb(6 26 24 / 62%);
+  --solid: #0a1d1a; --solid-2: #102723;
+  --edge: rgb(255 255 255 / 11%); --edge-hi: rgb(255 255 255 / 20%);
+  --ink: #ecf8f4; --body: #b6d0c8; --mute: #7e9d95;
+  --accent: #52e3b0; --accent-2: #4cc3e0; --accent-ink: #03140e;
+  --ok: #44d62c; --warn: #f2b85a; --warn-soft: rgb(242 184 90 / 14%); --warn-ink: #1d1204;
+  --danger: #ff6b6b; --danger-soft: rgb(255 107 107 / 14%);
+  --chip-editor: #7fb4ff; --chip-terminal: #4cc3e0; --chip-prose: #52e3b0; --chip-default: #b6d0c8;
+  --well: rgb(0 0 0 / 18%);
+}
+[data-theme="lagoon"][data-mode="light"] {
+  --bg: #e6f3ef;
+  --blob-1: #a6ecd0; --blob-2: #a4dcea; --blob-3: #c9f5b8; --blob-4: #b8c9f5;
+  --glass: rgb(255 255 255 / 55%); --glass-2: rgb(255 255 255 / 72%); --glass-strong: rgb(255 255 255 / 70%);
+  --solid: #ffffff; --solid-2: #f1f7f5;
+  --edge: rgb(255 255 255 / 80%); --edge-hi: #ffffff;
+  --ink: #0b1d18; --body: #2f4a42; --mute: #587268;
+  --accent: #0b7d5a; --accent-2: #0a6f8a; --accent-ink: #ffffff;
+  --ok: #178a2b; --warn: #9a5c08; --warn-soft: rgb(232 160 60 / 20%); --warn-ink: #ffffff;
+  --danger: #c42b2b; --danger-soft: rgb(220 60 60 / 12%);
+  --chip-editor: #2f57c4; --chip-terminal: #0a6f8a; --chip-prose: #0b7d5a; --chip-default: #45584f;
+  --well: rgb(20 50 40 / 6%);
+}

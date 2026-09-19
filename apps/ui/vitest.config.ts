@@ -12,5 +12,6 @@ export default defineConfig({
     // DOM. Nothing here renders to a screen.
     environment: "jsdom",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    setupFiles: ["src/test/setup.ts"],
   },
 });

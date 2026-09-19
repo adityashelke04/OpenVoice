@@ -1,0 +1,86 @@
+/* Screen-level styles for the Hub's settings-like screens (plan Tasks 11-15):
+ * Dictionary, Writing style, Speech model, Settings and Advanced. Ported from
+ * docs/redesign/reference/reference.html §6 "Screens" (lines 311-394), with the
+ * standard renames (`X i` icon rules -> `X svg`, `.term.hover` ->
+ * `.term:is(:hover, :focus-within)`). Shared controls (.card, .field, .lead,
+ * .cap, mark) live in hub/ui/controls.css and are not repeated here.
+ * Everything under an "Additions" heading is not in the static reference:
+ * real controls need focus, empty and overflow states a picture never shows. */
+
+/* -- §6 dictionary (reference lines 316-329) -------------------------------- */
+.tryrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.trybox { border-radius: 14px; padding: 12px 14px; background: var(--well); border: 1px solid var(--edge); min-height: 70px; }
+.trybox .lbl { font-size: 11.5px; font-weight: 600; color: var(--mute); display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.trybox .txt { font: 400 14px/1.5 var(--mono); color: var(--ink); }
+.trybox.out { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.terms { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.term { display: grid; grid-template-columns: 1fr 16px 1fr 22px; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border-radius: var(--r-row); }
+.term:is(:hover, :focus-within) { background: var(--glass-2); }
+.term .sp { font: 400 12.5px/1 var(--mono); color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.term .ar { color: var(--accent-2); font-size: 13px; }
+.term .wr { font: 600 13px/1 var(--mono); color: var(--ink); white-space: nowrap; }
+.term .x { color: var(--mute); font-size: 14px; opacity: 0; }
+.term:is(:hover, :focus-within) .x { opacity: 1; }
+.addrow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--edge); }
+[data-mode="light"] .addrow { border-top-color: rgb(20 40 70 / 8%); }
+
+/* -- Additions: dictionary --------------------------------------------------- */
+/* The heard box is a real <textarea>: stripped to the reference's bare text,
+   growing with its content, with the focus ring moved to the whole well (the
+   shell rings every :focus-visible, which would draw a box inside the box). */
+.trybox .lbl svg { flex: none; }
+.trybox textarea.txt { display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; outline: none; resize: none; field-sizing: content; min-height: 1.5em; }
+.trybox textarea.txt::placeholder { color: var(--mute); opacity: 1; }
+html[data-window="hub"] .trybox textarea.txt:focus-visible { outline: none; }
+.trybox:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.trybox .txt-empty { color: var(--mute); }
+.trybox.out .txt { overflow-wrap: anywhere; }
+
+/* The corrections card takes the rest of the column. A long list scrolls
+   inside it and the add row stays put; a short one keeps its natural height,
+   so the add row sits right under the last term as in the reference. */
+.corrections { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.corrections .terms { flex: 0 1 auto; min-height: 0; overflow-y: auto; grid-auto-rows: 36px; align-content: start; }
+/* Not `.search`: shell.css owns that name for the top bar's search button
+   (320px wide, its own padding), and sharing it pushed this field's icon and
+   text off the reference by a pixel. */
+.corrections .field.term-search { width: 220px; height: 32px; }
+.corrections .field.term-search input { font-size: 13px; }
+.term .ar { flex: none; }
+.term .wr { overflow: hidden; text-overflow: ellipsis; }
+/* The remove control is a real button filling the 22px column; the glyph sits
+   at the column's start like the reference's inline icon. */
+.term .x { width: 22px; height: 22px; padding: 0; border: 0; background: none; border-radius: var(--r-inner); display: flex; align-items: center; justify-content: flex-start; cursor: pointer; }
+.term .x svg { flex: none; }
+.term .x:hover { color: var(--ink); }
+.term .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.terms-empty { padding: 18px 10px; }
+.terms-empty-title { font: 650 15px/1.2 var(--display); color: var(--ink); }
+.terms-empty .cap { margin-top: 6px; max-width: 62ch; line-height: 1.45; }
+@media (prefers-reduced-motion: no-preference) {
+  .term .x { transition: color .15s var(--ease); }
+}
+
+/* -- §6 writing style (reference lines 332-335) ------------------------------ */
+/* Scoped to the screen: Home's Fix panel has its own `.fix .chips` / `.fix .exe`
+   (clickable, on --glass-2), and an unscoped rule would reach into it. */
+.style-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 14px; align-items: start; }
+.style-side { display: flex; flex-direction: column; gap: 14px; }
+.writing .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.writing .exe { font: 500 12px/1 var(--mono); padding: 6px 8px; border-radius: var(--r-inner); background: var(--well); border: 1px solid var(--edge); color: var(--body); }
+
+/* -- Additions: writing style ------------------------------------------------ */
+/* The reference sets these inline: the tab strip hugs its content instead of
+   stretching across the column, the preview wells drop the Dictionary's
+   70px minimum, "You say" is body-coloured, and the two wells sit 8px apart. */
+.writing > .seg { align-self: flex-start; }
+.writing .trybox { min-height: 0; }
+.writing .trybox:not(.out) .txt { color: var(--body); }
+.writing .trybox.out { margin-top: 8px; }
+/* Chrome pixel-snaps an inline <svg> box but draws an icon-font glyph where the
+   text layout puts it. The Terminals tab starts at x .375 (the widths of the two
+   labels before it), so its icon landed 0.375px left of the reference's glyph:
+   invisible, but the whole glyph re-rasterised and graphite dark's twin failed
+   on it (13x11 icon cluster). A transform is not snapped, so this puts the icon
+   back where the text layout meant it. Retune if those labels change. */
+.writing > .seg > button:nth-child(3) svg { transform: translateX(.375px); }

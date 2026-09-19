@@ -1,0 +1,131 @@
+/* The Hub shell: reference §2 (base, backdrop, glass; lines 132-157) and §3
+ * (shell; lines 162-193), ported with the standard renames (`X i` -> `X svg`,
+ * `.nav a` -> `.nav .nav-item`, `.modes span` -> `.modes > button`). Values are
+ * the reference's; do not tune them by eye, the twin check diffs them.
+ *
+ * Only the Hub loads this file (App.tsx lazy-loads each window), but the rules
+ * that touch html/body are still keyed on data-window="hub" so they win over
+ * global.css, which styles every window. */
+
+/* -- Hub-only resets that neutralise global.css ----------------------------- */
+html[data-window="hub"], html[data-window="hub"] body { background: var(--bg); }
+html[data-window="hub"] body { color: var(--body); font: 400 14px/1.5 var(--ui); font-feature-settings: normal; text-rendering: auto; -webkit-font-smoothing: antialiased; overflow: hidden; }
+html[data-window="hub"] :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+html[data-window="hub"] ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--ink); }
+/* global.css draws the skip link in the legacy tokens (a green --live border);
+ * green is the logo's and "ready" only, so the Hub's uses its own theme. */
+html[data-window="hub"] .skip-link { z-index: 30; top: 12px; left: 12px; padding: 9px 13px; background: var(--solid); border: 1px solid var(--edge); border-radius: var(--r-ctl); box-shadow: inset 0 0 0 1px var(--accent); color: var(--ink); font: 500 13px/1 var(--ui); text-decoration: none; }
+
+/* Mica: the window itself is the backdrop, so the page is see-through and only
+ * tints it per theme (spec 4.4). The ambient blobs would double it. */
+html[data-material="mica"], html[data-material="mica"] body { background: transparent; }
+html[data-material="mica"] #root { background: color-mix(in srgb, var(--bg) 72%, transparent); }
+html[data-material="mica"][data-mode="light"] #root { background: color-mix(in srgb, var(--bg) 82%, transparent); }
+html[data-material="mica"] .ambient, html[data-material="mica"] .grain { display: none; }
+/* Reduce transparency clears the Mica effect (material.ts clearEffects), and a
+ * transparent webview on a window with no effect shows whatever is behind it.
+ * Solid always paints an opaque page, whatever the material says. */
+html[data-material="mica"][data-solid], html[data-material="mica"][data-solid] body { background: var(--bg); }
+html[data-material="mica"][data-solid] #root { background: none; }
+
+/* -- §2 backdrop and glass --------------------------------------------------- */
+.ambient { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.ambient i { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .55; }
+[data-mode="light"] .ambient i { opacity: .8; }
+.ambient i:nth-child(1) { width: 520px; height: 420px; left: -120px; top: -140px; background: var(--blob-1); }
+.ambient i:nth-child(2) { width: 620px; height: 520px; right: -160px; top: 80px; background: var(--blob-2); }
+.ambient i:nth-child(3) { width: 420px; height: 360px; left: 34%; top: -180px; background: var(--blob-3); opacity: .35; }
+.ambient i:nth-child(4) { width: 520px; height: 420px; left: 18%; bottom: -260px; background: var(--blob-4); opacity: .35; }
+.grain { position: fixed; inset: 0; z-index: 1; pointer-events: none; opacity: .05; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(var(--blur)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(160%);
+  border: 1px solid var(--edge);
+  box-shadow: inset 0 1px 0 var(--edge-hi), 0 20px 50px -30px rgb(0 0 0 / 55%);
+}
+[data-mode="light"] .glass { box-shadow: inset 0 1px 0 var(--edge-hi), 0 18px 40px -28px rgb(30 50 80 / 35%); }
+/* Reduce transparency: same layout, solid panels, no blur. */
+[data-solid] .glass { background: var(--solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
+[data-solid] .side { background: var(--solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
+[data-solid] .ambient, [data-solid] .grain { display: none; }
+
+/* -- §3 shell ---------------------------------------------------------------- */
+.app { position: relative; z-index: 2; display: grid; grid-template-columns: var(--sidebar) 1fr; height: 100vh; }
+.side { display: flex; flex-direction: column; min-width: 0; padding: 18px 12px 14px; background: var(--glass-strong); backdrop-filter: blur(40px) saturate(150%); -webkit-backdrop-filter: blur(40px) saturate(150%); border-right: 1px solid var(--edge); }
+.brand { display: flex; align-items: center; gap: 10px; padding: 2px 10px 22px; }
+.brand svg { width: 26px; height: 26px; flex: none; }
+.brand svg rect { fill: var(--brand); transform-box: fill-box; transform-origin: center; }
+[data-mode="light"] .brand svg rect { fill: var(--brand-on-light); }
+.wordmark { font: 700 18px/1 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav .nav-item { position: relative; isolation: isolate; display: flex; align-items: center; gap: 11px; width: 100%; height: 36px; padding: 0 11px; border: 0; border-radius: var(--r-ctl); background: none; color: var(--body); text-align: left; text-decoration: none; font-weight: 500; font-size: 13.5px; cursor: pointer; }
+.nav .nav-item svg { font-size: 17px; color: var(--mute); flex: none; }
+.nav .nav-item[aria-current="page"] { color: var(--ink); }
+.nav .nav-item[aria-current="page"] svg { color: var(--accent); }
+/* The active background is a separate element so it can slide between items
+ * (Sidebar.tsx); it carries exactly the reference's aria-current fill. */
+.nav .nav-pill { position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--glass-2); box-shadow: inset 0 0 0 1px var(--edge), inset 0 1px 0 var(--edge-hi); }
+.nav .kbd { margin-left: auto; font: 500 10.5px/1 var(--mono); color: var(--mute); opacity: .8; }
+.side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+.mic { border-radius: 14px; padding: 12px 12px 13px; }
+.mic .row1 { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink); font-weight: 500; }
+.mic .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.mic .dot.err { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.mic .dot.idle { background: var(--mute); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mute) 22%, transparent); }
+.mic .row2 { display: flex; align-items: center; gap: 6px; margin-top: 9px; font-size: 12px; color: var(--mute); }
+.modes { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-ctl); }
+.modes > button { flex: 1; height: 26px; border: 0; border-radius: var(--r-inner); background: none; display: grid; place-items: center; font-size: 14px; color: var(--mute); cursor: pointer; }
+.modes > button.on { background: var(--glass-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge); }
+
+.main { overflow: hidden; padding: 16px 26px 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.main:focus { outline: none; }
+.top { display: flex; align-items: center; gap: 12px; flex: none; }
+.hi { font: 650 22px/1.1 var(--display); letter-spacing: -.03em; color: var(--ink); display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.hi .name { font: 400 21px/1 var(--hand); letter-spacing: 0; color: var(--accent); }
+/* §6 line 311-312: the other screens' titles. */
+.page-title { font: 650 22px/1.1 var(--display); letter-spacing: -.03em; color: var(--ink); display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.page-title svg { font-size: 20px; color: var(--accent); flex: none; }
+.search { margin-left: auto; width: 320px; height: 36px; display: flex; align-items: center; gap: 9px; padding: 0 7px 0 12px; border-radius: 11px; color: var(--mute); font-size: 13px; text-align: left; cursor: pointer; }
+.search .k { margin-left: auto; font: 500 10.5px/1 var(--mono); padding: 4px 6px; border-radius: 6px; border: 1px solid var(--edge); }
+.lock { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); white-space: nowrap; }
+.lock svg { color: var(--ok); }
+
+/* Legacy screens (restyled in their own tasks) scroll inside the pane. */
+.legacy-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+
+/* -- Screen enter (reference lines 396-399, plan decision 9) ------------------ */
+/* `.anim` is absent under ?still=1; reduced motion turns it off here. `--i` on a
+ * card staggers it 60 ms after the one before. */
+@media (prefers-reduced-motion: no-preference) {
+  .anim .card, .anim .last, .anim .recent, .anim .stat, .anim .model { animation: rise .7s var(--ease) both; animation-delay: calc(var(--i, 0) * 60ms); }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.99); } }
+}
+
+/* -- Toasts ------------------------------------------------------------------ */
+.toasts { position: fixed; right: 20px; bottom: 20px; z-index: 20; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: min(420px, calc(100vw - 40px)); pointer-events: none; }
+.toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; padding: 10px 8px 10px 14px; border-radius: 14px; font-size: 13px; color: var(--ink); }
+.toast .tone { flex: none; font-size: 15px; color: var(--accent); }
+.toast.warn .tone { color: var(--warn); }
+.toast.danger .tone { color: var(--danger); }
+.toast .msg { min-width: 0; }
+.toast .dismiss { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: var(--r-inner); background: none; color: var(--mute); font-size: 13px; cursor: pointer; }
+.toast .dismiss:hover { background: var(--glass-2); color: var(--ink); }
+@media (prefers-reduced-motion: no-preference) {
+  .toast { animation: rise .3s var(--ease) both; }
+}
+
+/* -- Narrow windows (spec 6: below 1100 the stats column narrows, below 960 the
+ *    sidebar becomes a 64 px icon rail whose labels are the items' tooltips) -- */
+@media (max-width: 1099px) { .app .lower { grid-template-columns: 1fr 220px; } }
+@media (max-width: 959px) {
+  .app { grid-template-columns: 64px 1fr; }
+  .side { padding: 18px 8px 14px; }
+  .brand { justify-content: center; padding: 2px 0 22px; }
+  .wordmark, .nav .nav-item .label, .nav .kbd, .mic .row2 { display: none; }
+  .nav .nav-item { justify-content: center; padding: 0; }
+  .mic { padding: 10px; display: grid; place-items: center; }
+  .mic .row1 > span:last-child { display: none; }
+  .modes { flex-direction: column; }
+}

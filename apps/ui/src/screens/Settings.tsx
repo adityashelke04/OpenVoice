@@ -14,11 +14,9 @@ import {
   HOTKEYS,
   installUpdate,
   listMicrophones,
-  loadSettings,
   openDataDir,
   restartApp,
   restartReasons,
-  saveSettings,
   type Settings as S,
   type UpdateStatus,
 } from "../engine/settings";
@@ -79,37 +77,9 @@ function Row({
   );
 }
 
-export function useSettings() {
-  const [settings, setSettings] = useState<S | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    loadSettings().then((s) => s && setSettings(s));
-  }, []);
-
-  const patch = async (fn: (s: S) => void) => {
-    if (!settings) return;
-    // Optimistic, then reconciled with whatever the store actually wrote — the
-    // Rust side validates and can reject.
-    const next = structuredClone(settings);
-    fn(next);
-    setSettings(next);
-    setSaving(true);
-    setError(null);
-    try {
-      const saved = await saveSettings(next);
-      if (saved) setSettings(saved);
-    } catch (e) {
-      setError(String(e));
-      setSettings(settings);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return { settings, patch, saving, error };
-}
+// Moved to hub/useSettings.ts (the Hub shell owns settings now); re-exported
+// so the Flow Bar and older imports keep working.
+export { useSettings } from "../hub/useSettings";
 
 /** Updates: the one place OpenVoice contacts a server without being asked.
  *

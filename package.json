@@ -6,6 +6,7 @@
   "scripts": {
     "build:ui": "npm --prefix apps/ui run build",
     "dev:ui": "npm --prefix apps/ui run dev -- --port 5199 --strictPort",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "twin": "node scripts/twin-check.mjs"
   }
 }

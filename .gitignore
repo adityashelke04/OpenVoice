@@ -104,3 +104,8 @@ Desktop.ini
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.shared.json
+
+# Hub redesign twin targets and diffs. Both are regenerated on demand
+# (scripts/render-reference.mjs, scripts/twin-check.mjs) and run to ~30 MB each.
+docs/redesign/reference/png/
+docs/redesign/twin/

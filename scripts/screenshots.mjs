@@ -23,23 +23,16 @@
  * review surface (`?window=flowbar`) already renders honestly.
  */
 
-import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Devtools, launchChrome, sleep } from "./cdp.mjs";
 import { tauriStub } from "./screenshot-fixtures.mjs";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const OUT = join(REPO, "docs", "images");
 const BASE = process.env.OV_UI_URL ?? "http://localhost:5199";
 const PORT = 9222;
-
-const CHROME = [
-  "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-  "/usr/bin/google-chrome",
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-].find((p) => existsSync(p));
 
 /**
  * Screens to capture.
@@ -164,63 +157,7 @@ const SHOTS = [
   },
 ];
 
-/** Minimal CDP client. One WebSocket, request ids, awaited replies. */
-class Devtools {
-  #ws;
-  #id = 0;
-  #pending = new Map();
-
-  static async attach(wsUrl) {
-    const d = new Devtools();
-    d.#ws = new WebSocket(wsUrl);
-    d.#ws.addEventListener("message", (e) => {
-      const msg = JSON.parse(e.data);
-      const resolve = d.#pending.get(msg.id);
-      if (resolve) {
-        d.#pending.delete(msg.id);
-        resolve(msg);
-      }
-    });
-    await new Promise((ok, fail) => {
-      d.#ws.addEventListener("open", ok, { once: true });
-      d.#ws.addEventListener("error", fail, { once: true });
-    });
-    return d;
-  }
-
-  send(method, params = {}) {
-    const id = ++this.#id;
-    return new Promise((resolve, reject) => {
-      this.#pending.set(id, (msg) =>
-        msg.error ? reject(new Error(`${method}: ${msg.error.message}`)) : resolve(msg.result),
-      );
-      this.#ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  close() {
-    this.#ws.close();
-  }
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function targetUrl() {
-  // Chrome needs a moment to open its debugging port; poll rather than guess.
-  for (let i = 0; i < 50; i++) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${PORT}/json/version`);
-      return (await res.json()).webSocketDebuggerUrl;
-    } catch {
-      await sleep(200);
-    }
-  }
-  throw new Error("headless Chrome never opened its debugging port");
-}
-
 async function main() {
-  if (!CHROME) throw new Error("Chrome not found; set a path in scripts/screenshots.mjs");
-
   // Fail early and clearly. Without this the first capture is a screenshot of
   // Chrome's own connection-error page, which is easy to miss and worse than an
   // error, because it looks like a successful run.
@@ -233,26 +170,15 @@ async function main() {
 
   mkdirSync(OUT, { recursive: true });
 
-  const chrome = spawn(
-    CHROME,
-    [
-      "--headless=new",
-      `--remote-debugging-port=${PORT}`,
-      "--disable-gpu",
-      "--hide-scrollbars",
-      // Retina-class output: a 1x screenshot of a dark UI looks muddy on the
-      // high-density displays most people read a README on.
-      "--force-device-scale-factor=2",
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--user-data-dir=" + join(REPO, "target", "screenshot-profile"),
-      "about:blank",
-    ],
-    { stdio: "ignore" },
-  );
+  const { chrome, browser } = await launchChrome({
+    port: PORT,
+    // Retina-class output: a 1x screenshot of a dark UI looks muddy on the
+    // high-density displays most people read a README on.
+    dpr: 2,
+    profile: join(REPO, "target", "screenshot-profile"),
+  });
 
   try {
-    const browser = await Devtools.attach(await targetUrl());
     const { targetId } = await browser.send("Target.createTarget", { url: "about:blank" });
 
     for (const shot of SHOTS) {

@@ -1,0 +1,152 @@
+/* Home: reference §5 (docs/redesign/reference/reference.html lines 240-299),
+ * ported with the standard renames (`X i` icon rules -> `X svg`, `.row.hover`
+ * -> `.row:is(:hover, :focus-within)`). `.week i` stays: those are real <i>
+ * bars, not icons. Values are the reference's; do not tune them by eye, the
+ * twin check diffs them. Everything after "Additions" is not in the static
+ * reference: real controls need resets and states a picture never shows. */
+
+/* -- §5 home ------------------------------------------------------------- */
+.last { border-radius: var(--r-hero); padding: 20px 22px 18px; position: relative; overflow: hidden; flex: none; }
+.last::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 55%); }
+.last-head { display: flex; align-items: center; gap: 10px; position: relative; }
+.last-head .tag { font: 600 12px/1 var(--ui); color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.last-head .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--mute); }
+.status-ok { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ok); font-weight: 500; }
+.last-text { position: relative; margin-top: 14px; font: 450 19px/1.55 var(--ui); color: var(--ink); letter-spacing: -.005em; max-width: 72ch; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.last-actions { position: relative; display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.last-actions .words { margin-left: auto; font-size: 12.5px; color: var(--mute); }
+.last.fail::before { background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--warn) 22%, transparent), transparent 60%); }
+.last.fail { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.last.fail .tag { color: var(--warn); }
+.fail-note { position: relative; margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); font-weight: 500; }
+.fail-note svg { color: var(--warn); font-size: 16px; }
+.last.err::before { background: radial-gradient(120% 90% at 0% 0%, var(--danger-soft), transparent 60%); }
+.last.err { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.last.err .tag { color: var(--danger); }
+.err-title { position: relative; margin-top: 12px; font: 650 20px/1.25 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.err-body { position: relative; margin-top: 6px; font-size: 13.5px; color: var(--body); max-width: 68ch; }
+.err-raw { position: relative; margin-top: 8px; font: 400 11.5px/1.4 var(--mono); color: var(--mute); }
+.first-title { position: relative; margin-top: 12px; font: 650 24px/1.2 var(--display); letter-spacing: -.025em; color: var(--ink); }
+.first-body { position: relative; margin-top: 8px; font-size: 14.5px; color: var(--body); max-width: 60ch; }
+.bigkey { position: relative; display: inline-flex; align-items: center; gap: 10px; margin-top: 18px; }
+.bigkey .keycap { font-size: 15px; padding: 10px 14px 12px; border-radius: 10px; box-shadow: inset 0 -3px 0 rgb(0 0 0 / 22%); }
+
+.lower { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 250px; gap: 16px; }
+.recent { border-radius: var(--r-card); padding: 6px; display: flex; flex-direction: column; min-height: 0; }
+.recent-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px; }
+.recent-head h2 { font: 650 16px/1 var(--display); letter-spacing: -.02em; color: var(--ink); margin-right: 6px; }
+.recent-head .all { margin-left: auto; font-size: 12px; color: var(--mute); display: flex; align-items: center; gap: 4px; }
+.rows { overflow: hidden; }
+.row { display: grid; grid-template-columns: 62px 1fr auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: var(--r-row); }
+.row:is(:hover, :focus-within) { background: var(--glass-2); }
+.row time { font: 500 11.5px/1 var(--mono); color: var(--mute); white-space: nowrap; }
+.row .t { color: var(--ink); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.row .t.code { font-family: var(--mono); font-size: 13px; }
+.row .r { display: flex; align-items: center; gap: 8px; }
+.row .heard { font-size: 12px; color: var(--mute); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.row .heard s { text-decoration-color: var(--warn); text-decoration-thickness: 1.5px; font-family: var(--mono); }
+.row .copy { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--mute); }
+.row:is(:hover, :focus-within) .copy { background: var(--glass); color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge); }
+.day { font: 600 11px/1 var(--ui); color: var(--mute); padding: 10px 12px 4px; letter-spacing: .04em; text-transform: uppercase; }
+
+.stats { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.stat { border-radius: 18px; padding: 14px 16px; }
+.stat .l { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); font-weight: 500; }
+.stat .l svg { font-size: 14px; color: var(--accent-2); }
+.stat .v { font: 700 30px/1 var(--display); letter-spacing: -.04em; color: var(--ink); margin-top: 9px; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 5px; }
+.stat .v small { font: 500 13px/1 var(--ui); letter-spacing: 0; color: var(--mute); }
+.stat .s { font-size: 11.5px; color: var(--mute); margin-top: 5px; }
+.speedbar { position: relative; height: 22px; margin-top: 10px; }
+.speedbar .axis { position: absolute; left: 0; right: 0; top: 10px; height: 2px; border-radius: 2px; background: var(--edge); }
+.speedbar .fill { position: absolute; left: 0; top: 9px; height: 4px; border-radius: 4px; width: 76%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
+.speedbar .mk { position: absolute; top: 4px; width: 2px; height: 14px; background: var(--mute); border-radius: 2px; }
+.speedbar .mk.you { background: var(--accent); width: 12px; height: 12px; top: 5px; border-radius: 50%; transform: translateX(-5px); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.week { display: flex; gap: 4px; margin-top: 10px; }
+.week i { flex: 1; height: 6px; border-radius: 3px; background: var(--edge); }
+.week i.on { background: var(--accent); }
+
+.sk { background: var(--glass); border: 1px solid var(--edge); border-radius: var(--r-card); position: relative; overflow: hidden; }
+.sk::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgb(255 255 255 / 6%), transparent); transform: translateX(-100%); }
+.skl { height: 12px; border-radius: 6px; background: var(--glass-2); }
+
+/* -- Additions ------------------------------------------------------------ */
+/* Real buttons where the reference draws spans. */
+.recent-head .all, .row .copy, .show-all { border: 0; background: none; padding: 0; cursor: pointer; font-family: inherit; }
+.recent-head .all:hover { color: var(--ink); }
+.recent-head .all svg { font-size: 12px; }
+.row { cursor: pointer; }
+/* The reference sizes nothing here: its icon is the body's 14px. */
+.row .copy svg { font-size: 14px; }
+/* The disclosure button carries the time and text across the first two grid
+   columns (subgrid keeps the reference's 62px / 1fr and 12px gap). Its focus
+   ring is drawn on the whole row, which is what it opens. */
+.row-toggle { grid-column: 1 / span 2; display: grid; grid-template-columns: subgrid; align-items: center; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.row-toggle:focus-visible { outline: none; }
+.row:has(> .row-toggle:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.row-more[hidden] { display: none; }
+/* While a row is open the list scrolls instead of fitting (useFit.ts). */
+.rows.scrolling { overflow-y: auto; }
+
+/* Only for text longer than the four-line clamp (spec 6.2). */
+.last-text.full { display: block; -webkit-line-clamp: unset; }
+.show-all { position: relative; margin-top: 6px; font-size: 12.5px; font-weight: 500; color: var(--accent); }
+.show-all:hover { text-decoration: underline; }
+
+/* An open Earlier row: the whole text wrapped, then the same actions. */
+.row-more { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px; padding: 2px 0 2px 74px; cursor: auto; }
+.row-more .full { color: var(--ink); font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.row-more .full.code { font-family: var(--mono); font-size: 13px; }
+.row-more .acts { display: flex; align-items: center; gap: 8px; }
+
+/* Fix a word, inline under the text (card or open row). */
+.fix { position: relative; margin-top: 14px; display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 14px; background: var(--well); border: 1px solid var(--edge); }
+.row-more .fix { margin-top: 0; }
+.fix .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fix .exe { font: 500 12px/1 var(--mono); padding: 6px 8px; border-radius: var(--r-inner); background: var(--glass-2); border: 1px solid var(--edge); color: var(--body); cursor: pointer; }
+.fix .exe:hover { color: var(--ink); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.fix-form { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.fix-field { display: flex; flex-direction: column; gap: 5px; flex: 1 1 180px; min-width: 0; }
+
+/* Speaking speed before there is a rate to show. */
+.stat .v.none { color: var(--mute); }
+.stat .s.try { font-size: 13px; color: var(--ink); margin-top: 8px; font-family: var(--mono); }
+
+/* First run: the lower-left panel is an empty state, not a list. */
+.recent.empty { justify-content: center; align-items: center; text-align: center; padding: 24px; }
+.recent.empty .empty-ic { font-size: 28px; color: var(--mute); }
+.recent.empty .empty-title { margin-top: 10px; font: 650 16px/1.2 var(--display); color: var(--ink); }
+.recent.empty .empty-body { margin-top: 6px; max-width: 36ch; }
+
+/* useFit hides what does not fit with the `hidden` attribute; `.row`'s own
+   display: grid would otherwise beat the UA's [hidden] rule. */
+.rows > [hidden] { display: none; }
+/* The list box fills the card whatever it shows, so a taller window (a resize
+   the ResizeObserver sees) can hand hidden rows back. Invisible in itself. */
+.rows { flex: 1; min-height: 0; }
+
+/* Loading: the reference's skeleton shapes (lines 499-502 and 750). */
+.sk-hero { height: 210px; flex: none; padding: 22px; }
+.sk-col { display: flex; flex-direction: column; gap: 12px; }
+
+/* -- §5 full history (reference lines 304-306) ----------------------------- */
+.hist { flex: 1; min-height: 0; border-radius: var(--r-card); padding: 6px; display: flex; flex-direction: column; }
+.hist .recent-head .field { width: 280px; margin-left: auto; }
+
+/* History is where scrolling lives (useFit.ts): its list scrolls, quietly. */
+.hist .rows { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--edge) transparent; }
+.hist .field input[type="search"]::-webkit-search-cancel-button { display: none; }
+.hist-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; }
+.hist-empty-title { font: 650 16px/1.2 var(--display); color: var(--ink); overflow-wrap: anywhere; }
+.hist-empty .cap { max-width: 44ch; }
+.hist-empty .btn { margin-top: 8px; }
+
+/* First run: the big keycap presses itself three times after the card rises,
+   then rests. Shown only when motion is welcome and not under ?still=1. */
+@media (prefers-reduced-motion: no-preference) {
+  .anim .bigkey .keycap { animation: keypress 1.2s var(--ease) .9s 3; }
+  @keyframes keypress {
+    0%, 45%, 100% { transform: none; box-shadow: inset 0 -3px 0 rgb(0 0 0 / 22%); }
+    15%, 30% { transform: translateY(2px); box-shadow: inset 0 -1px 0 rgb(0 0 0 / 22%), inset 0 2px 5px rgb(0 0 0 / 20%); }
+  }
+}

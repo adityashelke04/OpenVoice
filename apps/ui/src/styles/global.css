@@ -1,8 +1,9 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
-@import "@fontsource-variable/inter";
-@import "@fontsource/jetbrains-mono";
+@import "@fontsource-variable/bricolage-grotesque/opsz.css";
+@import "@fontsource/borel/400.css";
 @import "./tokens.css";
+@import "./themes.css";
 
 *,
 *::before,
@@ -36,9 +37,9 @@ body {
  * Stating it this way round is the whole point. `data-window` is set by script,
  * but a background on bare `body` paints from the moment the stylesheet is
  * applied, which is before any script has run — so the overlay showed that
- * rectangle for the entire gap. The Hub declares the same black natively
- * (`backgroundColor` in tauri.conf.json), so it has nothing to flash to; the
- * overlay deliberately has no such fallback. */
+ * rectangle for the entire gap. The Hub is transparent too now (Mica, see
+ * hub/material.ts), so before its stylesheet lands it shows the Mica backdrop
+ * rather than a flash of some other colour. */
 html[data-window="hub"],
 html[data-window="hub"] body,
 html[data-window="sheet"],
