@@ -60,3 +60,27 @@ html[data-window="hub"] .trybox textarea.txt:focus-visible { outline: none; }
 @media (prefers-reduced-motion: no-preference) {
   .term .x { transition: color .15s var(--ease); }
 }
+
+/* -- §6 writing style (reference lines 332-335) ------------------------------ */
+/* Scoped to the screen: Home's Fix panel has its own `.fix .chips` / `.fix .exe`
+   (clickable, on --glass-2), and an unscoped rule would reach into it. */
+.style-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 14px; align-items: start; }
+.style-side { display: flex; flex-direction: column; gap: 14px; }
+.writing .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.writing .exe { font: 500 12px/1 var(--mono); padding: 6px 8px; border-radius: var(--r-inner); background: var(--well); border: 1px solid var(--edge); color: var(--body); }
+
+/* -- Additions: writing style ------------------------------------------------ */
+/* The reference sets these inline: the tab strip hugs its content instead of
+   stretching across the column, the preview wells drop the Dictionary's
+   70px minimum, "You say" is body-coloured, and the two wells sit 8px apart. */
+.writing > .seg { align-self: flex-start; }
+.writing .trybox { min-height: 0; }
+.writing .trybox:not(.out) .txt { color: var(--body); }
+.writing .trybox.out { margin-top: 8px; }
+/* Chrome pixel-snaps an inline <svg> box but draws an icon-font glyph where the
+   text layout puts it. The Terminals tab starts at x .375 (the widths of the two
+   labels before it), so its icon landed 0.375px left of the reference's glyph:
+   invisible, but the whole glyph re-rasterised and graphite dark's twin failed
+   on it (13x11 icon cluster). A transform is not snapped, so this puts the icon
+   back where the text layout meant it. Retune if those labels change. */
+.writing > .seg > button:nth-child(3) svg { transform: translateX(.375px); }

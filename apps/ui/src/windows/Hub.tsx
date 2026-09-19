@@ -16,7 +16,8 @@ import { useEffect, useState } from "react";
 import { MotionConfig } from "motion/react";
 import { useLiveEngine } from "../engine/useLiveEngine";
 import { DictionaryScreen } from "../screens/Dictionary";
-import { AdvancedScreen, ProfilesScreen } from "../screens/Profiles";
+import { ProfilesScreen } from "../screens/Profiles";
+import { AdvancedScreen } from "../screens/Advanced";
 import { ModelsScreen } from "../screens/Models";
 import { SettingsScreen } from "../screens/Settings";
 import { getHistory, getUserName } from "../hub/api";
@@ -155,10 +156,11 @@ export function Hub() {
   } else if (screen === "dictionary") {
     // Redesigned screens own their `section.scroll`, as Home does.
     body = <DictionaryScreen settings={settings} patch={patch} />;
+  } else if (screen === "style") {
+    body = <ProfilesScreen settings={settings} patch={patch} />;
   } else {
     body = (
       <div className="legacy-scroll">
-        {screen === "style" && <ProfilesScreen settings={settings} patch={patch} />}
         {screen === "models" && <ModelsScreen settings={settings} patch={patch} />}
         {screen === "settings" && <SettingsScreen settings={settings} patch={patch} error={settingsError} levelRef={levelRef} />}
         {screen === "advanced" && <AdvancedScreen settings={settings} />}
