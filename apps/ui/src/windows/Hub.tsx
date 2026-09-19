@@ -152,10 +152,12 @@ export function Hub() {
         <div className="sk" style={{ height: 140 }} />
       </div>
     );
+  } else if (screen === "dictionary") {
+    // Redesigned screens own their `section.scroll`, as Home does.
+    body = <DictionaryScreen settings={settings} patch={patch} />;
   } else {
     body = (
       <div className="legacy-scroll">
-        {screen === "dictionary" && <DictionaryScreen settings={settings} patch={patch} />}
         {screen === "style" && <ProfilesScreen settings={settings} patch={patch} />}
         {screen === "models" && <ModelsScreen settings={settings} patch={patch} />}
         {screen === "settings" && <SettingsScreen settings={settings} patch={patch} error={settingsError} levelRef={levelRef} />}

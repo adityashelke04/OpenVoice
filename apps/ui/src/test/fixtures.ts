@@ -46,3 +46,21 @@ export const DICTIONARY: DictEntry[] = [
   { written: "kubectl", spoken: ["cube control", "cube cuttle"], group: "shell" },
   { written: "JSON", spoken: ["jason", "j son"], group: "code" },
 ];
+
+/** All twelve terms the twin's fixture dictionary holds, in the order the
+ *  reference's Dictionary screen lists them (scripts/screenshot-fixtures.mjs
+ *  stores them in this order too). */
+export const DICTIONARY_12: DictEntry[] = [
+  { written: "useEffect", spoken: ["use effect", "you seffect"], group: "code" },
+  { written: "kubectl", spoken: ["cube control", "cube cuttle"], group: "shell" },
+  { written: "useState", spoken: ["use state"], group: "code" },
+  { written: "nginx", spoken: ["engine x", "n g inx"], group: "shell" },
+  { written: "TypeScript", spoken: ["type script"], group: "code" },
+  { written: "PostgreSQL", spoken: ["postgres q l", "post gres"], group: "shell" },
+  { written: "Node.js", spoken: ["node j s", "node js"], group: "code" },
+  { written: "Kubernetes", spoken: ["kubernetes", "cuber netties"], group: "shell" },
+  { written: "JSON", spoken: ["jason", "j son"], group: "code" },
+  { written: "ssh", spoken: ["s s h"], group: "shell" },
+  { written: "async", spoken: ["a sync", "ay sink"], group: "code" },
+  { written: "npm", spoken: ["n p m", "enpiem"], group: "code" },
+];
