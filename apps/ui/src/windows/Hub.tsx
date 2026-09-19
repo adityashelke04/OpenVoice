@@ -28,7 +28,7 @@ import { pushToast } from "../hub/toast";
 import { useHubKeys } from "../hub/useHubKeys";
 import { isStill } from "../hub/useMedia";
 import { useSettings } from "../hub/useSettings";
-import { LegacyHome } from "../hub/home/LegacyHome";
+import { HomeScreen } from "../hub/home/HomeScreen";
 import "../hub/shell.css";
 
 export type { ScreenId };
@@ -41,6 +41,23 @@ export function initialScreen(search: string = typeof location === "undefined" ?
 
 /** `?still=1`: no screen-enter motion at all, for screenshots and the twin. */
 const STILL = isStill();
+
+/** The clock Home's "2 min ago" reads: it wakes on each minute boundary, and
+ *  only while Home is on screen, so no other screen pays for it. */
+function useMinuteNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    let id = 0;
+    const schedule = () => {
+      id = window.setTimeout(() => { setNow(Date.now()); schedule(); }, 60_000 - (Date.now() % 60_000) + 50);
+    };
+    // Coming back to Home after a while must not show a stale "2 min ago".
+    id = window.setTimeout(() => { setNow(Date.now()); schedule(); }, 0);
+    return () => clearTimeout(id);
+  }, [active]);
+  return now;
+}
 
 /** The clock the greeting reads. It only has to be right to the hour, so it
  *  wakes once at the top of each hour rather than ticking. */
@@ -64,6 +81,7 @@ export function Hub() {
   // already open this state so only the component is missing.
   const [palette, setPalette] = useState(false);
   const now = useHourlyNow();
+  const minute = useMinuteNow(screen === "home");
 
   useEffect(() => {
     let live = true;
@@ -106,15 +124,17 @@ export function Hub() {
   const engine: EngineState = view.error ? "error" : view.ready ? "ready" : "starting";
 
   let body;
-  if (screen === "home" || screen === "history") {
-    body = <LegacyHome view={view} levelRef={levelRef} patch={patch} />;
+  if (screen === "home") {
+    body = <HomeScreen view={view} settings={settings} patch={patch} now={minute} onOpenHistory={() => setScreen("history")} />;
+  } else if (screen === "history") {
+    // The History view arrives in Task 9; until then it is an empty pane.
+    body = <section className="scroll" />;
   } else if (!settings) {
     // Settings arrive asynchronously; a blank pane for a beat reads as broken.
     body = (
       <div className="legacy-scroll">
-        <div className="skeleton skeleton-title" />
-        <div className="skeleton skeleton-card" />
-        <div className="skeleton skeleton-card" />
+        <div className="sk" style={{ height: 140 }} />
+        <div className="sk" style={{ height: 140 }} />
       </div>
     );
   } else {

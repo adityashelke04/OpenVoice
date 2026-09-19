@@ -29,3 +29,5 @@ export function dictionaryHits(row: Pick<Row, "raw_text" | "final_text">, dict: 
   return hits;
 }
 export const wordCount = (text: string) => text.trim().split(/\s+/).filter(Boolean).length;
+/** A row's identity in lists: rows have no id, and two dictations in the same millisecond with the same text are the same row to a reader. */
+export const rowKey = (r: Pick<Row, "created_at" | "final_text">) => `${r.created_at}:${r.final_text}`;
