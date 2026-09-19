@@ -518,6 +518,9 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
             <div class="day">Yesterday</div>
             <div class="row"><time>6:05 PM</time><span class="t code">git status</span><span class="r"><span class="warn-chip"><i class="ph-bold ph-clipboard-text"></i>Not pasted, on clipboard</span><span class="app-chip c-terminal"><i class="ph-bold ph-terminal-window"></i>PowerShell</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
             <div class="row"><time>4:30 PM</time><span class="t">The resampler runs at 16 kHz mono, so the sidecar never has to guess.</span><span class="r"><span class="app-chip c-prose"><i class="ph-bold ph-note"></i>Notion</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
+            <!-- The error card is shorter than a dictation card, so one more day fits. -->
+            <div class="day" data-show-error>Wed 16 Sep</div>
+            <div class="row" data-show-error><time>5:52 PM</time><span class="t">Thanks, that fixed it. I'll push the branch after lunch.</span><span class="r"><span class="app-chip c-prose"><i class="ph-bold ph-chat-circle"></i>Slack</span><span class="copy"><i class="ph ph-copy"></i></span></span></div>
           </div>
         </section>
         <section class="recent glass" data-show-first style="justify-content:center; align-items:center; text-align:center; padding:24px">
@@ -747,6 +750,7 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
     const first = state === "first";
     document.querySelectorAll("[data-hide-first]").forEach(s => s.hidden = first);
     document.querySelectorAll("[data-show-first]").forEach(s => s.hidden = !first);
+    document.querySelectorAll("[data-show-error]").forEach(s => s.hidden = state !== "error");
     if (state === "loading") document.querySelector("[data-lower]").innerHTML = '<div class="sk"></div><div style="display:flex; flex-direction:column; gap:12px"><div class="sk" style="height:120px"></div><div class="sk" style="height:110px"></div><div class="sk" style="flex:1"></div></div>';
     if (state === "error") { const dot = document.getElementById("engine-dot"); dot.classList.add("err"); document.getElementById("engine-label").textContent = "Not running"; }
   }
