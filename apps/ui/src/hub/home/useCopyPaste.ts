@@ -22,6 +22,28 @@ export interface CopyPaste {
   paste: () => Promise<void>;
 }
 
+/** Copy a dictation to the clipboard. Shared by the hook below and by the
+ *  command palette's History results, which act on whichever row is
+ *  highlighted rather than one fixed `text` a hook could own. */
+export async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    pushToast({ tone: "danger", message: String(e) });
+    throw e;
+  }
+}
+
+/** Paste again, backend and all. Same reasoning as `copyText`. */
+export async function pasteText(text: string): Promise<"pasted" | "copied"> {
+  try {
+    return await pasteAgain(text);
+  } catch (e) {
+    pushToast({ tone: "danger", message: String(e) });
+    throw e;
+  }
+}
+
 export function useCopyPaste(text: string): CopyPaste {
   const [copied, setCopied] = useState(false);
   const [pasted, setPasted] = useState(false);
@@ -39,10 +61,10 @@ export function useCopyPaste(text: string): CopyPaste {
 
   const copy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       flash(setCopied);
-    } catch (e) {
-      pushToast({ tone: "danger", message: String(e) });
+    } catch {
+      // copyText already pushed the toast.
     }
   }, [text, flash]);
 
@@ -51,9 +73,9 @@ export function useCopyPaste(text: string): CopyPaste {
     inFlight.current = true;
     setPasting(true);
     try {
-      if ((await pasteAgain(text)) === "pasted") flash(setPasted);
-    } catch (e) {
-      pushToast({ tone: "danger", message: String(e) });
+      if ((await pasteText(text)) === "pasted") flash(setPasted);
+    } catch {
+      // pasteText already pushed the toast.
     } finally {
       inFlight.current = false;
       setPasting(false);

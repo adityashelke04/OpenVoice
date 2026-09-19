@@ -20,3 +20,5 @@ export function setMedia(query: string, matches: boolean) {
 
 Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn(async () => {}) }, configurable: true });
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+// jsdom has no layout, so cmdk's own scroll-selected-item-into-view calls throw.
+Element.prototype.scrollIntoView ??= () => {};

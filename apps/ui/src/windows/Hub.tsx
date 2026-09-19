@@ -19,7 +19,7 @@ import { DictionaryScreen } from "../screens/Dictionary";
 import { AdvancedScreen, ProfilesScreen } from "../screens/Profiles";
 import { ModelsScreen } from "../screens/Models";
 import { SettingsScreen } from "../screens/Settings";
-import { getUserName } from "../hub/api";
+import { getHistory, getUserName } from "../hub/api";
 import { isScreenId, type ScreenId } from "../hub/nav";
 import { Sidebar, type EngineState } from "../hub/Sidebar";
 import { TopBar } from "../hub/TopBar";
@@ -30,6 +30,9 @@ import { isStill } from "../hub/useMedia";
 import { useSettings } from "../hub/useSettings";
 import { HomeScreen } from "../hub/home/HomeScreen";
 import { HistoryView } from "../hub/home/HistoryView";
+import { useCopyPaste } from "../hub/home/useCopyPaste";
+import { CommandPalette } from "../hub/CommandPalette";
+import type { Row } from "../engine/stats";
 import "../hub/shell.css";
 
 export type { ScreenId };
@@ -78,9 +81,11 @@ export function Hub() {
   const { settings, patch, error: settingsError } = useSettings();
   const [screen, setScreen] = useState<ScreenId>(() => initialScreen());
   const [userName, setUserName] = useState<string | null>(null);
-  // The Ctrl K palette arrives in Task 10; the shortcut and the search button
-  // already open this state so only the component is missing.
   const [palette, setPalette] = useState(false);
+  // The palette's "Copy last dictation" / "Paste last dictation again": a
+  // one-shot read when it opens, not a second history-polling loop next to
+  // Home's own.
+  const [lastRow, setLastRow] = useState<Row | undefined>(undefined);
   const now = useHourlyNow();
   // History reads it too: its day headings ("Today", "Yesterday") turn over at midnight.
   const minute = useMinuteNow(screen === "home" || screen === "history");
@@ -90,6 +95,15 @@ export function Hub() {
     getUserName().then((n) => live && setUserName(n), () => {});
     return () => { live = false; };
   }, []);
+
+  useEffect(() => {
+    if (!palette) return;
+    let live = true;
+    getHistory({ limit: 1 }).then((rows) => { if (live) setLastRow(rows[0]); }, () => {});
+    return () => { live = false; };
+  }, [palette]);
+  const lastRowText = lastRow?.final_text ?? "";
+  const lastAct = useCopyPaste(lastRowText);
 
   // The Flow Bar's menu names destinations (Microphone, History, Settings), and
   // this is what makes those labels true. An unknown name leaves the Hub where
@@ -170,6 +184,14 @@ export function Hub() {
         </main>
       </div>
       <Toasts />
+      <CommandPalette
+        open={palette}
+        onClose={() => setPalette(false)}
+        onNavigate={setScreen}
+        lastRow={lastRow}
+        onCopyLast={() => void lastAct.copy()}
+        onPasteLast={() => void lastAct.paste()}
+      />
     </MotionConfig>
   );
 }
