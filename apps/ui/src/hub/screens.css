@@ -126,3 +126,46 @@ html[data-window="hub"] .trybox textarea.txt:focus-visible { outline: none; }
    the whole card is an offer to fetch it, and `.btn:disabled`'s half opacity
    would read as "unavailable" rather than "not yet". */
 .model-select:disabled { cursor: default; }
+
+/* -- §6 settings (reference lines 356-380) ----------------------------------- */
+/* `.slider`, `.meter` and `.badge`, which the reference keeps in this block, are
+   shared primitives and live in hub/ui/controls.css instead. */
+.set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 4px; }
+.tcard { border-radius: 14px; padding: 8px; border: 1px solid var(--edge); background: var(--well); }
+/* Scoped one level deeper than the reference writes it, for the same reason the
+   model card's ring is: `[data-mode="light"] .glass` in shell.css has the same
+   specificity and is bundled later, so in light mode it replaced this outright. */
+.themes .tcard.on { box-shadow: inset 0 0 0 2px var(--accent); }
+.tcard .mini { height: 64px; border-radius: 9px; overflow: hidden; position: relative; background: var(--bg); }
+.tcard .mini i { position: absolute; border-radius: 50%; filter: blur(14px); }
+.tcard .mini i:nth-child(1) { width: 70px; height: 50px; left: -10px; top: -10px; background: var(--blob-1); opacity: .8; }
+.tcard .mini i:nth-child(2) { width: 90px; height: 60px; right: -20px; top: 10px; background: var(--blob-2); opacity: .8; }
+.tcard .mini i:nth-child(3) { width: 60px; height: 40px; left: 40%; bottom: -16px; background: var(--blob-3); opacity: .6; }
+.tcard .mini .gl { position: absolute; left: 22px; right: 8px; top: 9px; height: 22px; border-radius: 6px; background: var(--glass-2); border: 1px solid var(--edge); }
+.tcard .mini .sb { position: absolute; left: 0; top: 0; bottom: 0; width: 16px; background: var(--glass-strong); border-right: 1px solid var(--edge); }
+.tcard .mini .bt { position: absolute; left: 22px; top: 38px; width: 30px; height: 12px; border-radius: 4px; background: var(--accent); }
+.tcard .mini .bt2 { position: absolute; left: 56px; top: 38px; width: 22px; height: 12px; border-radius: 4px; background: var(--glass-2); border: 1px solid var(--edge); }
+.tcard .tn { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 2px; font-size: 12.5px; font-weight: 600; }
+.tcard .tn svg { color: var(--accent); font-size: 15px; }
+/* the theme cards must render in the page's own ink colour, not the card theme's */
+.tcard .tn { color: var(--page-ink); }
+/* Used by Version here and by the Advanced screen's engine facts. */
+.kv { font: 500 12.5px/1 var(--mono); color: var(--ink); white-space: nowrap; }
+
+/* -- Additions: settings ------------------------------------------------------ */
+/* The four cards do not fit one column each, so each grid cell is a stack. The
+   reference sets this inline on both of them. */
+.set-col { display: flex; flex-direction: column; gap: 14px; }
+/* The reference gives the row after the theme grid an inline margin. */
+.themes + .srow { margin-top: 6px; }
+.mic-pick { display: flex; align-items: center; gap: 10px; }
+/* A theme card is a real button: it gives up the look it is born with, and its
+   preview and name are spans (a <button> may only hold phrasing content), so
+   both need the box display the reference's divs had for free. */
+.tcard { display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; }
+.tcard .mini { display: block; }
+.tcard .tn svg { flex: none; }
+.tcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Hover lifts the edge the same quiet amount a glass button's does. */
+.themes .tcard:not(.on):hover { border-color: var(--edge-hi); }

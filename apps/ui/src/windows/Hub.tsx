@@ -160,10 +160,19 @@ export function Hub() {
     body = <ProfilesScreen settings={settings} patch={patch} />;
   } else if (screen === "models") {
     body = <ModelsScreen settings={settings} patch={patch} />;
+  } else if (screen === "settings") {
+    body = (
+      <SettingsScreen
+        settings={settings}
+        patch={patch}
+        error={settingsError}
+        levelRef={levelRef}
+        listening={view.state === "listening"}
+      />
+    );
   } else {
     body = (
       <div className="legacy-scroll legacy-screen">
-        {screen === "settings" && <SettingsScreen settings={settings} patch={patch} error={settingsError} levelRef={levelRef} />}
         {screen === "advanced" && <AdvancedScreen settings={settings} />}
       </div>
     );

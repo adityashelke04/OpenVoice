@@ -142,6 +142,20 @@ export const retryEngine = () => call<boolean>("retry_engine");
  *  that already took effect. */
 export const restartReasons = () => call<string[]>("restart_reasons");
 
+/** The redaction patterns OpenVoice ships with, copied from
+ *  `PrivacyConfig::default()` in `crates/ov-core/src/config.rs`: an OpenAI key,
+ *  a GitHub token and an AWS access key id.
+ *
+ *  Duplicated here because "Hide secrets in history" is a switch, and turning it
+ *  back on has to restore something. The Rust side is the authority at rest; this
+ *  is only what the switch puts back, so a user who edited `redact_patterns` by
+ *  hand and then toggled the switch gets the shipped set rather than nothing. */
+export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
+  String.raw`sk-[A-Za-z0-9]{20,}`,
+  String.raw`gh[pousr]_[A-Za-z0-9]{20,}`,
+  String.raw`AKIA[0-9A-Z]{16}`,
+];
+
 /** Keys that can be bound, and how to name them on screen.
  *
  *  Mirrors `ov_core::config::Key::ALL` and `Key::label()`. The serde name is the
@@ -168,6 +182,13 @@ export const HOTKEYS: readonly [value: string, label: string][] = [
   ["f23", "F23"],
   ["f24", "F24"],
 ];
+
+/** The version this build reports, mirroring the workspace version in
+ *  `Cargo.toml` and `crates/ov-app/tauri.conf.json`. Settings shows it so the
+ *  number in a bug report comes from the app rather than from memory; a release
+ *  bump has to touch this line too, which is why it sits beside the update
+ *  commands rather than in a screen. */
+export const APP_VERSION = "1.0.1";
 
 /** What an update check found. Mirrors `ov_app::update::UpdateStatus`. */
 export interface UpdateStatus {

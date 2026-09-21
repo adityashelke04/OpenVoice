@@ -12,6 +12,7 @@ export { Button, type ButtonProps } from "./Button";
 export { Card } from "./Card";
 export { Field } from "./Field";
 export { Keycap } from "./Keycap";
+export { MicMeter } from "./MicMeter";
 export { Notice } from "./Notice";
 export { Segmented, type SegOption } from "./Segmented";
 export { SelectField } from "./SelectField";

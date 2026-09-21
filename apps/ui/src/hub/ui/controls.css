@@ -57,8 +57,8 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
 .badge.ok::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
 .slider { display: flex; align-items: center; gap: 10px; width: 210px; }
 .slider .tr { flex: 1; height: 6px; border-radius: 3px; background: var(--well); border: 1px solid var(--edge); position: relative; }
-.slider .tr b { position: absolute; left: 0; top: -1px; bottom: -1px; width: 32%; border-radius: 3px; background: var(--accent); }
-.slider .tr i { position: absolute; left: 32%; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); box-shadow: 0 2px 6px rgb(0 0 0 / 30%); }
+.slider .tr b { position: absolute; left: 0; top: -1px; bottom: -1px; width: 33.333%; border-radius: 3px; background: var(--accent); }
+.slider .tr i { position: absolute; left: 33.333%; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); box-shadow: 0 2px 6px rgb(0 0 0 / 30%); }
 .slider .val { font: 500 12.5px/1 var(--mono); color: var(--ink); width: 44px; text-align: right; }
 .meter { display: flex; gap: 3px; align-items: flex-end; height: 18px; }
 .meter i { width: 4px; border-radius: 2px; background: var(--ok); }
@@ -101,6 +101,11 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
 /* A select stretched over the field keeps its own text invisible; the visible
    copy is .sel-display, which must truncate rather than push the caret out. */
 .field .sel-display { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Unless what it is displaying is a box rather than a run of text. The Shortcut
+   field shows a keycap, whose padding stands taller than the line it sits on, so
+   the truncating span clipped it into a rectangle. A flex line gives it back its
+   own height; there is nothing to ellipsise in a single key name anyway. */
+.field .sel-display:has(.keycap) { display: flex; align-items: center; overflow: visible; }
 .field:has(select:disabled) { opacity: .5; }
 .field:has(select:disabled) select { cursor: default; }
 .notice .notice-ic { flex: none; font-size: 16px; color: var(--warn); }
