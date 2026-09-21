@@ -97,7 +97,16 @@ html[data-window="hub"] .trybox textarea.txt:focus-visible { outline: none; }
 .models .model.active { box-shadow: inset 0 0 0 1.5px var(--accent), inset 0 1px 0 var(--edge-hi), 0 20px 50px -30px rgb(0 0 0 / 55%); }
 .model .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--well); border: 1px solid var(--edge); font-size: 20px; color: var(--accent-2); }
 .model.active .ic { color: var(--accent); }
-.model .nm { display: flex; align-items: center; gap: 8px; font: 650 17px/1.2 var(--display); letter-spacing: -.02em; color: var(--ink); }
+/* The line-height is 21px, not the reference's 1.2 (20.4px). A 20.4px text box
+   centred by `align-items: center` in the 21px line the badges set leaves a
+   0.3px residue, which put the name's baseline on a device-pixel boundary:
+   Chrome then rounded it to either neighbouring row and roughly one shot in
+   25 diffed by 1px, cards flipping independently. The app lands on that
+   boundary and the reference does not because the app ships Bricolage
+   Grotesque Variable while the reference loads the static face, and their
+   vertical metrics differ slightly. An integer line box has no residue to
+   round. reference.html line 343 carries the identical declaration. */
+.model .nm { display: flex; align-items: center; gap: 8px; font: 650 17px/21px var(--display); letter-spacing: -.02em; color: var(--ink); }
 .model .dt { font-size: 12.5px; color: var(--body); margin-top: 5px; }
 .model .id { font: 400 11.5px/1 var(--mono); color: var(--mute); margin-top: 7px; }
 .model .nums { display: flex; gap: 20px; }
