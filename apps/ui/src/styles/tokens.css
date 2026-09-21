@@ -81,7 +81,9 @@
   --t-slow: 260ms;
 
   /* -- Layout ------------------------------------------------------------- */
-  --sidebar-w: 220px;
+  /* No --sidebar-w here: the Hub's sidebar width is --sidebar (224px) in
+     themes.css, and a second token a few pixels off under a near-identical
+     name is a trap rather than an alias. */
   --control-h: 32px;
   --control-h-sm: 28px;
 }
