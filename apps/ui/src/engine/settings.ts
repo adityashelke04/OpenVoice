@@ -241,7 +241,7 @@ export function formatSize(mb: number): string {
 export const MODEL_COPY: Record<string, { name: string; detail: string; speed: string }> = {
   "parakeet-tdt-0.6b-v2": {
     name: "Standard",
-    detail: "English. Included with OpenVoice, so it is always available — even offline.",
+    detail: "English. Included with OpenVoice, so it is always available, even offline.",
     speed: "~0.5 s",
   },
   "parakeet-tdt-0.6b-v3": {
@@ -253,7 +253,7 @@ export const MODEL_COPY: Record<string, { name: string; detail: string; speed: s
   "whisper-tiny.en": {
     name: "Light",
     detail:
-      "English. A sixth of the disk and far less memory, and noticeably less accurate — for machines that cannot spare the room.",
+      "English. A sixth of the disk and far less memory, and noticeably less accurate, for machines that cannot spare the room.",
     speed: "~0.5 s",
   },
 };
