@@ -20,9 +20,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use ov_core::event::{Event, NoticeLevel};
+use ov_core::event::Event;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -34,7 +33,6 @@ mod material;
 mod models;
 mod names;
 mod overlay;
-mod paste_again;
 mod settings;
 mod taplatch;
 mod topmost;
@@ -257,140 +255,6 @@ fn get_user_name() -> Option<String> {
         .and_then(names::first_name)
 }
 
-/// RAII over a re-entry flag: [`AtomicFlagGuard::acquire`] sets it and returns
-/// `None` if it was already set, and dropping a held guard clears it.
-///
-/// Used in place of a bare swap-then-store pair so the flag is released on
-/// *every* exit from the guarded section, including a panic unwinding through
-/// it -- a poisoned `engine.lock().expect("engine")` in [`paste_again_once`]
-/// being the case that matters here. A plain `store(false)` placed after an
-/// `await` is simply never reached if the awaited future panics instead of
-/// resolving, and the flag would then read "pasting" for the rest of the
-/// process.
-struct AtomicFlagGuard<'a> {
-    flag: &'a AtomicBool,
-}
-
-impl<'a> AtomicFlagGuard<'a> {
-    fn acquire(flag: &'a AtomicBool) -> Option<Self> {
-        if flag.swap(true, Ordering::SeqCst) {
-            None
-        } else {
-            Some(Self { flag })
-        }
-    }
-}
-
-impl Drop for AtomicFlagGuard<'_> {
-    fn drop(&mut self) {
-        self.flag.store(false, Ordering::SeqCst);
-    }
-}
-
-#[cfg(test)]
-mod atomic_flag_guard_tests {
-    use super::AtomicFlagGuard;
-    use std::sync::atomic::AtomicBool;
-
-    #[test]
-    fn taking_it_twice_fails_and_dropping_frees_it() {
-        let flag = AtomicBool::new(false);
-
-        let first = AtomicFlagGuard::acquire(&flag).expect("flag was free");
-        assert!(
-            AtomicFlagGuard::acquire(&flag).is_none(),
-            "a second guard must not be handed out while the first is held"
-        );
-
-        drop(first);
-        assert!(
-            AtomicFlagGuard::acquire(&flag).is_some(),
-            "dropping the first guard must free the flag for the next caller"
-        );
-    }
-}
-
-/// Paste a history row into whichever app the user was in before the Hub.
-///
-/// `paste_last` types into the focused window, which is the Hub itself when its
-/// button is clicked. So: minimise the Hub, wait for Windows to hand focus to the
-/// previous window, then inject through the engine's normal path.
-///
-/// Guarded by [`AppState::pasting`] via [`AtomicFlagGuard`] so a double click
-/// cannot start a second paste while the first is still minimising the Hub and
-/// polling for focus. Held across the whole call to [`paste_again_once`] --
-/// including the `.await` -- so it releases on every exit: success, a failed
-/// paste, an early `?`, or a panic unwinding out of that function.
-#[tauri::command]
-async fn paste_again(app: AppHandle, text: String) -> Result<String, String> {
-    let state = app.state::<AppState>();
-    let Some(_guard) = AtomicFlagGuard::acquire(&state.pasting) else {
-        return Err("Already pasting.".to_string());
-    };
-    paste_again_once(app.clone(), text).await
-}
-
-/// The body of [`paste_again`], factored out from under its [`AtomicFlagGuard`]
-/// so this function's several return points -- including an early `?` and a
-/// panic from a poisoned lock -- can all just return or unwind normally; the
-/// guard in the caller releases the flag regardless of which one happens.
-async fn paste_again_once(app: AppHandle, text: String) -> Result<String, String> {
-    let engine = app
-        .state::<AppState>()
-        .engine
-        .lock()
-        .expect("engine")
-        .clone()
-        .ok_or_else(|| "The speech engine is not running, so nothing can be pasted.".to_string())?;
-    let hub = app
-        .get_webview_window("hub")
-        .ok_or("The Hub window is missing.")?;
-    let hub_hwnd = hub.hwnd().map_err(|e| e.to_string())?.0 as isize;
-    hub.minimize().map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let moved = paste_again::poll_until(
-            Duration::from_millis(600),
-            Duration::from_millis(20),
-            || paste_again::focus_moved(paste_again::foreground_hwnd(), hub_hwnd),
-        );
-
-        // Copy to the clipboard and say so, rather than injecting. Used both when
-        // focus never left the Hub, and as the fallback when it did but the
-        // injection itself still failed.
-        let copy_instead = |engine: &engine::Engine| match ov_input::set_clipboard_text(&text) {
-            Ok(()) => {
-                engine.notice(
-                    NoticeLevel::Info,
-                    "Copied. Click where you want it and press Ctrl+V.",
-                );
-                Ok("copied".to_string())
-            }
-            Err(e) => {
-                // Not the dictated text -- only the failure -- so a log line about
-                // a clipboard error never doubles as a transcript leak.
-                tracing::warn!(error = %e, "clipboard fallback failed; nothing was pasted or copied");
-                Err("Could not paste or copy the text.".to_string())
-            }
-        };
-
-        if moved {
-            // The target window has just regained focus and needs a moment to
-            // restore keyboard focus to its own caret before typing into it --
-            // without this, the OS-level focus change can be observed here before
-            // the target has actually routed keyboard input to its text field.
-            std::thread::sleep(Duration::from_millis(40));
-            match engine.paste_text(&text) {
-                Ok(()) => Ok("pasted".to_string()),
-                Err(_) => copy_instead(&engine),
-            }
-        } else {
-            copy_instead(&engine)
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 #[tauri::command]
 fn open_data_dir(app: AppHandle) {
     let dir = history::data_dir();
@@ -405,10 +269,6 @@ struct AppState {
     /// Whether a start attempt is in flight, so a retry cannot begin a second one
     /// beside it. Two live engines would mean two sidecars and two hotkey hooks.
     starting: AtomicBool,
-    /// Whether a `paste_again` is in flight, so a double click cannot start a
-    /// second one that minimises the Hub again mid-poll and races the first for
-    /// the clipboard and the target window's focus.
-    pasting: AtomicBool,
     /// Set while a model is being fetched from the Models screen.
     ///
     /// Recorded rather than emitted as an event: a 465 MB transfer can start
@@ -436,7 +296,6 @@ impl Default for AppState {
             error: Mutex::new(None),
             // The launch attempt begins immediately, so this starts true.
             starting: AtomicBool::new(true),
-            pasting: AtomicBool::new(false),
             download: Mutex::new(None),
             booted: Mutex::new(None),
             overlay: overlay::Overlay::new(),
@@ -1055,7 +914,6 @@ fn main() {
             get_log_path,
             paste_last,
             get_user_name,
-            paste_again,
             open_data_dir,
             overlay_placement,
             overlay_move,

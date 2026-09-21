@@ -248,7 +248,6 @@ export function responses(now = FROZEN_NOW, variant = "normal") {
     list_models: MODELS,
     models_on_disk: 0,
     get_download: null,
-    paste_again: "pasted",
     list_microphones: [
       "Microphone Array (Realtek Audio)",
       "Headset (WH-1000XM4 Hands-Free)",

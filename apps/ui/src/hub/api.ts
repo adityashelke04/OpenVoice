@@ -17,6 +17,5 @@ export const getHistory = (o: { limit?: number; query?: string; profile?: Profil
   call<Row[]>("get_history", { limit: o.limit ?? 200, query: o.query?.trim() || null, profile: o.profile && o.profile !== "all" ? o.profile : null }, []);
 export const getTotals = () => call<Totals>("get_totals", undefined, { sessions: 0, words: 0, speakingMs: 0, topApp: null, activeDays: [] });
 export const getUserName = () => call<string | null>("get_user_name", undefined, null);
-export const pasteAgain = (text: string) => call<"pasted" | "copied">("paste_again", { text }, "copied");
 export const windowMaterial = () => call<"mica" | "none">("window_material", undefined, "none");
 export const windowsTransparency = () => call<boolean>("windows_transparency", undefined, true);

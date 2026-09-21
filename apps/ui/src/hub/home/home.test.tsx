@@ -24,7 +24,6 @@ function bridge(rows: Row[] = ROWS, extra: Record<string, (a: any) => unknown> =
   return installTauri({
     get_history: (a: any) => (a?.profile ? rows.filter((r) => r.profile === a.profile) : rows).slice(0, a?.limit ?? 200),
     get_totals: () => TOTALS,
-    paste_again: () => "pasted",
     ...extra,
   });
 }

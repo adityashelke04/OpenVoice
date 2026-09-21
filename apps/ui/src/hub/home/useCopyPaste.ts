@@ -1,25 +1,20 @@
-/** Copy, Paste again and Fix a word: the three things you can do with a
- *  dictation, on the Last dictation card and in every expanded Earlier row.
+/** Copy and Fix a word: what you can do with a dictation, on the Last
+ *  dictation card and in every expanded Earlier row.
  *
- *  Copy and Paste again answer in place (spec 4.8): the label becomes "Copied"
- *  or "Pasted" with a check for 1400 ms. A copy that says nothing is
- *  indistinguishable from one that failed. When Paste again cannot reach the
- *  app it leaves the text on the clipboard and the backend says so in its own
- *  notice, so the label stays and nothing more is said here. Only an outright
- *  failure raises a toast. */
+ *  Copy answers in place (spec 4.8): the label becomes "Copied" with a check
+ *  for 1400 ms, because a copy that says nothing is indistinguishable from one
+ *  that failed. Only an outright failure raises a toast.
+ *
+ *  Paste again lived here until the owner dropped it (2026-09-19); Copy is now
+ *  the one way to get text back out. */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { pasteAgain } from "../api";
 import { pushToast } from "../toast";
 
 export const MORPH_MS = 1400;
 
 export interface CopyPaste {
   copied: boolean;
-  pasted: boolean;
-  /** A Paste again call is in flight; the button is disabled until it ends. */
-  pasting: boolean;
   copy: () => Promise<void>;
-  paste: () => Promise<void>;
 }
 
 /** Copy a dictation to the clipboard. Shared by the hook below and by the
@@ -34,23 +29,8 @@ export async function copyText(text: string): Promise<void> {
   }
 }
 
-/** Paste again, backend and all. Same reasoning as `copyText`. */
-export async function pasteText(text: string): Promise<"pasted" | "copied"> {
-  try {
-    return await pasteAgain(text);
-  } catch (e) {
-    pushToast({ tone: "danger", message: String(e) });
-    throw e;
-  }
-}
-
 export function useCopyPaste(text: string): CopyPaste {
   const [copied, setCopied] = useState(false);
-  const [pasted, setPasted] = useState(false);
-  const [pasting, setPasting] = useState(false);
-  // A ref as well as state: a second click can land before React re-renders the
-  // disabled button, and two overlapping pastes would each minimise the Hub.
-  const inFlight = useRef(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
@@ -68,19 +48,5 @@ export function useCopyPaste(text: string): CopyPaste {
     }
   }, [text, flash]);
 
-  const paste = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setPasting(true);
-    try {
-      if ((await pasteText(text)) === "pasted") flash(setPasted);
-    } catch {
-      // pasteText already pushed the toast.
-    } finally {
-      inFlight.current = false;
-      setPasting(false);
-    }
-  }, [text, flash]);
-
-  return { copied, pasted, pasting, copy, paste };
+  return { copied, copy };
 }

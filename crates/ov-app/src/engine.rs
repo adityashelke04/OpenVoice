@@ -467,11 +467,10 @@ impl Engine {
     /// Inject `text` into whatever currently has focus, through the normal
     /// `mode_for` + `WinTextSink` path.
     ///
-    /// Extracted from [`Engine::paste_last`] so the "paste again" command (which
-    /// re-delivers an arbitrary history row rather than only the most recent one)
-    /// can reuse the one injection path in the codebase, rather than growing a
-    /// second way to put text on screen.
-    pub fn paste_text(&self, text: &str) -> Result<(), String> {
+    /// The one place in the app that puts text on screen. [`Engine::paste_last`]
+    /// is its only caller; it stays a separate method so the "what to paste"
+    /// decision and the injection itself do not share a body.
+    fn paste_text(&self, text: &str) -> Result<(), String> {
         let mode = ov_input::mode_for(text, self.paste_threshold);
         self.sink.inject(text, mode).map(|_| ()).map_err(|e| {
             tracing::warn!(error = %e, "paste failed");
@@ -481,10 +480,10 @@ impl Engine {
 
     /// Publish a notice toast to the UI.
     ///
-    /// A thin wrapper over `Event::Notice`, kept as its own method so callers
-    /// outside this module -- the "paste again" command included -- do not have
-    /// to reach past the engine into `ov_core::event` for a one-line emit.
-    pub fn notice(&self, level: ov_core::event::NoticeLevel, message: impl Into<String>) {
+    /// A thin wrapper over `Event::Notice`, kept as its own method so a caller
+    /// does not have to reach past the engine into `ov_core::event` for a
+    /// one-line emit.
+    fn notice(&self, level: ov_core::event::NoticeLevel, message: impl Into<String>) {
         self.shell.emit(&Event::Notice {
             level,
             message: message.into(),
