@@ -183,12 +183,14 @@ export const HOTKEYS: readonly [value: string, label: string][] = [
   ["f24", "F24"],
 ];
 
-/** The version this build reports, mirroring the workspace version in
- *  `Cargo.toml` and `crates/ov-app/tauri.conf.json`. Settings shows it so the
- *  number in a bug report comes from the app rather than from memory; a release
- *  bump has to touch this line too, which is why it sits beside the update
- *  commands rather than in a screen. */
-export const APP_VERSION = "1.0.1";
+/** The version this build reports. Settings shows it so the number in a bug
+ *  report comes from the app rather than from memory.
+ *
+ *  Vite replaces `__APP_VERSION__` with `[workspace.package].version` from
+ *  `Cargo.toml`, so a release bump touches the manifest and nothing here. Under
+ *  vitest there is no `define` and the identifier is undeclared, hence the
+ *  `typeof` guard; "0.0.0" is deliberately not a version anyone ships. */
+export const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 
 /** What an update check found. Mirrors `ov_app::update::UpdateStatus`. */
 export interface UpdateStatus {
