@@ -356,8 +356,8 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
 .set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 .slider { display: flex; align-items: center; gap: 10px; width: 210px; }
 .slider .tr { flex: 1; height: 6px; border-radius: 3px; background: var(--well); border: 1px solid var(--edge); position: relative; }
-.slider .tr b { position: absolute; left: 0; top: -1px; bottom: -1px; width: 32%; border-radius: 3px; background: var(--accent); }
-.slider .tr i { position: absolute; left: 32%; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); box-shadow: 0 2px 6px rgb(0 0 0 / 30%); }
+.slider .tr b { position: absolute; left: 0; top: -1px; bottom: -1px; width: 33.333%; border-radius: 3px; background: var(--accent); }
+.slider .tr i { position: absolute; left: 33.333%; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); box-shadow: 0 2px 6px rgb(0 0 0 / 30%); }
 .slider .val { font: 500 12.5px/1 var(--mono); color: var(--ink); width: 44px; text-align: right; }
 .meter { display: flex; gap: 3px; align-items: flex-end; height: 18px; }
 .meter i { width: 4px; border-radius: 2px; background: var(--ok); }
@@ -673,14 +673,24 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
     <!-- =============================================================== SETTINGS -->
     <section class="scroll" data-screen="settings">
       <div class="set-grid">
-        <article class="card glass">
-          <div class="card-head"><div class="card-title"><i class="ph-bold ph-microphone"></i>Dictation</div></div>
-          <div class="srow"><div><div class="lab">Shortcut</div><div class="hint">Hold it anywhere to talk.</div></div><div class="field" style="width:150px"><span class="keycap">Right Ctrl</span><i class="ph ph-caret-down"></i></div></div>
-          <div class="srow"><div><div class="lab">How it starts</div><div class="hint">Hold to talk cannot be left listening by accident.</div></div><div class="seg"><span class="on">Hold</span><span>Press to toggle</span></div></div>
-          <div class="srow"><div><div class="lab">Microphone</div><div class="hint">System default unless the wrong one is used.</div></div><div style="display:flex; align-items:center; gap:10px"><div class="meter" aria-hidden="true"><i style="height:6px"></i><i style="height:10px"></i><i style="height:15px"></i><i style="height:12px"></i><i class="off" style="height:8px"></i><i class="off" style="height:5px"></i></div><div class="field" style="width:150px"><span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis">System default</span><i class="ph ph-caret-down"></i></div></div></div>
-          <div class="srow"><div><div class="lab">Sound feedback</div><div class="hint">A short tone when you start and when it lands.</div></div><span class="switch on"></span></div>
-          <div class="srow"><div><div class="lab">Maximum recording</div><div class="hint">Stops on its own, so a stuck key cannot record forever.</div></div><div class="slider"><div class="tr"><b></b><i></i></div><span class="val">2 min</span></div></div>
-        </article>
+        <div style="display:flex; flex-direction:column; gap:14px">
+          <article class="card glass">
+            <div class="card-head"><div class="card-title"><i class="ph-bold ph-microphone"></i>Dictation</div></div>
+            <div class="srow"><div><div class="lab">Shortcut</div><div class="hint">Hold it anywhere to talk.</div></div><div class="field" style="width:150px"><span class="keycap">Right Ctrl</span><i class="ph ph-caret-down"></i></div></div>
+            <div class="srow"><div><div class="lab">How it starts</div><div class="hint">Hold to talk cannot be left listening by accident.</div></div><div class="seg"><span class="on">Hold</span><span>Press to toggle</span></div></div>
+            <div class="srow"><div><div class="lab">Microphone</div><div class="hint">System default unless the wrong one is used.</div></div><div style="display:flex; align-items:center; gap:10px"><div class="meter" aria-hidden="true"><i style="height:6px"></i><i style="height:10px"></i><i style="height:15px"></i><i style="height:12px"></i><i class="off" style="height:8px"></i><i class="off" style="height:5px"></i></div><div class="field" style="width:150px"><span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis">System default</span><i class="ph ph-caret-down"></i></div></div></div>
+            <div class="srow"><div><div class="lab">Sound feedback</div><div class="hint">A short tone when you start and when it lands.</div></div><span class="switch on"></span></div>
+            <div class="srow"><div><div class="lab">Maximum recording</div><div class="hint">Stops on its own, so a stuck key cannot record forever.</div></div><div class="slider"><div class="tr"><b></b><i></i></div><span class="val">2 min</span></div></div>
+          </article>
+          <article class="card glass">
+            <div class="card-head"><div class="card-title"><i class="ph-bold ph-shield-check"></i>Privacy</div></div>
+            <div class="srow"><div><div class="lab">Keep recordings</div><div class="hint">Off: your voice is discarded once it is written out.</div></div><span class="switch"></span></div>
+            <div class="srow"><div><div class="lab">Hide secrets in history</div><div class="hint">API keys and tokens are stored as [redacted].</div></div><span class="switch on"></span></div>
+            <div class="srow"><div><div class="lab">Keep history for</div><div class="hint">Older entries are deleted automatically.</div></div><div class="field" style="width:150px"><span>Forever</span><i class="ph ph-caret-down"></i></div></div>
+            <div class="srow"><div><div class="lab">Sends nothing anywhere</div><div class="hint">No analytics, no crash reports, no account.</div></div><span class="badge ok">Local only</span></div>
+            <div class="srow"><div><div class="lab">Your data</div><div class="hint">A plain folder you can open, copy or delete.</div></div><button class="btn sm">Open folder</button></div>
+          </article>
+        </div>
         <div style="display:flex; flex-direction:column; gap:14px">
           <article class="card glass">
             <div class="card-head"><div class="card-title"><i class="ph-bold ph-palette"></i>Appearance</div></div>
@@ -693,9 +703,10 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
             <div class="srow"><div><div class="lab">Reduce transparency</div><div class="hint">Solid panels instead of glass. On when Windows transparency is off.</div></div><span class="switch" id="solid-switch"></span></div>
           </article>
           <article class="card glass">
-            <div class="card-head"><div class="card-title"><i class="ph-bold ph-shield-check"></i>Privacy</div></div>
-            <div class="srow"><div><div class="lab">Keep recordings</div><div class="hint">Off: your voice is discarded once it is written out.</div></div><span class="switch"></span></div>
-            <div class="srow"><div><div class="lab">Hide secrets in history</div><div class="hint">API keys and tokens are stored as [redacted].</div></div><span class="switch on"></span></div>
+            <div class="card-head"><div class="card-title"><i class="ph-bold ph-arrows-clockwise"></i>Updates</div></div>
+            <div class="srow"><div class="lab">Check on launch</div><span class="switch on"></span></div>
+            <div class="srow"><div class="lab">Check now</div><button class="btn sm">Check now</button></div>
+            <div class="srow"><div class="lab">Version</div><span class="kv">1.0.1</span></div>
           </article>
         </div>
       </div>
