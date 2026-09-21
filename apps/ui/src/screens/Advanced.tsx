@@ -1,124 +1,138 @@
 /** Advanced: the formatter trace, the data folders and the engine facts.
  *
- * Moved out of Profiles.tsx unchanged when Writing style was rewritten on the
- * Hub primitives (plan Task 12), so that file no longer pulls in the legacy
- * `../ui` kit. This screen gets its own redesign in Task 15.
+ * Nothing here is part of everyday use. It exists for the ten seconds after a
+ * transcript comes out wrong: the pipeline shows every stage the formatter ran
+ * and marks what each one changed, which turns "the dictation is broken" into
+ * "the commands rule did it".
+ *
+ * Markup and classes follow the reference (docs/redesign/reference/reference.html,
+ * Advanced section; styles in hub/screens.css). The trace is live rather than a
+ * picture: the sentence is editable and every keystroke re-runs `preview_format`
+ * against the real engine, so the rail below always describes this machine.
  */
 
-import { useEffect, useState } from "react";
-import { Button, Card } from "../ui";
-import { previewFormat, type Settings as S } from "../engine/settings";
-import "./screens.css";
+import { useEffect, useState, type CSSProperties } from "react";
+import { Cpu, Folder, GitDiff } from "@phosphor-icons/react";
+import { Button, Card, Field, SettingRow } from "../hub/ui";
+import { markChanges } from "../hub/diff";
+import { getLogPath, openDataDir, previewFormat, type Settings as S } from "../engine/settings";
+import "../hub/screens.css";
 
-function Row({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className="srow">
-      <div className="srow-label">
-        <div className="t-body-strong">{label}</div>
-        {hint && <div className="t-caption srow-hint">{hint}</div>}
-      </div>
-      <div className="srow-control">{children}</div>
-    </div>
-  );
+/** The phrase the README quotes and `ov-format` asserts on, so the rail below
+ *  starts out showing every stage doing something. */
+const SAMPLE = "um so we need to call use effect here comma then return null";
+
+/** `C:\Users\you\AppData\Roaming\...` written as `%APPDATA%\...`.
+ *
+ *  The row is there to be read and pasted into Explorer, and both work better
+ *  short: the full path is wide enough to need a second line, and it carries the
+ *  account name into every screenshot of this screen. Any other shape is left
+ *  exactly as the engine reported it. */
+function shortPath(path: string): string {
+  return path.replace(/^[A-Za-z]:\\Users\\[^\\]+\\AppData\\Roaming\\/i, "%APPDATA%\\");
 }
 
-/** Advanced — the surfaces a curious or stuck user needs, kept off the first screen. */
+/** Advanced: one card for the pipeline, then the folders and the facts. */
 export function AdvancedScreen({ settings }: { settings: S }) {
-  const [text, setText] = useState("um so we need to call use effect here comma then return null");
+  const [text, setText] = useState(SAMPLE);
   const [trace, setTrace] = useState<[string, string][]>([]);
   const [logPath, setLogPath] = useState("");
 
+  // `settings` is a dependency as well as `text`: a dictionary entry or a rule
+  // changed on another screen changes what this trace says.
   useEffect(() => {
     previewFormat(text, "editor").then((t) => t && setTrace(t));
   }, [text, settings]);
 
   useEffect(() => {
-    import("../engine/settings").then(({ getLogPath }) =>
-      getLogPath().then((p) => p && setLogPath(p)),
-    );
+    getLogPath().then((p) => p && setLogPath(p));
   }, []);
 
   return (
-    <div className="screen">
-      <header className="screen-head">
-        <h1 className="t-title">Advanced</h1>
-        <p className="t-body screen-lead">
-          Nothing here is needed for everyday use. It exists so that when something
-          looks wrong, you can see exactly why.
-        </p>
-      </header>
+    <section className="scroll">
+      <p className="lead">
+        Nothing here is needed for everyday use. It exists so that when something
+        looks wrong, you can see exactly why.
+      </p>
 
-      <Card title="How a sentence is rewritten">
-        <input
-          className="input"
+      <Card
+        title="How a sentence is rewritten"
+        icon={<GitDiff weight="bold" aria-hidden />}
+        right="Code editors style"
+        style={{ "--i": 0 } as CSSProperties}
+      >
+        {/* Editable, because the useful question is always about the sentence
+            that just came out wrong, not about this one. */}
+        <Field
+          mono
+          aria-label="A sentence to trace"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          style={{ width: "100%", marginBottom: 12 }}
         />
-        <div className="trace">
+
+        <div className="pipe">
           {trace.map(([stage, out], i) => {
-            const changed = i > 0 && trace[i - 1][1] !== out;
+            const previous = i > 0 ? trace[i - 1][1] : null;
+            const changed = previous !== null && previous !== out;
             return (
-              <div className="trace-row" key={stage} data-changed={changed}>
-                <span className="t-label trace-stage">{stage}</span>
-                <span className={changed ? "trace-out changed" : "trace-out"}>{out}</span>
+              <div className={changed ? "step ch" : "step"} key={stage}>
+                <span className="n" />
+                <span className="sn">{stage}</span>
+                <span className="so">
+                  {/* Only what this stage added is marked. Deletions have no
+                      place to sit, and the row above still shows them. */}
+                  {changed
+                    ? markChanges(previous, out).map((s, k) => (s.changed ? <mark key={k}>{s.text}</mark> : s.text))
+                    : out}
+                </span>
+                {/* Always the fourth cell, tagged or not: the rows are one grid
+                    and have to line up whether or not anything happened. */}
+                {changed ? <span className="tg">changed</span> : <span />}
               </div>
             );
           })}
         </div>
-        <p className="t-caption" style={{ marginTop: 12, maxWidth: "68ch" }}>
-          Each row is one rule. Highlighted rows changed the text. When a transcript
-          comes out wrong, this shows which rule did it — which turns a vague
-          complaint into a ten-second diagnosis.
-        </p>
       </Card>
 
-      <Card title="Files">
-        <div className="srows">
-          <Row label="Log" hint={logPath || "…"}>
-            <Button onClick={() => import("../engine/settings").then((m) => m.openDataDir())}>
-              Open folder
-            </Button>
-          </Row>
-          <Row
+      <div className="set-grid">
+        <Card title="Files" icon={<Folder weight="bold" aria-hidden />} style={{ "--i": 1 } as CSSProperties}>
+          <SettingRow
+            label="Log"
+            hint={<span style={{ fontFamily: "var(--mono)" }}>{shortPath(logPath)}</span>}
+            title="Everything the app recorded about this session. Worth attaching to a bug report."
+          >
+            <Button size="sm" onClick={() => openDataDir()}>Open folder</Button>
+          </SettingRow>
+
+          <SettingRow
             label="Settings and history"
-            hint="Plain text files. Copy them to another machine, or delete them to start over."
+            hint="Plain files you can copy or delete."
+            title="Plain text files. Copy them to another machine, or delete them to start over."
           >
-            <Button onClick={() => import("../engine/settings").then((m) => m.openDataDir())}>
-              Open folder
-            </Button>
-          </Row>
-        </div>
-      </Card>
+            <Button size="sm" onClick={() => openDataDir()}>Open folder</Button>
+          </SettingRow>
+        </Card>
 
-      <Card title="Engine">
-        <div className="srows">
-          {/* Reads the engine's own id rather than settings.model. Those two
-              drifted apart when the model stopped being selectable, and this row
-              spent that time confidently naming a model the app was not running,
-              under a hint pointing at a screen that no longer exists. */}
-          <Row label="Speech model" hint="Included with OpenVoice. English, and runs on this computer.">
-            <span className="t-mono">parakeet-tdt-0.6b-v2</span>
-          </Row>
-          <Row
-            label="Switch to typing above"
-            hint="Longer text is pasted instead of typed, which is instant but briefly borrows your clipboard."
+        <Card title="Engine" icon={<Cpu weight="bold" aria-hidden />} style={{ "--i": 2 } as CSSProperties}>
+          <SettingRow
+            label="Speech model"
+            title="Chosen on the Speech model screen. It runs on this computer, and changing it needs a restart."
           >
-            <span className="t-mono">{settings.config.paste_threshold_chars} characters</span>
-          </Row>
-          <Row label="Corrections" hint="Your dictionary entries.">
-            <span className="t-mono">{settings.dictionary.length}</span>
-          </Row>
-        </div>
-      </Card>
-    </div>
+            <span className="kv">{settings.model}</span>
+          </SettingRow>
+
+          <SettingRow
+            label="Paste instead of type above"
+            title="Longer text is pasted rather than typed, which is instant but briefly borrows your clipboard."
+          >
+            <span className="kv">{settings.config.paste_threshold_chars} characters</span>
+          </SettingRow>
+
+          <SettingRow label="Corrections" title="How many entries your dictionary holds.">
+            <span className="kv">{settings.dictionary.length}</span>
+          </SettingRow>
+        </Card>
+      </div>
+    </section>
   );
 }

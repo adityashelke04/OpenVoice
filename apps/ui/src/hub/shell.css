@@ -92,9 +92,6 @@ html[data-material="mica"][data-solid] #root { background: none; }
 .lock { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); white-space: nowrap; }
 .lock svg { color: var(--ok); }
 
-/* Legacy screens (restyled in their own tasks) scroll inside the pane. */
-.legacy-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
-
 /* -- Screen enter (reference lines 396-399, plan decision 9) ------------------ */
 /* `.anim` is absent under ?still=1; reduced motion turns it off here. `--i` on a
  * card staggers it 60 ms after the one before. */

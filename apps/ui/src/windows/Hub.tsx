@@ -148,7 +148,7 @@ export function Hub() {
   } else if (!settings) {
     // Settings arrive asynchronously; a blank pane for a beat reads as broken.
     body = (
-      <div className="legacy-scroll legacy-screen">
+      <div className="scroll">
         <div className="sk" style={{ height: 140 }} />
         <div className="sk" style={{ height: 140 }} />
       </div>
@@ -171,11 +171,9 @@ export function Hub() {
       />
     );
   } else {
-    body = (
-      <div className="legacy-scroll legacy-screen">
-        {screen === "advanced" && <AdvancedScreen settings={settings} />}
-      </div>
-    );
+    // Advanced, the last of them. Every screen now owns its own `section.scroll`,
+    // so there is no wrapper left here to tell them apart.
+    body = <AdvancedScreen settings={settings} />;
   }
 
   return (

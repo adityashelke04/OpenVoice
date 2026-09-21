@@ -1,14 +1,14 @@
 @import "./loading-dots.css";
 
 /* Scoped out of the Hub (plan Task 6). The Hub has its own primitives in
- * src/hub/ui with the same class names (.btn, .badge, .card, .notice, ...), and
- * the Hub's legacy screens still import this file, so unscoped these rules would
- * land on the new controls. Everything below the keyframes is nested in
- * :where(html:not([data-window="hub"])), which matches every other window and
- * adds zero specificity. That matters: the overlay's own stylesheets override
- * these rules at equal specificity (overlay.css re-declares .flowbar's
- * transition, for one), and a plain html:not(...) wrapper would silently win
- * those ties. @keyframes cannot nest inside a style rule, so they stay on top. */
+ * src/hub/ui with the same class names (.btn, .badge, .card, .notice, ...), so
+ * unscoped these rules would land on the new controls. Everything below the
+ * keyframes is nested in :where(html:not([data-window="hub"])), which matches
+ * every other window and adds zero specificity. That matters: the overlay's
+ * own stylesheets override these rules at equal specificity (overlay.css
+ * re-declares .flowbar's transition, for one), and a plain html:not(...)
+ * wrapper would silently win those ties. @keyframes cannot nest inside a style
+ * rule, so they stay on top. */
 
 @keyframes pulse {
   0%,
@@ -47,7 +47,7 @@
   }
 }
 
-:where(html:not([data-window="hub"]), .legacy-screen) {
+:where(html:not([data-window="hub"])) {
   /* Primitive components. Rules and reasoning live in DESIGN.md §"Component rules".
    *
    * Two things hold this system together and are easy to erode:
