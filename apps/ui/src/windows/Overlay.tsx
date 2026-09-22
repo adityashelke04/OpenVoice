@@ -582,7 +582,8 @@ function useWindowShape(
 }
 
 export function Overlay() {
-  const { view, levelRef } = useLiveEngine();
+  // The only window with a clock on it, so the only one that pays for the tick.
+  const { view, levelRef } = useLiveEngine({ clock: true });
   const { settings } = useSettings();
   const [menu, setMenu] = useState(false);
   /** Stable, so `useMenuTimeout` is not handed a new callback every render. */
