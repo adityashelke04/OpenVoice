@@ -1,7 +1,8 @@
 /** Primitive components.
  *
- * Deliberately small and unopinionated about layout. Rules and reasoning live in
- * DESIGN.md; the two that erode fastest and matter most:
+ * Deliberately small and unopinionated about layout. The design sheet
+ * (`?window=sheet`) shows every one. The two rules that erode fastest and
+ * matter most:
  *
  *   1. There are no shadows anywhere. Depth is the surface ladder plus hairlines.
  *   2. Green appears only on live state, the record action, and focus rings.
@@ -325,7 +326,7 @@ export function Waveform({
      * A meter that rises and falls at the same rate reads as a progress bar. A
      * real one snaps up and eases down, and holds its peak long enough for the
      * eye to catch it — that asymmetry is the whole reason this looks like an
-     * instrument instead of a graph, and it is what DESIGN.md specifies.
+     * instrument instead of a graph.
      *
      * The wave samples `meter`, not the raw level: the raw signal is a noisy
      * 30Hz stream, and feeding it straight in was making quiet consonants

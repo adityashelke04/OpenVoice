@@ -13,8 +13,8 @@ npm run lint       # oxlint
 npx tsc --noEmit -p tsconfig.app.json   # type-check only
 ```
 
-Add `?window=hub` (the default), `?window=overlay`, or `?window=sheet` to pick a
-window.
+Add `?window=hub` (the default), `?window=overlay`, `?window=sheet`, or
+`?window=flowbar` to pick a window.
 
 `npm run dev` works standalone. Anything that calls into Rust is guarded by a
 `__TAURI_INTERNALS__` check in `src/engine/settings.ts` and returns `null`
@@ -28,7 +28,7 @@ To see it inside the real window, build the Tauri shell instead — its
 
 | Path | What it is |
 |---|---|
-| `src/windows/` | One file per window, routed by query string: `Hub` (main), `Overlay` (the Flow Bar), `Sheet` (component gallery, `?window=sheet`, not part of the app) |
+| `src/windows/` | One file per window, routed by query string: `Hub` (main), `Overlay` (the Flow Bar), `Sheet` (component gallery, `?window=sheet`) and `FlowBarStates` (every Flow Bar state over sample backdrops, `?window=flowbar`) — review surfaces, not part of the app |
 | `src/screens/` | Sections of the hub. `Settings.tsx` also exports the Speech model screen; `Profiles.tsx` also exports Advanced. Home lives in `Hub.tsx` itself. |
 | `src/ui/` | The primitives everything else is built from, plus `sound.ts` (tones synthesized with the Web Audio API, so there is no audio asset to license or bundle) |
 | `src/engine/` | The bridge to Rust: event stream, settings, stats |

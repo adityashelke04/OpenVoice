@@ -48,7 +48,7 @@
 }
 
 :where(html:not([data-window="hub"])) {
-  /* Primitive components. Rules and reasoning live in DESIGN.md §"Component rules".
+  /* Primitive components. The design sheet (`?window=sheet`) renders every one.
    *
    * Two things hold this system together and are easy to erode:
    *   1. There are NO shadows. Depth is the surface ladder plus 1px hairlines.
@@ -664,7 +664,7 @@
   .flowbar[data-live="true"] {
     border-color: var(--live);
     border-width: 1.5px;
-    /* The one shadow DESIGN.md actually grants this window, and it took until now
+    /* The one shadow the design system grants this window, and it took until now
      * to render because the window had no spare pixels to paint it into — the
      * overlay reserves a margin while listening precisely so this can exist. See
      * GLOW_MARGIN in Overlay.tsx; the radii below are sized to settle inside it

@@ -1,12 +1,8 @@
-//! Writing captured audio out for the sidecar to read.
+//! Writing captured audio out as a WAV file.
 //!
-//! A temporary WAV file is the transport. Shared memory would be faster, but for a
-//! ten-second utterance this costs roughly two milliseconds against a decode of
-//! several hundred, and a file that can be opened in any audio editor is worth far
-//! more than that when a transcript comes back wrong and you need to hear what the
-//! model actually heard.
-//!
-//! Files are deleted immediately after each decode, success or failure.
+//! Used only when *Keep recordings* is on (see `recordings`): a file that can be
+//! opened in any audio editor is what you want when a transcript comes back wrong
+//! and you need to hear what the model actually heard.
 
 use std::path::Path;
 
