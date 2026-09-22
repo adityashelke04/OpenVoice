@@ -22,6 +22,19 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-22
+
+### Fixed
+
+- Dictionary, Writing style, Speech model, Settings and Advanced no longer
+  stay on grey placeholder bars after launch. The Hub could ask for your
+  settings a moment before the app was ready to answer, and it never asked
+  again, so every screen but Home looked empty until you restarted. It now
+  can't ask too early, and it tries again if a load ever fails.
+- The Graphite theme opens onto a visible slate-and-green backdrop instead
+  of flat grey. Its colours sat so close to the base that under Windows'
+  Mica the window looked like it had not finished painting.
+
 ## [1.1.0] - 2026-09-22
 
 The Hub is rebuilt. The last thing you said is now the first thing you see, and
@@ -958,7 +971,9 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/adityashelke04/OpenVoice/compare/v0.7.0...v0.8.0
