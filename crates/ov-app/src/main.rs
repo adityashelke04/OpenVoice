@@ -886,6 +886,24 @@ fn main() {
             // which is the same thing the tray does.
             show_hub(app);
         }))
+        // The app's state, registered from a plugin rather than from `setup`.
+        //
+        // Tauri builds the windows in tauri.conf.json *before* it calls `setup`,
+        // and a webview can reach IPC while `AppState::default()` is still opening
+        // the history database. The Hub's first `get_settings` then failed with
+        // "state not managed", and every screen but Home sat on skeletons for the
+        // rest of the session. Plugins initialise in registration order and all
+        // of them before any window exists, so here the state is in place before
+        // a page can ask for it — and still after the single-instance guard, so a
+        // second launch exits without touching the database.
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry, ()>::new("ov-state")
+                .setup(|app, _api| {
+                    app.manage(AppState::default());
+                    Ok(())
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         // Registering the plugin does not make a request. Nothing here reaches
         // the network until `update::check` is called, which happens either from
@@ -944,14 +962,7 @@ fn main() {
             windows_transparency
         ])
         .setup(|app| {
-            // Built here rather than handed to `manage` in the builder chain: that
-            // argument is evaluated before `run` starts, so a second launch would
-            // open the history database and apply the retention purge on its way to
-            // being killed by the single-instance guard above. Nothing can ask for
-            // this state before setup returns — the webviews created a few lines
-            // earlier cannot run script until the event loop turns.
-            app.manage(AppState::default());
-
+            // AppState is already managed: see the "ov-state" plugin above.
             let handle = app.handle().clone();
 
             configure_overlay(&handle);

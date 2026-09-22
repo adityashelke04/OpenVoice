@@ -10,8 +10,25 @@ export function useSettings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Retried, not fired once. The Hub's webview can reach IPC before the Rust
+  // side has registered its state, and that first call rejects; a single
+  // attempt left every screen but Home on skeletons until the app restarted.
   useEffect(() => {
-    loadSettings().then((s) => s && setSettings(s));
+    let live = true;
+    let id = 0;
+    let delay = 150;
+    const attempt = () => {
+      loadSettings().then(
+        (s) => { if (live && s) setSettings(s); },
+        () => {
+          if (!live) return;
+          id = window.setTimeout(attempt, delay);
+          delay = Math.min(delay * 2, 2000);
+        },
+      );
+    };
+    attempt();
+    return () => { live = false; clearTimeout(id); };
   }, []);
 
   // Stable identity, or memoized rows re-render on every Home render anyway.
