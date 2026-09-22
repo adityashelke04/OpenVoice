@@ -2,7 +2,7 @@
  *  reconciled with what the Rust store actually wrote (it validates and can
  *  reject). Moved here from screens/Settings.tsx so the shell, not one screen,
  *  owns it; screens/Settings.tsx re-exports it for the Flow Bar. */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { loadSettings, saveSettings, type Settings as S } from "../engine/settings";
 
 export function useSettings() {
@@ -14,7 +14,8 @@ export function useSettings() {
     loadSettings().then((s) => s && setSettings(s));
   }, []);
 
-  const patch = async (fn: (s: S) => void) => {
+  // Stable identity, or memoized rows re-render on every Home render anyway.
+  const patch = useCallback(async (fn: (s: S) => void) => {
     if (!settings) return;
     // Optimistic, then reconciled with whatever the store actually wrote — the
     // Rust side validates and can reject.
@@ -32,7 +33,7 @@ export function useSettings() {
     } finally {
       setSaving(false);
     }
-  };
+  }, [settings]);
 
   return { settings, patch, saving, error };
 }

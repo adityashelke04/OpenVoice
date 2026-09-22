@@ -12,14 +12,9 @@
  * and handy in dev).
  */
 
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { MotionConfig } from "motion/react";
 import { useLiveEngine } from "../engine/useLiveEngine";
-import { DictionaryScreen } from "../screens/Dictionary";
-import { ProfilesScreen } from "../screens/Profiles";
-import { AdvancedScreen } from "../screens/Advanced";
-import { ModelsScreen } from "../screens/Models";
-import { SettingsScreen } from "../screens/Settings";
 import { getHistory, getUserName } from "../hub/api";
 import { isScreenId, type ScreenId } from "../hub/nav";
 import { Sidebar, type EngineState } from "../hub/Sidebar";
@@ -35,6 +30,24 @@ import { useCopyPaste } from "../hub/home/useCopyPaste";
 import { CommandPalette } from "../hub/CommandPalette";
 import type { Row } from "../engine/stats";
 import "../hub/shell.css";
+
+// One chunk per screen. Settings alone was 72 kB of JavaScript and 15 kB of CSS
+// fetched at startup for a screen the Hub does not open on; measured against the
+// real window, Home pulled 661,764 B over seven files before this.
+const DictionaryScreen = lazy(() => import("../screens/Dictionary").then((m) => ({ default: m.DictionaryScreen })));
+const ProfilesScreen = lazy(() => import("../screens/Profiles").then((m) => ({ default: m.ProfilesScreen })));
+const AdvancedScreen = lazy(() => import("../screens/Advanced").then((m) => ({ default: m.AdvancedScreen })));
+const ModelsScreen = lazy(() => import("../screens/Models").then((m) => ({ default: m.ModelsScreen })));
+const SettingsScreen = lazy(() => import("../screens/Settings").then((m) => ({ default: m.SettingsScreen })));
+
+/** The same two bars the shell shows while settings are still arriving, reused
+ *  for the beat where a screen's chunk is in flight. */
+const screenFallback = (
+  <div className="scroll">
+    <div className="sk" style={{ height: 140 }} />
+    <div className="sk" style={{ height: 140 }} />
+  </div>
+);
 
 export type { ScreenId };
 
@@ -192,7 +205,7 @@ export function Hub() {
         />
         <main className={STILL ? "main" : "main anim"} id="main" tabIndex={-1}>
           <TopBar screen={screen} userName={userName} now={now} onSearch={() => setPalette(true)} />
-          {body}
+          <Suspense fallback={screenFallback}>{body}</Suspense>
         </main>
       </div>
       <Toasts />

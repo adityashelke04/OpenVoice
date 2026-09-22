@@ -25,6 +25,9 @@ import { HomeSkeleton } from "./Skeleton";
 import { StatsColumn } from "./StatsColumn";
 import "./home.css";
 
+/** See HistoryView: a fresh `[]` per render would defeat every Row's memo. */
+const EMPTY_DICT: Settings["dictionary"] = [];
+
 export type HomeState = "loading" | "error" | "first" | "failed" | "normal";
 
 const NO_TOTALS: Totals = { sessions: 0, words: 0, speakingMs: 0, topApp: null, activeDays: [] };
@@ -110,7 +113,7 @@ export function HomeScreen({ view, settings, patch, now, onOpenHistory }: {
             onFilter={setFilter}
             total={totals?.sessions ?? 0}
             onOpenHistory={onOpenHistory}
-            dict={settings?.dictionary ?? []}
+            dict={settings?.dictionary ?? EMPTY_DICT}
             now={now}
             patch={patch}
           />

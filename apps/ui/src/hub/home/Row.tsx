@@ -11,7 +11,7 @@
  *
  *  `<time>` stays inside `.row`: the twin harness hovers the row whose time
  *  reads "2:39 PM". */
-import { useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { memo, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { Check, Copy } from "@phosphor-icons/react";
 import { AppChip, StatusChip } from "../ui";
 import { dictionaryHits, outcomeInfo } from "../history";
@@ -23,12 +23,14 @@ import { useCopyPaste } from "./useCopyPaste";
 import { FixPanel } from "./FixPanel";
 import { revealInList } from "./useFit";
 
-export function Row({ row, dict, open, onToggle, patch }: {
+function RowImpl({ rowId, row, dict, open, onToggle, patch }: {
+  /** This row's identity in the list, handed back to `onToggle` so the handler
+   *  can be one stable function rather than a fresh closure per row. */
+  rowId: string;
   row: RowData;
-  now?: number;
   dict: DictEntry[];
   open: boolean;
-  onToggle: () => void;
+  onToggle: (id: string) => void;
   patch: (fn: (s: Settings) => void) => void;
 }) {
   const act = useCopyPaste(row.final_text);
@@ -41,7 +43,7 @@ export function Row({ row, dict, open, onToggle, patch }: {
   // Closing the row also closes its Fix panel, so it reopens as it first did.
   const toggle = () => {
     if (open) setFixing(false);
-    onToggle();
+    onToggle(rowId);
   };
   // Controls inside the row do their own thing; a click on the row's bare
   // background opens or closes it like the toggle does.
@@ -89,3 +91,9 @@ export function Row({ row, dict, open, onToggle, patch }: {
     </div>
   );
 }
+
+/** Memoized: every row on Home re-rendered whenever anything on Home changed,
+ *  re-running `dictionaryHits` and two icon components each time. `Earlier`
+ *  passes a stable `row` object and a `patch` whose identity `useSettings` now
+ *  holds steady, so the default shallow compare is enough. */
+export const Row = memo(RowImpl);

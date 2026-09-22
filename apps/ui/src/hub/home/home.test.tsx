@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { HomeScreen } from "./HomeScreen";
 import { installTauri } from "../../test/tauri";
 import { dismissToast, getToasts } from "../toast";
+import * as fit from "./useFit";
+import * as history from "../history";
 import { DICTIONARY, FAILED_ROW, NOW, ROWS, TOTALS } from "../../test/fixtures";
 import type { LiveView } from "../../engine/useLiveEngine";
 import type { Settings } from "../../engine/settings";
@@ -492,6 +494,53 @@ describe("Home", () => {
     await act(async () => {});
     expect(container.querySelectorAll(".sk")).toHaveLength(5);
     expect(screen.queryByText(ROWS[0].final_text)).toBeNull();
+  });
+
+  it("renders only as many rows as the list could show, not the whole fetch", async () => {
+    // 200 rows fetched. Before this every one was mounted and then hidden:
+    // measured in the real window at 208 children, 193 hidden, 15 visible,
+    // 2,403 DOM nodes and 398 icon SVGs.
+    const many = Array.from({ length: 200 }, (_, i) => ({ ...ROWS[1], created_at: NOW - i * 60_000, final_text: `row ${i}` }));
+    tauri = bridge(many);
+    renderHome();
+    await screen.findByText("row 1");
+    const list = screen.getByRole("region", { name: "Earlier dictations" }).querySelector(".rows")!;
+    expect(list.children.length).toBeGreaterThan(0);
+    expect(list.children.length).toBeLessThanOrEqual(42);
+  });
+
+  it("opening one row does not re-run every other row's work", async () => {
+    // Without memo, any Home re-render re-ran dictionaryHits and two icon
+    // components for every mounted row: 19.3 ms of regex per render.
+    tauri = bridge();
+    renderHome();
+    await screen.findByText(ROWS[0].final_text);
+    const list = screen.getByRole("region", { name: "Earlier dictations" }).querySelector(".rows")!;
+    const rowCount = list.querySelectorAll(".row").length;
+    expect(rowCount).toBeGreaterThan(2);
+    const spy = vi.spyOn(history, "dictionaryHits");
+    const toggles = [...list.querySelectorAll<HTMLButtonElement>(".row-toggle")];
+    await act(async () => { fireEvent.click(toggles[0]); });
+    expect(spy.mock.calls.length).toBeLessThan(rowCount);
+    spy.mockRestore();
+  });
+
+  it("the minute clock does not re-fit the list", async () => {
+    // `now` was in useFit's dependency list, so every 60 s the whole list
+    // re-measured for nothing: row times are absolute, and only the day
+    // headings read `now` — those turn over at midnight, not every minute.
+    vi.useFakeTimers();
+    try {
+      tauri = bridge();
+      renderHome();
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const spy = vi.spyOn(fit, "fitChildren");
+      await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+      expect(spy, "a minute tick must not re-fit the list").not.toHaveBeenCalled();
+      spy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

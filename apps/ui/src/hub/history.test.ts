@@ -22,3 +22,26 @@ it("dictionaryHits: whole words, case-insensitive spoken, written present", () =
   expect(dictionaryHits(row({ raw_text: "use effect", final_text: "use effect" }), DICT)).toEqual([]); // not applied
 });
 it("wordCount", () => { expect(wordCount("  a b\tc\n")).toBe(3); expect(wordCount("")).toBe(0); });
+
+it("compiles each dictionary pattern once, however many rows use it", () => {
+  // 24 RegExp objects per row across ~200 rows was 19.3 ms of compilation per
+  // render, measured in the real window; cached it is 0.99 ms.
+  const Native = RegExp;
+  let built = 0;
+  class Counting extends Native {
+    constructor(...a: ConstructorParameters<typeof RegExp>) { built++; super(...a); }
+  }
+  globalThis.RegExp = Counting as unknown as RegExpConstructor;
+  // Terms no other test in this file uses, so the cache is cold for them.
+  const fresh = [{ written: "zsh", spoken: ["zee shell"] }, { written: "ripgrep", spoken: ["rip grep"] }];
+  try {
+    const r = row({ raw_text: "zee shell and rip grep", final_text: "zsh and ripgrep" });
+    dictionaryHits(r, fresh);
+    expect(built, "the first call compiles them").toBeGreaterThan(0);
+    built = 0;
+    for (let i = 0; i < 50; i++) dictionaryHits(r, fresh);
+    expect(built, "the same patterns must not be rebuilt").toBe(0);
+  } finally {
+    globalThis.RegExp = Native;
+  }
+});

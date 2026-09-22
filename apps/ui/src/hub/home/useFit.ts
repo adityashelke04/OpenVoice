@@ -24,11 +24,18 @@ export function fitChildren(box: HTMLElement) {
   for (const k of kids) k.hidden = false;
   if (anyOpen(box)) return;
   box.scrollTop = 0;
+  // Every measurement first, then every write. Reading a rect after each write
+  // forced the browser to re-run layout once per row — 114.9 ms against 4.33 ms
+  // over 208 children, measured in the real window, and a resize drag runs this
+  // on every frame. Batching is also what the header above already describes:
+  // hide the rows that cross the bottom of the fully expanded list, rather than
+  // whatever is still crossing it as the list collapses under the loop.
   const limit = box.getBoundingClientRect().bottom;
-  for (const k of kids) {
-    if (k.classList.contains("day")) continue;
-    if (k.getBoundingClientRect().bottom > limit + 0.5) k.hidden = true;
-  }
+  const bottoms = kids.map((k) => k.getBoundingClientRect().bottom);
+  kids.forEach((k, i) => {
+    if (k.classList.contains("day")) return;
+    if (bottoms[i] > limit + 0.5) k.hidden = true;
+  });
   // A day label needs at least one visible row before the next label.
   kids.forEach((k, i) => {
     if (!k.classList.contains("day")) return;

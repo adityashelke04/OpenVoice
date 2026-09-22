@@ -23,6 +23,10 @@ import type { Row as RowData } from "../../engine/stats";
 import { Row } from "./Row";
 import "./home.css";
 
+/** A single frozen empty dictionary, so a render with no settings yet does not
+ *  hand every Row a brand-new array and break their memo. */
+const EMPTY_DICT: Settings["dictionary"] = [];
+
 const PAGE = 200;
 const DEBOUNCE_MS = 180;
 /** How close to the bottom (px) counts as "the bottom": the next page is asked
@@ -44,6 +48,8 @@ export function HistoryView({ view, settings, patch, now, onClose }: {
   const [page, setPage] = useState<{ key: string; req: Request; rows: RowData[] } | null>(null);
   const [total, setTotal] = useState<number | null>(null);
   const [picked, setOpen] = useState<string | null>(null);
+  // One stable handler for every row, so Row's memo holds (see Earlier.tsx).
+  const toggle = useCallback((k: string) => setOpen((o) => (o === k ? null : k)), []);
 
   useEffect(() => {
     let live = true;
@@ -114,6 +120,9 @@ export function HistoryView({ view, settings, patch, now, onClose }: {
   }, [req.filter, req.query]);
 
   const open = picked && rows.some((r) => rowKey(r) === picked) ? picked : null;
+  // A stable array identity: `settings?.dictionary ?? []` allocates a new empty
+  // array on every render while settings are still arriving.
+  const dict = settings?.dictionary ?? EMPTY_DICT;
   const shownQuery = page?.req.query ?? "";
   const label = FILTERS.find((f) => f.value === (page?.req.filter ?? "all"))?.label ?? "";
   const placeholder = total === null ? "Search dictations" : `Search ${total.toLocaleString("en-US")} dictations`;
@@ -158,7 +167,7 @@ export function HistoryView({ view, settings, patch, now, onClose }: {
               <div key={`d${g.key}`} className="day">{g.label}</div>,
               ...g.rows.map((r) => {
                 const k = rowKey(r);
-                return <Row key={k} row={r} now={now} dict={settings?.dictionary ?? []} open={open === k} onToggle={() => setOpen((o) => (o === k ? null : k))} patch={patch} />;
+                return <Row key={k} rowId={k} row={r} dict={dict} open={open === k} onToggle={toggle} patch={patch} />;
               }),
             ])
           )}
