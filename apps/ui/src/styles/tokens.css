@@ -1,6 +1,6 @@
-/* OpenVoice design tokens — see DESIGN.md for the direction contract and the
- * reasoning behind every value. Derived from the eight design systems analysed in
- * docs/UI-RESEARCH.md, with the palette pinned by the user: #44D62C on #000000. */
+/* OpenVoice design tokens. The palette is fixed: #44D62C on #000000, and green
+ * means the microphone is open. The live design sheet (`?window=sheet`) renders
+ * every token here and is the reference for how each one is used. */
 
 :root {
   /* -- Surface ladder ------------------------------------------------------

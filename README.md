@@ -174,12 +174,12 @@ until v0.2.0; each now does what it says.</sub>
    `%APPDATA%\OpenVoice\history.db` with a [documented
    schema](crates/ov-store/src/schema.rs) — open it with any SQLite browser, no
    export feature required. (A built-in export is v0.3 work.) Recorded audio is
-   not kept unless you ask for it: the only copy that touches disk is a temporary
-   WAV handed to the speech engine, deleted the moment the decode returns.
-   Turning on *Keep recordings* — off by default, and there to diagnose a
-   transcription problem — writes them to `%APPDATA%\OpenVoice\audio` instead,
+   not kept unless you ask for it: the speech engine runs in-process, so audio
+   is decoded straight from memory and never written to disk. Turning on
+   *Keep recordings* — off by default, and there to diagnose a transcription
+   problem — writes them to `%APPDATA%\OpenVoice\audio` instead,
    where they are cleared after a week. Secrets matching
-   `privacy.redact_patterns` are stripped from history and logs either way.
+   `privacy.redact_patterns` are stripped from history either way.
 
 ## How it works
 
