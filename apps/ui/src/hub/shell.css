@@ -17,11 +17,20 @@ html[data-window="hub"] ::selection { background: color-mix(in srgb, var(--accen
 html[data-window="hub"] .skip-link { z-index: 30; top: 12px; left: 12px; padding: 9px 13px; background: var(--solid); border: 1px solid var(--edge); border-radius: var(--r-ctl); box-shadow: inset 0 0 0 1px var(--accent); color: var(--ink); font: 500 13px/1 var(--ui); text-decoration: none; }
 
 /* Mica: the window itself is the backdrop, so the page is see-through and only
- * tints it per theme (spec 4.4). The ambient blobs would double it. */
+ * tints it per theme (spec 4.4).
+ *
+ * The ambient blobs stay. The original rule hid them here, on the theory that
+ * Mica already supplies a backdrop and the two would double up. In a real
+ * window they do not: Mica tints the desktop wallpaper, so over a dark or plain
+ * one it renders near-flat, and hiding the blobs left the Hub with no gradient
+ * at all and cards with nothing to lift off. Every check missed it because both
+ * the reference page and the twin's app render as data-material="none", where
+ * this rule cannot apply; only the real window shows it. The #root tint above
+ * keeps Mica from doubling the blobs, which is what that concern was really
+ * about. */
 html[data-material="mica"], html[data-material="mica"] body { background: transparent; }
 html[data-material="mica"] #root { background: color-mix(in srgb, var(--bg) 72%, transparent); }
 html[data-material="mica"][data-mode="light"] #root { background: color-mix(in srgb, var(--bg) 82%, transparent); }
-html[data-material="mica"] .ambient, html[data-material="mica"] .grain { display: none; }
 /* Reduce transparency clears the Mica effect (material.ts clearEffects), and a
  * transparent webview on a window with no effect shows whatever is behind it.
  * Solid always paints an opaque page, whatever the material says. */

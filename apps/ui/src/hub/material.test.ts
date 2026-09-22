@@ -147,3 +147,47 @@ describe("in a plain browser", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+/** Mica is the one state no rendered check can reach.
+ *
+ *  The reference page has no concept of it, and the twin's app always resolves
+ *  to data-material="none" because the fixture stub answers window_material with
+ *  null. So a rule written under html[data-material="mica"] is invisible to all
+ *  72 pixel shots and to every screenshot in docs/. One such rule hid .ambient,
+ *  and the Hub shipped to a real window with no gradient behind it and cards
+ *  with nothing to lift off, while every gate stayed green.
+ *
+ *  Reading the stylesheet as text is crude, but it is the only check that can
+ *  fail for this, and it fails loudly at the exact rule rather than in a render
+ *  nobody produces. */
+describe("the Mica backdrop", () => {
+  it("never hides the ambient gradient or the grain", async () => {
+    // Read from disk, not through Vite. `?raw` was tried first and silently
+    // returned a CACHED copy: reintroducing the bug left this test green, which
+    // is the exact failure mode it exists to prevent. node:fs cannot go stale.
+    const { readFileSync, existsSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    // vitest's cwd is apps/ui when run through the package script, but walk up
+    // so the test survives being run from the repo root.
+    const found = ["src/hub/shell.css", "apps/ui/src/hub/shell.css"]
+      .map((rel) => resolve(process.cwd(), rel))
+      .find((abs) => existsSync(abs));
+    expect(found, "could not locate shell.css from " + process.cwd()).toBeTruthy();
+    const css = readFileSync(found!, "utf8");
+    // Every rule whose selector mentions Mica, flattened to one line each.
+    const micaRules = css
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("}")
+      .map((block) => block.split("{"))
+      .filter((parts) => parts.length === 2 && /\[data-material="mica"\]/.test(parts[0]))
+      .map(([selector, body]) => ({ selector: selector.trim().replace(/\s+/g, " "), body: body.trim().replace(/\s+/g, " ") }));
+
+    const hiding = micaRules.filter(
+      (r) => /\.ambient|\.grain/.test(r.selector) && /display\s*:\s*none/.test(r.body),
+    );
+    expect(
+      hiding.map((r) => r.selector),
+      "Mica must not hide the page's own backdrop: Mica tints the wallpaper and goes flat over a dark one",
+    ).toEqual([]);
+  });
+});
