@@ -89,6 +89,17 @@ struct State {
     next_slot: u64,
     last_decode: Option<Instant>,
     shutdown: bool,
+    /// The decode thread is gone and nothing will ever signal `settled` again.
+    ///
+    /// Only an unwinding decode gets here: `transcribe` is sherpa-onnx across an
+    /// FFI boundary, and a model that unwinds took the one thread that answers
+    /// every dictation with it. `finish` waits on `settled`, so without this the
+    /// wait had no way to learn that its notify was never coming -- that dictation
+    /// and every dictation after it blocked the engine's worker forever, with
+    /// Escape the only way out. Now the wait breaks and the release falls back to
+    /// one whole-utterance decode on the caller's own thread, which is exactly
+    /// what the module promises for every path that is not the fast path.
+    worker_gone: bool,
 }
 
 struct Shared<T> {
@@ -290,11 +301,12 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
             .shared
             .settled
             .wait_while(st, |st| {
-                st.sessions.get(&session).is_some_and(|s| {
-                    s.committed
-                        .iter()
-                        .any(|slot| matches!(slot.decoded, Decoded::Pending))
-                })
+                !st.worker_gone
+                    && st.sessions.get(&session).is_some_and(|s| {
+                        s.committed
+                            .iter()
+                            .any(|slot| matches!(slot.decoded, Decoded::Pending))
+                    })
             })
             .expect("decoder state");
         let Some(s) = st.sessions.remove(&session) else {
@@ -350,11 +362,14 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
             return false;
         };
         let tail = s.planner.finish(s.samples.len());
-        if tail.reuse {
-            if let Some(cp) = s.checkpoint.take().filter(|cp| cp.end == tail.end) {
-                s.committed.push(cp);
-                return true;
-            }
+        // Checked before it is taken, not after: `take().filter(..)` dropped the
+        // checkpoint whenever the filter rejected it, so the `take` below saw None
+        // and its queued decode was never forgotten -- a speculative decode still
+        // burning a core after the transcript had already been delivered.
+        if tail.reuse && s.checkpoint.as_ref().is_some_and(|cp| cp.end == tail.end) {
+            let cp = s.checkpoint.take().expect("just checked");
+            s.committed.push(cp);
+            return true;
         }
         if let Some(old) = s.checkpoint.take() {
             forget_job(queue, session, old.id);
@@ -419,7 +434,27 @@ impl<T: Transcriber + 'static> Drop for IncrementalDecoder<T> {
     }
 }
 
+/// Marks the decode thread gone and wakes everyone waiting on it, however `run`
+/// ends -- returning on shutdown, or unwinding out of a decode. The lock is taken
+/// through `into_inner` because the panic that brought us here may have poisoned
+/// it on the way past.
+struct WorkerExit<'a, T>(&'a Shared<T>);
+
+impl<T> Drop for WorkerExit<'_, T> {
+    fn drop(&mut self) {
+        let mut st = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        st.worker_gone = true;
+        drop(st);
+        self.0.settled.notify_all();
+    }
+}
+
 fn run<T: Transcriber>(shared: &Shared<T>) {
+    let _exit = WorkerExit(shared);
     loop {
         let job = {
             let guard = shared.state.lock().expect("decoder state");
@@ -481,6 +516,9 @@ mod tests {
         /// The vocabulary each decode was given, in call order.
         hints: Mutex<Vec<Vec<String>>>,
         fail_next: AtomicBool,
+        /// Panic inside the next decode, as a model that segfaults its way into an
+        /// unwind would, to prove the release still answers.
+        panic_next: AtomicBool,
         blocked: Mutex<bool>,
         unblocked: Condvar,
     }
@@ -488,6 +526,9 @@ mod tests {
     impl Fake {
         fn block(&self) {
             *self.blocked.lock().unwrap() = true;
+        }
+        fn panic_next(&self) {
+            self.panic_next.store(true, Ordering::SeqCst);
         }
         fn unblock(&self) {
             *self.blocked.lock().unwrap() = false;
@@ -515,6 +556,9 @@ mod tests {
                     .wait_while(self.blocked.lock().unwrap(), |b| *b)
                     .unwrap(),
             );
+            if self.panic_next.swap(false, Ordering::SeqCst) {
+                panic!("decode panicked");
+            }
             self.calls.lock().unwrap().push(audio.samples.len());
             self.hints.lock().unwrap().push(hint.vocabulary.clone());
             if self.fail_next.swap(false, Ordering::SeqCst) {
@@ -809,5 +853,25 @@ mod tests {
                 .join(" ")
         };
         assert_eq!(norm(&streamed.text), norm(&whole));
+    }
+    /// A decode that unwinds kills the one decode thread. Before this, `finish`
+    /// waited on `settled` with no way to learn that nothing would ever signal it
+    /// again, so the dictation -- and every dictation after it -- hung forever.
+    #[test]
+    fn a_decode_that_panics_falls_back_instead_of_hanging() {
+        let (fake, d) = decoder();
+        // Let the prime run first, so the panic below lands on the release's own
+        // decode rather than on priming.
+        d.begin(S, DecodeHint::default());
+        wait_for("priming", || fake.all_calls() == vec![PRIME_SAMPLES]);
+
+        let audio = speech(1_000);
+        for chunk in audio.chunks(640) {
+            d.push(S, chunk);
+        }
+        fake.panic_next();
+        let (t, facts) = d.finish(S, &pcm(&audio)).expect("finish answers");
+        assert!(facts.fallback, "the whole dictation is decoded instead");
+        assert_eq!(t.text, format!("<{}>", audio.len()));
     }
 }
