@@ -1,16 +1,17 @@
-/** The Speech model screen.
+/** Speech model: which engine the app loads, and what it costs to keep.
  *
- * Its own file, unlike the version deleted in 0.5.0, which lived inside a
- * 700-line Settings.tsx holding two unrelated screens — which is precisely why
- * removing one of them was fiddly enough to get wrong.
+ * Copy is written for someone who has never heard of Parakeet: "Multilingual" and
+ * "Light" rather than model ids, with the id kept as secondary detail for people
+ * who want it. Nothing here quotes an accuracy figure (see MODEL_COPY).
  *
- * Copy is written for someone who has never heard of Parakeet: "Multilingual"
- * and "Light" rather than model ids, with the id shown as secondary detail for
- * people who want it. Nothing here quotes an accuracy figure — see MODEL_COPY.
+ * Markup and classes follow the reference (docs/redesign/reference/reference.html,
+ * Speech model section; styles in hub/screens.css). Every fact on a card comes from
+ * the Rust catalogue, so adding a model there is enough to make it appear here.
  */
 
-import { useEffect, useState } from "react";
-import { Badge, Button, Notice } from "../ui";
+import { useEffect, useState, type CSSProperties } from "react";
+import { DownloadSimple, Feather, GlobeHemisphereWest, Waveform } from "@phosphor-icons/react";
+import { Badge, Button, Notice } from "../hub/ui";
 import {
   deleteModel,
   downloadModel,
@@ -20,11 +21,18 @@ import {
   listModels,
   MODEL_COPY,
   type ModelSpec,
-  modelsOnDisk,
   restartApp,
   type Settings as S,
 } from "../engine/settings";
-import "./screens.css";
+import "../hub/screens.css";
+
+/** Kept here rather than in MODEL_COPY, and keyed loosely: a model the catalogue
+ *  gains before this file knows about it still renders, with the generic glyph. */
+const ICONS: Record<string, typeof Waveform> = {
+  "parakeet-tdt-0.6b-v2": Waveform,
+  "parakeet-tdt-0.6b-v3": GlobeHemisphereWest,
+  "whisper-tiny.en": Feather,
+};
 
 /** What the Download button says while a transfer is running. */
 function downloadLabel(progress: { done: number; total: number } | null): string {
@@ -45,7 +53,6 @@ export function ModelsScreen({
   patch: (fn: (s: S) => void) => void;
 }) {
   const [models, setModels] = useState<ModelSpec[] | null>(null);
-  const [onDisk, setOnDisk] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +60,6 @@ export function ModelsScreen({
 
   const refresh = () => {
     listModels().then((m) => m && setModels(m));
-    modelsOnDisk().then((n) => n !== null && setOnDisk(n));
   };
 
   useEffect(refresh, []);
@@ -98,15 +104,14 @@ export function ModelsScreen({
   };
 
   return (
-    <div className="screen">
-      <header className="screen-head">
-        <h1 className="t-title">Speech model</h1>
-        <p className="t-body screen-lead">
-          <strong>Standard</strong> is included and works offline from the moment you
-          install. The other two are optional and only downloaded if you ask.
-          Everything runs on this machine either way.
-        </p>
-      </header>
+    <section className="scroll">
+      <p className="lead">
+        {/* The reference colours this one word in page ink with an inline style.
+            A `.lead strong` rule would reach every other screen's lead instead. */}
+        <strong style={{ color: "var(--ink)" }}>Standard</strong> is included and works
+        offline from the moment you install. The other two are optional and only
+        downloaded if you ask. Everything runs on this machine either way.
+      </p>
 
       {pending && (
         <Notice
@@ -118,12 +123,12 @@ export function ModelsScreen({
           }
         >
           Restart to start using <strong>{pending}</strong>. It takes about ten
-          seconds — the weights are already on this computer.
+          seconds: the weights are already on this computer.
         </Notice>
       )}
 
-      <div className="model-list">
-        {(models ?? []).map((m) => {
+      <div className="models">
+        {(models ?? []).map((m, i) => {
           // A model with no copy still renders: its id becomes the label and its
           // real size is shown. That is what keeps adding one a single change to
           // the Rust catalogue.
@@ -132,12 +137,21 @@ export function ModelsScreen({
           const detail = copy?.detail ?? (m.englishOnly ? "English only." : "Multilingual.");
           const active = settings.model === m.id;
           const ready = m.installed;
+          const Icon = ICONS[m.id] ?? Waveform;
 
           return (
-            // A container rather than one big button: the row needs its own
-            // Download and Delete controls, and an interactive element cannot
-            // legally live inside another one.
-            <div key={m.id} className="model" data-active={active}>
+            <article
+              key={m.id}
+              className={active ? "model glass active" : "model glass"}
+              data-active={active}
+              style={{ "--i": i } as CSSProperties}
+            >
+              <span className="ic"><Icon weight="bold" aria-hidden /></span>
+
+              {/* The card is a container, not one big button: it carries its own
+                  Download and Delete controls, and an interactive element cannot
+                  legally live inside another one. Selecting is the name/detail
+                  column alone. */}
               <button
                 className="model-select"
                 aria-pressed={active}
@@ -150,70 +164,66 @@ export function ModelsScreen({
                   setPending(name);
                 }}
               >
-                <div className="model-main">
-                  <div className="hstack">
-                    <span className="t-subheading">{name}</span>
-                    {/* "In use" only when it is both chosen *and* present.
-                        Claiming otherwise beside a Download button was simply
-                        contradictory. */}
-                    {active && ready && (
-                      <Badge dot tone="live">
-                        In use
-                      </Badge>
-                    )}
-                    {active && !ready && <Badge>Selected — not downloaded</Badge>}
-                    {m.bundled && <Badge>Included</Badge>}
-                    {!m.bundled && ready && !active && <Badge>On this computer</Badge>}
-                    {m.englishOnly ? <Badge>English only</Badge> : <Badge>25 languages</Badge>}
-                  </div>
-                  <div className="t-caption model-detail">{detail}</div>
-                  <div className="t-mono model-id">{m.id}</div>
+                <div className="nm">
+                  {name}
+                  {/* "In use" only when it is both chosen *and* present. Claiming
+                      otherwise beside a Download button was simply contradictory. */}
+                  {active && ready && <Badge tone="ok">In use</Badge>}
+                  {active && !ready && <Badge>Selected, not downloaded</Badge>}
+                  {m.bundled && <Badge>Included</Badge>}
+                  {!m.bundled && ready && !active && <Badge>On this computer</Badge>}
+                  {m.englishOnly ? <Badge>English only</Badge> : <Badge>25 languages</Badge>}
                 </div>
-                <div className="model-numbers">
-                  <div>
-                    <div className="t-label">{ready ? "On disk" : "Download"}</div>
-                    <div className="t-mono">
-                      {formatSize(ready ? m.diskMb : m.downloadMb)}
-                    </div>
-                  </div>
-                  {copy?.speed && (
-                    <div>
-                      <div className="t-label">Typical</div>
-                      <div className="t-mono">{copy.speed}</div>
-                    </div>
-                  )}
-                </div>
+                <div className="dt">{detail}</div>
+                <div className="id">{m.id}</div>
               </button>
 
-              {!ready && (
-                <Button size="sm" onClick={() => download(m.id)} disabled={busy !== null}>
-                  {busy === m.id ? downloadLabel(progress) : "Download"}
-                </Button>
-              )}
-              {ready && !m.bundled && !active && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => remove(m.id)}
-                  disabled={busy !== null}
-                >
-                  Delete
-                </Button>
-              )}
-            </div>
+              <div className="nums">
+                <div>
+                  <div className="k">{ready ? "On disk" : "Download"}</div>
+                  <div className="v">{formatSize(ready ? m.diskMb : m.downloadMb)}</div>
+                </div>
+                {copy?.speed && (
+                  <div>
+                    <div className="k">Typical</div>
+                    <div className="v">{copy.speed}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Always present, even empty: it is the card's fourth grid column,
+                  and the rows above and below must line up regardless. */}
+              <div className="act">
+                {!ready && (
+                  <Button
+                    size="sm"
+                    icon={<DownloadSimple aria-hidden />}
+                    onClick={() => download(m.id)}
+                    disabled={busy !== null}
+                  >
+                    {busy === m.id ? downloadLabel(progress) : "Download"}
+                  </Button>
+                )}
+                {ready && !m.bundled && !active && (
+                  <Button size="sm" onClick={() => remove(m.id)} disabled={busy !== null}>
+                    Delete
+                  </Button>
+                )}
+              </div>
+            </article>
           );
         })}
-        {models === null && <p className="t-caption">Reading the model list…</p>}
+        {models === null && <p className="cap">Reading the model list…</p>}
       </div>
 
-      {error && <Notice tone="danger">{error}</Notice>}
+      {/* The Hub's Notice has one tone. A failed fetch or delete is recoverable
+          (the button is still there), so amber says as much as red would. */}
+      {error && <Notice tone="warn">{error}</Notice>}
 
-      <p className="t-caption screen-foot">
-        Downloaded models are using {formatBytes(onDisk)} on this computer. Deleting
-        one frees that space and you can fetch it again later; <strong>Standard</strong>
-        {" "}came with the app and stays. Timings are measured on one particular laptop
-        and are there for comparison, not as a promise.
+      <p className="cap">
+        Timings are measured on one particular laptop and are there for comparison,
+        not as a promise.
       </p>
-    </div>
+    </section>
   );
 }

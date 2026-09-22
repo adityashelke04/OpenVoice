@@ -22,6 +22,63 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-22
+
+The Hub is rebuilt. The last thing you said is now the first thing you see, and
+the whole window is a piece of frosted glass over your wallpaper.
+
+### Added
+
+- **Your last dictation sits at the top of Home**, in full, with Copy next to it
+  and the app it went to. If it did not land, that card turns amber and tells you
+  where the text actually is.
+- **Three themes, each in light and dark**: Glacier, Graphite and Lagoon, in
+  Settings > Appearance. Glacier is the default.
+- **Windows 11 Mica.** The Hub is transparent and tints your wallpaper. On
+  Windows 10, or with Transparency effects turned off, it paints its own quiet
+  backdrop instead, and the panels go solid.
+- **Ctrl K opens a command palette** that searches everything you have ever
+  dictated and jumps to any screen. Ctrl 1 to Ctrl 6 go straight to a section.
+- **A History screen** with day headings, search, and filters for Code, Terminal
+  and Messages. Filtering and searching now happen in the database, so a
+  dictation from months ago is findable; before, only the last 200 were.
+- **Fix a word** on any dictation shows what OpenVoice actually *heard* and turns
+  those words into a dictionary entry in two clicks.
+- Home greets you by your first name, read from your Windows account. It never
+  leaves the machine.
+
+### Changed
+
+- Every Hub screen -- Dictionary, Writing style, Speech model, Settings,
+  Advanced -- was rebuilt on the same set of controls, so they now look and
+  behave as one app.
+- Engine messages ("Nothing to paste yet") are toasts in the corner that leave by
+  themselves, instead of a banner that pushed the whole screen down until you
+  dismissed it.
+- The Hub window opens at 1100x740 and no longer flashes white on a cold start:
+  it is revealed once its page has loaded.
+
+### Removed
+
+- **Paste again** on the Hub. It pasted into whichever window had focus, which
+  was usually the Hub itself. Copy is the way to get text back out.
+
+### Fixed
+
+- **Home opens and resizes without stalling.** The screen was building every one
+  of the last two hundred dictations and then hiding the ones that did not fit,
+  so it carried about 2,400 hidden elements to show fifteen rows. Dragging the
+  window edge cost 320 ms of layout per step and returning to Home cost 184 ms;
+  both are now 13-14 ms, and the window holds 86% fewer elements. Measured in
+  the real app: `docs/benchmarks/2026-09-22-hub-ui-performance.md`.
+- **A dictation can no longer hang the app forever.** If the speech model
+  crashed mid-decode, that dictation -- and every dictation after it -- waited
+  for a reply that was never coming. It now falls back to decoding the recording
+  in one go, which is what every other failure already did.
+- A speculative decode that the release did not use could keep running after your
+  text had already been delivered, taking a core from whatever you were typing
+  into.
+
 ## [1.0.1] - 2026-09-14
 
 Long dictations no longer look like they failed to paste in Claude Code.

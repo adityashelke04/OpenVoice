@@ -139,22 +139,77 @@ impl SqliteStore {
     /// not history, and filtering after fetching wastes a page of rows on things
     /// that will never be shown.
     pub fn recent(&self, limit: usize) -> Result<Vec<Utterance>> {
+        self.recent_filtered(limit, None)
+    }
+
+    /// [`Self::recent`], restricted to one formatting profile.
+    ///
+    /// `None` is every profile -- the Hub's "All" pill and the plain history list
+    /// both mean that, and giving them the same query as [`Self::recent`] (rather
+    /// than a separate code path) is what keeps the two from ever disagreeing on
+    /// ordering or the empty-text exclusion.
+    pub fn recent_filtered(&self, limit: usize, profile: Option<&str>) -> Result<Vec<Utterance>> {
         let conn = self.conn.lock().expect("store mutex");
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {} FROM utterance
-                 WHERE final_text <> ''
+                 WHERE final_text <> '' AND (?2 IS NULL OR profile = ?2)
                  ORDER BY created_at DESC LIMIT ?1",
                 schema::COLUMNS
             ))
             .map_err(|e| Error::Storage(format!("recent: {e}")))?;
 
         let rows = stmt
-            .query_map(params![limit as i64], schema::row_to_utterance)
+            .query_map(params![limit as i64, profile], schema::row_to_utterance)
             .map_err(|e| Error::Storage(format!("recent: {e}")))?;
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| Error::Storage(format!("recent: {e}")))
+    }
+
+    /// [`ov_core::ports::HistoryStore::search`], restricted to one formatting
+    /// profile.
+    ///
+    /// The profile filter is applied on `utterance.profile`, alongside the FTS
+    /// match, rather than as a second pass over the results: FTS5's `rank`
+    /// ordering only means anything computed inside the same query, and
+    /// filtering afterwards would also break `limit`, returning fewer rows than
+    /// asked for whenever the profile happened to exclude an early match.
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        limit: usize,
+        profile: Option<&str>,
+    ) -> Result<Vec<Utterance>> {
+        if query.trim().is_empty() {
+            return self.recent_filtered(limit, profile);
+        }
+
+        let conn = self.conn.lock().expect("store mutex");
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {} FROM utterance
+                 JOIN utterance_fts ON utterance_fts.rowid = utterance.id
+                 WHERE utterance_fts MATCH ?1 AND (?3 IS NULL OR utterance.profile = ?3)
+                 ORDER BY rank, created_at DESC
+                 LIMIT ?2",
+                schema::COLUMNS
+                    .split(", ")
+                    .map(|c| format!("utterance.{c}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+            .map_err(|e| Error::Storage(format!("search: {e}")))?;
+
+        let rows = stmt
+            .query_map(
+                params![fts_query(query), limit as i64, profile],
+                schema::row_to_utterance,
+            )
+            .map_err(|e| Error::Storage(format!("search: {e}")))?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| Error::Storage(format!("search: {e}")))
     }
 
     /// Delete everything. Backs the "panic purge" action.
@@ -212,35 +267,7 @@ impl HistoryStore for SqliteStore {
     }
 
     fn search(&self, query: &str, limit: usize) -> Result<Vec<Utterance>> {
-        if query.trim().is_empty() {
-            return self.recent(limit);
-        }
-
-        let conn = self.conn.lock().expect("store mutex");
-        let mut stmt = conn
-            .prepare(&format!(
-                "SELECT {} FROM utterance
-                 JOIN utterance_fts ON utterance_fts.rowid = utterance.id
-                 WHERE utterance_fts MATCH ?1
-                 ORDER BY rank, created_at DESC
-                 LIMIT ?2",
-                schema::COLUMNS
-                    .split(", ")
-                    .map(|c| format!("utterance.{c}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-            .map_err(|e| Error::Storage(format!("search: {e}")))?;
-
-        let rows = stmt
-            .query_map(
-                params![fts_query(query), limit as i64],
-                schema::row_to_utterance,
-            )
-            .map_err(|e| Error::Storage(format!("search: {e}")))?;
-
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| Error::Storage(format!("search: {e}")))
+        self.search_filtered(query, limit, None)
     }
 
     fn purge_older_than(&self, days: u32) -> Result<u64> {
@@ -474,5 +501,62 @@ mod tests {
         let (app, n) = s.top_app().unwrap().expect("some app");
         assert_eq!(app, "chrome.exe");
         assert_eq!(n, 3);
+    }
+
+    fn utt_p(text: &str, profile: &str) -> Utterance {
+        Utterance {
+            profile: profile.into(),
+            ..utt(text, "Code.exe", "delivered")
+        }
+    }
+
+    #[test]
+    fn recent_filtered_returns_only_that_profile() {
+        let s = store();
+        s.append(&utt_p("one", "editor")).unwrap();
+        // Same-millisecond appends would leave `created_at` tied, which makes
+        // the DESC ordering below unspecified rather than wrong -- a real race
+        // no test should paper over silently, so it is made impossible here.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        s.append(&utt_p("two", "prose")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        s.append(&utt_p("three", "editor")).unwrap();
+        let rows = s.recent_filtered(10, Some("editor")).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.final_text.as_str())
+                .collect::<Vec<_>>(),
+            ["three", "one"]
+        );
+    }
+
+    #[test]
+    fn no_filter_equals_recent() {
+        let s = store();
+        s.append(&utt_p("one", "editor")).unwrap();
+        s.append(&utt_p("two", "prose")).unwrap();
+        let a: Vec<_> = s
+            .recent(10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.final_text)
+            .collect();
+        let b: Vec<_> = s
+            .recent_filtered(10, None)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.final_text)
+            .collect();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn search_and_filter_combine() {
+        let s = store();
+        s.append(&utt_p("deploy the api", "editor")).unwrap();
+        s.append(&utt_p("deploy the docs", "prose")).unwrap();
+        let rows = s.search_filtered("deploy", 10, Some("prose")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].final_text, "deploy the docs");
     }
 }

@@ -464,6 +464,32 @@ impl Engine {
         self.last_text.lock().map(|t| t.clone()).unwrap_or_default()
     }
 
+    /// Inject `text` into whatever currently has focus, through the normal
+    /// `mode_for` + `WinTextSink` path.
+    ///
+    /// The one place in the app that puts text on screen. [`Engine::paste_last`]
+    /// is its only caller; it stays a separate method so the "what to paste"
+    /// decision and the injection itself do not share a body.
+    fn paste_text(&self, text: &str) -> Result<(), String> {
+        let mode = ov_input::mode_for(text, self.paste_threshold);
+        self.sink.inject(text, mode).map(|_| ()).map_err(|e| {
+            tracing::warn!(error = %e, "paste failed");
+            e.to_string()
+        })
+    }
+
+    /// Publish a notice toast to the UI.
+    ///
+    /// A thin wrapper over `Event::Notice`, kept as its own method so a caller
+    /// does not have to reach past the engine into `ov_core::event` for a
+    /// one-line emit.
+    fn notice(&self, level: ov_core::event::NoticeLevel, message: impl Into<String>) {
+        self.shell.emit(&Event::Notice {
+            level,
+            message: message.into(),
+        });
+    }
+
     /// Re-deliver the last transcript to whatever now has focus.
     ///
     /// Silence here is the wrong answer: a menu item that does nothing when there
@@ -471,21 +497,19 @@ impl Engine {
     pub fn paste_last(&self) {
         let text = self.last_text();
         if text.is_empty() {
-            self.shell.emit(&Event::Notice {
-                level: ov_core::event::NoticeLevel::Info,
-                message: "Nothing to paste yet — dictate something first.".into(),
-            });
+            self.notice(
+                ov_core::event::NoticeLevel::Info,
+                "Nothing to paste yet — dictate something first.",
+            );
             return;
         }
-        let mode = ov_input::mode_for(&text, self.paste_threshold);
-        match self.sink.inject(&text, mode) {
-            Ok(r) => tracing::info!(chars = r.chars, "pasted last transcript"),
-            Err(e) => {
-                tracing::warn!(error = %e, "paste last failed");
-                self.shell.emit(&Event::Notice {
-                    level: ov_core::event::NoticeLevel::Warn,
-                    message: "Copied to clipboard — press Ctrl+V".into(),
-                });
+        match self.paste_text(&text) {
+            Ok(()) => tracing::info!(chars = text.chars().count(), "pasted last transcript"),
+            Err(_) => {
+                self.notice(
+                    ov_core::event::NoticeLevel::Warn,
+                    "Copied to clipboard — press Ctrl+V",
+                );
             }
         }
     }

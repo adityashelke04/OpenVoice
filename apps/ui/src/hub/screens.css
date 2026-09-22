@@ -1,0 +1,185 @@
+/* Screen-level styles for the Hub's settings-like screens (plan Tasks 11-15):
+ * Dictionary, Writing style, Speech model, Settings and Advanced. Ported from
+ * docs/redesign/reference/reference.html §6 "Screens" (lines 311-394), with the
+ * standard renames (`X i` icon rules -> `X svg`, `.term.hover` ->
+ * `.term:is(:hover, :focus-within)`). Shared controls (.card, .field, .lead,
+ * .cap, mark) live in hub/ui/controls.css and are not repeated here.
+ * Everything under an "Additions" heading is not in the static reference:
+ * real controls need focus, empty and overflow states a picture never shows. */
+
+/* -- §6 dictionary (reference lines 316-329) -------------------------------- */
+.tryrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.trybox { border-radius: 14px; padding: 12px 14px; background: var(--well); border: 1px solid var(--edge); min-height: 70px; }
+.trybox .lbl { font-size: 11.5px; font-weight: 600; color: var(--mute); display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.trybox .txt { font: 400 14px/1.5 var(--mono); color: var(--ink); }
+.trybox.out { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.terms { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.term { display: grid; grid-template-columns: 1fr 16px 1fr 22px; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border-radius: var(--r-row); }
+.term:is(:hover, :focus-within) { background: var(--glass-2); }
+.term .sp { font: 400 12.5px/1 var(--mono); color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.term .ar { color: var(--accent-2); font-size: 13px; }
+.term .wr { font: 600 13px/1 var(--mono); color: var(--ink); white-space: nowrap; }
+.term .x { color: var(--mute); font-size: 14px; opacity: 0; }
+.term:is(:hover, :focus-within) .x { opacity: 1; }
+.addrow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--edge); }
+[data-mode="light"] .addrow { border-top-color: rgb(20 40 70 / 8%); }
+
+/* -- Additions: dictionary --------------------------------------------------- */
+/* The heard box is a real <textarea>: stripped to the reference's bare text,
+   growing with its content, with the focus ring moved to the whole well (the
+   shell rings every :focus-visible, which would draw a box inside the box). */
+.trybox .lbl svg { flex: none; }
+.trybox textarea.txt { display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; outline: none; resize: none; field-sizing: content; min-height: 1.5em; }
+.trybox textarea.txt::placeholder { color: var(--mute); opacity: 1; }
+html[data-window="hub"] .trybox textarea.txt:focus-visible { outline: none; }
+.trybox:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.trybox .txt-empty { color: var(--mute); }
+.trybox.out .txt { overflow-wrap: anywhere; }
+
+/* The corrections card takes the rest of the column. A long list scrolls
+   inside it and the add row stays put; a short one keeps its natural height,
+   so the add row sits right under the last term as in the reference. */
+.corrections { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.corrections .terms { flex: 0 1 auto; min-height: 0; overflow-y: auto; grid-auto-rows: 36px; align-content: start; }
+/* Not `.search`: shell.css owns that name for the top bar's search button
+   (320px wide, its own padding), and sharing it pushed this field's icon and
+   text off the reference by a pixel. */
+.corrections .field.term-search { width: 220px; height: 32px; }
+.corrections .field.term-search input { font-size: 13px; }
+.term .ar { flex: none; }
+.term .wr { overflow: hidden; text-overflow: ellipsis; }
+/* The remove control is a real button filling the 22px column; the glyph sits
+   at the column's start like the reference's inline icon. */
+.term .x { width: 22px; height: 22px; padding: 0; border: 0; background: none; border-radius: var(--r-inner); display: flex; align-items: center; justify-content: flex-start; cursor: pointer; }
+.term .x svg { flex: none; }
+.term .x:hover { color: var(--ink); }
+.term .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.terms-empty { padding: 18px 10px; }
+.terms-empty-title { font: 650 15px/1.2 var(--display); color: var(--ink); }
+.terms-empty .cap { margin-top: 6px; max-width: 62ch; line-height: 1.45; }
+@media (prefers-reduced-motion: no-preference) {
+  .term .x { transition: color .15s var(--ease); }
+}
+
+/* -- §6 writing style (reference lines 332-335) ------------------------------ */
+/* Scoped to the screen: Home's Fix panel has its own `.fix .chips` / `.fix .exe`
+   (clickable, on --glass-2), and an unscoped rule would reach into it. */
+.style-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 14px; align-items: start; }
+.style-side { display: flex; flex-direction: column; gap: 14px; }
+.writing .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.writing .exe { font: 500 12px/1 var(--mono); padding: 6px 8px; border-radius: var(--r-inner); background: var(--well); border: 1px solid var(--edge); color: var(--body); }
+
+/* -- Additions: writing style ------------------------------------------------ */
+/* The reference sets these inline: the tab strip hugs its content instead of
+   stretching across the column, the preview wells drop the Dictionary's
+   70px minimum, "You say" is body-coloured, and the two wells sit 8px apart. */
+.writing > .seg { align-self: flex-start; }
+.writing .trybox { min-height: 0; }
+.writing .trybox:not(.out) .txt { color: var(--body); }
+.writing .trybox.out { margin-top: 8px; }
+/* Chrome pixel-snaps an inline <svg> box but draws an icon-font glyph where the
+   text layout puts it. The Terminals tab starts at x .375 (the widths of the two
+   labels before it), so its icon landed 0.375px left of the reference's glyph:
+   invisible, but the whole glyph re-rasterised and graphite dark's twin failed
+   on it (13x11 icon cluster). A transform is not snapped, so this puts the icon
+   back where the text layout meant it. Retune if those labels change. */
+.writing > .seg > button:nth-child(3) svg { transform: translateX(.375px); }
+
+/* -- §6 speech model (reference lines 338-353) ------------------------------- */
+/* `.badge` and `.badge.ok`, which the reference keeps in this block, are shared
+   primitives and live in hub/ui/controls.css instead. */
+.models { display: flex; flex-direction: column; gap: 12px; }
+.model { display: grid; grid-template-columns: 44px 1fr auto auto; gap: 16px; align-items: center; border-radius: var(--r-card); padding: 16px 18px; }
+/* Scoped one level deeper than the reference writes it. `[data-mode="light"]
+   .glass` in shell.css carries the same specificity and is bundled after this
+   file, so in light mode it replaced the accent ring outright; the reference is
+   one stylesheet, where its own source order settles the same clash. */
+.models .model.active { box-shadow: inset 0 0 0 1.5px var(--accent), inset 0 1px 0 var(--edge-hi), 0 20px 50px -30px rgb(0 0 0 / 55%); }
+.model .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--well); border: 1px solid var(--edge); font-size: 20px; color: var(--accent-2); }
+.model.active .ic { color: var(--accent); }
+/* The line-height is 21px, not the reference's 1.2 (20.4px). A 20.4px text box
+   centred by `align-items: center` in the 21px line the badges set leaves a
+   0.3px residue, which put the name's baseline on a device-pixel boundary:
+   Chrome then rounded it to either neighbouring row and roughly one shot in
+   25 diffed by 1px, cards flipping independently. The app lands on that
+   boundary and the reference does not because the app ships Bricolage
+   Grotesque Variable while the reference loads the static face, and their
+   vertical metrics differ slightly. An integer line box has no residue to
+   round. reference.html line 343 carries the identical declaration. */
+.model .nm { display: flex; align-items: center; gap: 8px; font: 650 17px/21px var(--display); letter-spacing: -.02em; color: var(--ink); }
+.model .dt { font-size: 12.5px; color: var(--body); margin-top: 5px; }
+.model .id { font: 400 11.5px/1 var(--mono); color: var(--mute); margin-top: 7px; }
+.model .nums { display: flex; gap: 20px; }
+.model .nums div { text-align: right; }
+.model .nums .k { font-size: 11px; color: var(--mute); font-weight: 500; }
+.model .nums .v { font: 500 13px/1.4 var(--mono); color: var(--ink); }
+.model .act { width: 118px; display: flex; justify-content: flex-end; }
+
+/* -- Additions: speech model -------------------------------------------------- */
+/* Choosing a model is a real control, but the reference draws that column as a
+   plain <div>: a button here has to give up every button look it is born with.
+   `min-width: 0` because a grid item defaults to min-content, which would let a
+   long description push the numbers and the action off the card instead of
+   wrapping. The focus ring comes from shell.css. */
+.model-select { display: block; width: 100%; min-width: 0; padding: 0; border: 0; background: none; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+/* A model that is not downloaded cannot be chosen, but it is not greyed out:
+   the whole card is an offer to fetch it, and `.btn:disabled`'s half opacity
+   would read as "unavailable" rather than "not yet". */
+.model-select:disabled { cursor: default; }
+
+/* -- §6 settings (reference lines 356-380) ----------------------------------- */
+/* `.slider`, `.meter` and `.badge`, which the reference keeps in this block, are
+   shared primitives and live in hub/ui/controls.css instead. */
+.set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 4px; }
+.tcard { border-radius: 14px; padding: 8px; border: 1px solid var(--edge); background: var(--well); }
+/* Scoped one level deeper than the reference writes it, for the same reason the
+   model card's ring is: `[data-mode="light"] .glass` in shell.css has the same
+   specificity and is bundled later, so in light mode it replaced this outright. */
+.themes .tcard.on { box-shadow: inset 0 0 0 2px var(--accent); }
+.tcard .mini { height: 64px; border-radius: 9px; overflow: hidden; position: relative; background: var(--bg); }
+.tcard .mini i { position: absolute; border-radius: 50%; filter: blur(14px); }
+.tcard .mini i:nth-child(1) { width: 70px; height: 50px; left: -10px; top: -10px; background: var(--blob-1); opacity: .8; }
+.tcard .mini i:nth-child(2) { width: 90px; height: 60px; right: -20px; top: 10px; background: var(--blob-2); opacity: .8; }
+.tcard .mini i:nth-child(3) { width: 60px; height: 40px; left: 40%; bottom: -16px; background: var(--blob-3); opacity: .6; }
+.tcard .mini .gl { position: absolute; left: 22px; right: 8px; top: 9px; height: 22px; border-radius: 6px; background: var(--glass-2); border: 1px solid var(--edge); }
+.tcard .mini .sb { position: absolute; left: 0; top: 0; bottom: 0; width: 16px; background: var(--glass-strong); border-right: 1px solid var(--edge); }
+.tcard .mini .bt { position: absolute; left: 22px; top: 38px; width: 30px; height: 12px; border-radius: 4px; background: var(--accent); }
+.tcard .mini .bt2 { position: absolute; left: 56px; top: 38px; width: 22px; height: 12px; border-radius: 4px; background: var(--glass-2); border: 1px solid var(--edge); }
+.tcard .tn { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 2px; font-size: 12.5px; font-weight: 600; }
+.tcard .tn svg { color: var(--accent); font-size: 15px; }
+/* the theme cards must render in the page's own ink colour, not the card theme's */
+.tcard .tn { color: var(--page-ink); }
+/* Used by Version here and by the Advanced screen's engine facts. */
+.kv { font: 500 12.5px/1 var(--mono); color: var(--ink); white-space: nowrap; }
+
+/* -- Additions: settings ------------------------------------------------------ */
+/* The four cards do not fit one column each, so each grid cell is a stack. The
+   reference sets this inline on both of them. */
+.set-col { display: flex; flex-direction: column; gap: 14px; }
+/* The reference gives the row after the theme grid an inline margin. */
+.themes + .srow { margin-top: 6px; }
+.mic-pick { display: flex; align-items: center; gap: 10px; }
+/* A theme card is a real button: it gives up the look it is born with, and its
+   preview and name are spans (a <button> may only hold phrasing content), so
+   both need the box display the reference's divs had for free. */
+.tcard { display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; }
+.tcard .mini { display: block; }
+.tcard .tn svg { flex: none; }
+.tcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Hover lifts the edge the same quiet amount a glass button's does. */
+.themes .tcard:not(.on):hover { border-color: var(--edge-hi); }
+
+/* -- §6 advanced (reference lines 383-394) ----------------------------------- */
+/* `.kv` is above, with Settings' Version row: both screens state a bare fact. */
+.pipe { position: relative; display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.pipe::before { content: ""; position: absolute; left: 11px; top: 14px; bottom: 14px; width: 2px; background: var(--edge); border-radius: 2px; }
+.step { position: relative; display: grid; grid-template-columns: 24px 96px 1fr auto; gap: 12px; align-items: center; padding: 7px 10px 7px 0; border-radius: var(--r-row); }
+.step .n { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--solid-2); border: 1px solid var(--edge); z-index: 1; }
+.step .n::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--mute); }
+.step.ch .n { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.step.ch .n::after { background: var(--accent); }
+.step .sn { font: 500 12px/1 var(--mono); color: var(--mute); }
+.step .so { font: 400 13px/1.4 var(--mono); color: var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step.ch .so { color: var(--ink); }
+.step .tg { font-size: 11px; font-weight: 600; color: var(--accent); }

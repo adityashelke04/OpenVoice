@@ -88,7 +88,24 @@ async function api() {
   return { listen, invoke };
 }
 
-export function useLiveEngine() {
+export interface LiveEngineOptions {
+  /**
+   * Tick `elapsedMs` while listening. Off by default, because it is not free.
+   *
+   * The tick is a `setState`, so it re-renders the whole window five times a
+   * second for as long as the microphone is open. The Flow Bar shows a clock and
+   * needs it. The Hub does not show one, and was paying for it anyway with a full
+   * re-render of the sidebar, the top bar and the entire history list — for a
+   * number it never put on screen. Measured over 8s of dictation with 120 rows of
+   * history: 29 long tasks, 2.2s of blocked main thread out of 8s, and the brand
+   * mark's animation starved for up to 121ms at a stretch.
+   *
+   * A window that wants the clock asks for it. Everything else pays nothing.
+   */
+  clock?: boolean;
+}
+
+export function useLiveEngine({ clock = false }: LiveEngineOptions = {}) {
   const [view, setView] = useState<LiveView>(INITIAL);
   const startedAt = useRef(0);
 
@@ -189,14 +206,15 @@ export function useLiveEngine() {
   }, []);
 
   // The engine does not stamp elapsed time on Level events, so the window that is
-  // showing a clock keeps its own. One timer, only while listening.
+  // showing a clock keeps its own. One timer, only while listening, and only for
+  // a caller that asked — see `LiveEngineOptions.clock` for what it costs.
   useEffect(() => {
-    if (view.state !== "listening") return;
+    if (!clock || view.state !== "listening") return;
     const id = window.setInterval(() => {
       setView((v) => ({ ...v, elapsedMs: Date.now() - startedAt.current }));
     }, 200);
     return () => clearInterval(id);
-  }, [view.state]);
+  }, [clock, view.state]);
 
   const dismissNotice = useCallback(() => setView((v) => ({ ...v, notice: null })), []);
 

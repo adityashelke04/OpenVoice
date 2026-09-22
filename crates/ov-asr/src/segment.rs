@@ -261,7 +261,7 @@ impl SegmentPlanner {
         let from = self.frames.len().saturating_sub(FORCED_CUT_SEARCH_FRAMES);
         let k = (from..self.frames.len())
             .min_by(|&a, &b| self.frames[a].0.total_cmp(&self.frames[b].0))
-            .unwrap_or(self.frames.len() - 1);
+            .unwrap_or_else(|| self.frames.len().saturating_sub(1));
         self.seg_start + (k + 1) * FRAME
     }
 
@@ -472,5 +472,21 @@ mod tests {
             .filter(|d| matches!(d, Decision::Checkpoint { .. }))
             .count();
         assert_eq!(checkpoints, 1, "exactly the pause after the speech");
+    }
+    /// `SegmentPolicy` is public with public fields, so a caller can hand the
+    /// planner a zero `max_segment_ms`, which forces a cut on every single frame.
+    /// `frame` pushes before it checks, so `quietest_recent_cut` always has at
+    /// least one frame to choose from; this holds that invariant down, because the
+    /// `frames.len() - 1` it used to fall back on would underflow without it.
+    #[test]
+    fn a_zero_length_segment_policy_does_not_panic() {
+        let mut policy = policy();
+        policy.max_segment_ms = 0;
+        let mut planner = SegmentPlanner::new(policy);
+        let audio = speech(200);
+        for chunk in audio.chunks(640) {
+            planner.push(chunk);
+        }
+        planner.finish(audio.len());
     }
 }

@@ -29,7 +29,9 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 mod clickaway;
 mod engine;
 mod history;
+mod material;
 mod models;
+mod names;
 mod overlay;
 mod settings;
 mod taplatch;
@@ -166,24 +168,34 @@ impl From<ov_core::ports::Utterance> for HistoryRow {
     }
 }
 
-/// Recent history, or full-text search when `query` is given.
+/// Recent history, or full-text search when `query` is given, optionally
+/// restricted to one formatting profile.
 ///
 /// Search happens in SQLite rather than by filtering in JavaScript: the previous
 /// version fetched 200 rows and matched them client-side, so anything older than
 /// the last 200 sessions was simply unfindable.
+///
+/// `""` and `"all"` mean the same thing as omitting `profile` altogether: the
+/// Hub's "All" pill has to round-trip through `Option<String>` in TypeScript,
+/// and the empty string is what a cleared search field naturally becomes on the
+/// way here.
 #[tauri::command]
 fn get_history(
     state: tauri::State<'_, AppState>,
     limit: Option<usize>,
     query: Option<String>,
+    profile: Option<String>,
 ) -> Vec<HistoryRow> {
-    use ov_core::ports::HistoryStore;
     let limit = limit.unwrap_or(200);
     let store = &state.store;
+    let profile = profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "all");
 
     let rows = match query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
-        Some(q) => store.search(q, limit),
-        None => store.recent(limit),
+        Some(q) => store.search_filtered(q, limit, profile),
+        None => store.recent_filtered(limit, profile),
     };
 
     rows.unwrap_or_else(|e| {
@@ -228,6 +240,19 @@ fn paste_last(state: tauri::State<'_, AppState>) {
     if let Some(e) = state.engine.lock().expect("engine").as_ref() {
         e.paste_last();
     }
+}
+
+/// The Home screen's greeting, from the Windows account name.
+///
+/// `None` when the environment variable is missing or is not a name anything
+/// can be extracted from -- the greeting then falls back to a generic one
+/// rather than showing "Hi, !".
+#[tauri::command]
+fn get_user_name() -> Option<String> {
+    std::env::var("USERNAME")
+        .ok()
+        .as_deref()
+        .and_then(names::first_name)
 }
 
 #[tauri::command]
@@ -866,6 +891,15 @@ fn main() {
         // the network until `update::check` is called, which happens either from
         // a button or from the once-per-launch check the user can turn off.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The Hub is created hidden (tauri.conf.json) and revealed when its page has
+        // finished loading. See `reveal_hub`.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "hub"
+                && payload.event() == tauri::webview::PageLoadEvent::Finished
+            {
+                reveal_hub(webview.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_ready,
@@ -879,6 +913,7 @@ fn main() {
             clear_history,
             get_log_path,
             paste_last,
+            get_user_name,
             open_data_dir,
             overlay_placement,
             overlay_move,
@@ -904,7 +939,9 @@ fn main() {
             preview_format,
             check_for_update,
             install_update,
-            restart_app
+            restart_app,
+            window_material,
+            windows_transparency
         ])
         .setup(|app| {
             // Built here rather than handed to `manage` in the builder chain: that
@@ -948,6 +985,18 @@ fn main() {
             // UI thread. The window paints immediately and reports progress rather
             // than showing a frozen frame for several seconds.
             spawn_engine(handle.clone());
+
+            // A Hub created hidden must never stay hidden: if its page has not
+            // reported a finished load in 4 s (a stalled dev server, a WebView2
+            // that never fires the event), show it anyway. Late and possibly white
+            // beats a launch that looks like nothing happened.
+            let late = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                if reveal_hub(&late) {
+                    tracing::warn!("hub page never finished loading; shown by the fallback timer");
+                }
+            });
 
             Ok(())
         })
@@ -1169,6 +1218,20 @@ fn show_hub_cmd(app: AppHandle, tab: Option<String>) {
     }
 }
 
+/// "mica" when the Hub is actually showing Mica behind its transparent webview,
+/// "none" when the page has to paint its own backdrop. See `material.rs`.
+#[tauri::command]
+fn window_material() -> String {
+    material::decide(material::windows_build(), material::transparency_enabled()).into()
+}
+
+/// Windows "Transparency effects". Off forces the Hub's solid panels whatever the
+/// in-app Reduce transparency switch says.
+#[tauri::command]
+fn windows_transparency() -> bool {
+    material::transparency_enabled()
+}
+
 /// Restart the app so a new speech model can be loaded.
 ///
 /// Changing the model means tearing down the sidecar and loading different
@@ -1179,6 +1242,28 @@ fn show_hub_cmd(app: AppHandle, tab: Option<String>) {
 fn restart_app(app: AppHandle) {
     tracing::info!("restarting to apply a model change");
     app.restart();
+}
+
+/// Set once the Hub has been revealed for the first time, by whichever of the page
+/// load or the fallback timer gets there first.
+static HUB_REVEALED: AtomicBool = AtomicBool::new(false);
+
+/// Show the Hub for the first time. Returns whether this call did it.
+///
+/// The Hub is a transparent window over Mica. Shown at creation it was solid white
+/// for ~600 ms on a cold start, until the page arrived; shown after the load there
+/// is nothing to see but Mica and then the page, and `material::repaint` is what
+/// makes the Mica show (see there). Once only, so a reload of a Hub that was closed
+/// to the tray does not pop it back up.
+fn reveal_hub(app: &AppHandle) -> bool {
+    if HUB_REVEALED.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    show_hub(app);
+    if let Some(win) = app.get_webview_window("hub") {
+        material::repaint(&win);
+    }
+    true
 }
 
 fn show_hub(app: &AppHandle) {
