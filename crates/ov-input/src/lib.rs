@@ -30,7 +30,7 @@ pub use foreground::WinForeground;
 #[cfg(windows)]
 pub use hook::{enable_key_debug, WinHotkeyListener};
 #[cfg(windows)]
-pub use inject::{mode_for, set_clipboard_text, WinTextSink};
+pub use inject::{mode_for, WinTextSink};
 
 /// Virtual key codes for the keys OpenVoice can bind.
 ///

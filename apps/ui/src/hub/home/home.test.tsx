@@ -127,8 +127,12 @@ describe("Home", () => {
     await screen.findByText(FAILED_ROW.final_text);
     const card = lastCard();
     expect(card.classList.contains("fail")).toBe(true);
-    expect(within(card).getByText("This didn’t reach Outlook. Copy it or paste it again.")).toBeTruthy();
+    // Paste again was dropped (useCopyPaste.ts), so the note must not send the
+    // user looking for a button that is not there. Copy is the one way out.
+    expect(within(card).getByText("This didn’t reach Outlook. Copy it to get it back.")).toBeTruthy();
     expect(within(card).queryByText(/on your clipboard/)).toBeNull();
+    expect(within(card).queryByText(/paste it again/i)).toBeNull();
+    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual(["CopyCtrl C", "Fix a word"]);
   });
 
   it("Earlier filter asks the backend for that profile", async () => {

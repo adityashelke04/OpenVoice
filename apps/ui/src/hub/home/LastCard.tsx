@@ -3,8 +3,9 @@
  *  lines 457-485).
  *
  *  "failed" is the same card when the text did not land: amber, a sentence
- *  saying where the text is now, and Paste again promoted to the first action,
- *  because recovering the paste is the only thing that matters in that moment.
+ *  saying where the text is now, and Copy promoted to the amber primary --
+ *  recovering the text is the only thing that matters in that moment, and Copy is
+ *  the one way out since Paste again was dropped (useCopyPaste.ts).
  *
  *  "first" and "error" are the other two faces of the same slot (spec 6.3):
  *  nothing dictated yet, and the speech engine down. */
@@ -108,7 +109,7 @@ function DictationCard({ row, failed, now, patch }: { row: Row; failed: boolean;
           <ClipboardText weight="fill" aria-hidden />
           {kind === "clipboard"
             ? `This didn’t paste into ${app}, so it’s on your clipboard.`
-            : `This didn’t reach ${app}. Copy it or paste it again.`}
+            : `This didn’t reach ${app}. Copy it to get it back.`}
         </div>
       )}
       {fixing && <FixPanel row={row} patch={patch} onDone={() => setFixing(false)} />}
