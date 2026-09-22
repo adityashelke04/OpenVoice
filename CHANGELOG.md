@@ -63,6 +63,12 @@ the whole window is a piece of frosted glass over your wallpaper.
 
 ### Fixed
 
+- **Home opens and resizes without stalling.** The screen was building every one
+  of the last two hundred dictations and then hiding the ones that did not fit,
+  so it carried about 2,400 hidden elements to show fifteen rows. Dragging the
+  window edge cost 320 ms of layout per step and returning to Home cost 184 ms;
+  both are now 13-14 ms, and the window holds 86% fewer elements. Measured in
+  the real app: `docs/benchmarks/2026-09-22-hub-ui-performance.md`.
 - **A dictation can no longer hang the app forever.** If the speech model
   crashed mid-decode, that dictation -- and every dictation after it -- waited
   for a reply that was never coming. It now falls back to decoding the recording
