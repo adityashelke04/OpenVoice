@@ -22,6 +22,8 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-22
+
 The Hub is rebuilt. The last thing you said is now the first thing you see, and
 the whole window is a piece of frosted glass over your wallpaper.
 
