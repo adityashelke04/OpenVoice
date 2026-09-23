@@ -22,6 +22,15 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-09-23
+
+### Fixed
+
+- The Hub opens on its proper dark background. It used to open a pale,
+  washed-out grey and stay that way until you resized it, minimized it or
+  clicked around, which could be half a minute or more. The page itself was
+  right; the window underneath it was never cleared at startup.
+
 ## [1.1.1] - 2026-09-22
 
 ### Fixed
@@ -971,7 +980,8 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/adityashelke04/OpenVoice/compare/v1.0.0...v1.0.1
