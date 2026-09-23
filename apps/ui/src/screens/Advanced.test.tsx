@@ -7,23 +7,37 @@ import type { Settings } from "../engine/settings";
 
 const PHRASE = "um so we need to call use effect here comma then return null";
 
-/** The trace the twin's fixture stub returns for the reference phrase under the
- *  `editor` profile: the real stages, and no `end_period` (editors do not get
- *  one), which is why the screen asks for that profile by name. */
+/** What `preview_format` really answers for the reference phrase under the
+ *  `editor` profile.
+ *
+ *  Every stage `ov-format` runs, in the order `default_rules` runs them, with
+ *  `parse` first — see `crates/ov-format/src/lib.rs`. The screen's first
+ *  version was written against a five-stage invention (`raw, fillers,
+ *  dictionary, commands, capitalize`) that the mock in
+ *  `scripts/screenshot-fixtures.mjs` also told, so the pixel diff and these
+ *  tests agreed with each other and neither agreed with the app. Four of these
+ *  eight stages leave the sentence alone, which is the whole reason the rail
+ *  shows what changed by default. */
 const TRACE: [string, string][] = [
-  ["raw", PHRASE],
+  ["parse", PHRASE],
+  ["repeats", PHRASE],
   ["fillers", "so we need to call use effect here comma then return null"],
-  ["dictionary", "so we need to call useEffect here comma then return null"],
-  ["commands", "so we need to call useEffect here, then return null"],
+  ["commands", "so we need to call use effect here, then return null"],
+  ["dictionary", "so we need to call useEffect here, then return null"],
+  ["case", "so we need to call useEffect here, then return null"],
   ["capitalize", "So we need to call useEffect here, then return null"],
+  ["profile", "So we need to call useEffect here, then return null"],
 ];
+
+/** The four stages above that actually rewrote the sentence. */
+const CHANGED = ["fillers", "commands", "dictionary", "capitalize"];
 
 const LOG = "C:\\Users\\you\\AppData\\Roaming\\OpenVoice\\openvoice.log";
 
 let tauri: ReturnType<typeof installTauri> | null = null;
 afterEach(() => { tauri?.uninstall(); tauri = null; });
 
-function mount(extra: Record<string, (args: never) => unknown> = {}) {
+function mount(trace: [string, string][] = TRACE) {
   const settings = {
     config: { paste_threshold_chars: 120 },
     model: "parakeet-tdt-0.6b-v2",
@@ -32,17 +46,18 @@ function mount(extra: Record<string, (args: never) => unknown> = {}) {
   } as unknown as Settings;
   tauri = installTauri({
     preview_format: ({ text }: { text: string }) =>
-      text === PHRASE ? TRACE : [["raw", text], ["capitalize", text.toUpperCase()]],
+      text === PHRASE ? trace : [["parse", text], ["capitalize", text.toUpperCase()]],
     get_log_path: () => LOG,
-    ...extra,
   });
   render(<AdvancedScreen settings={settings} />);
   return tauri;
 }
 
 const steps = () => [...document.querySelectorAll<HTMLElement>(".pipe .step")];
+const names = () => steps().map((s) => s.querySelector(".sn")?.textContent);
 const cardNamed = async (title: string) =>
   (await screen.findByText(title)).closest("article") as HTMLElement;
+const showAll = () => screen.getByRole("button", { name: /stages|what changed/ });
 
 describe("Advanced screen", () => {
   it("leads with what the screen is for", async () => {
@@ -58,43 +73,75 @@ describe("Advanced screen", () => {
     const input = await screen.findByLabelText("A sentence to trace");
     expect((input as HTMLInputElement).value).toBe(PHRASE);
     expect(input.closest(".field")?.className).toContain("mono");
-    await waitFor(() => expect(steps()).toHaveLength(5));
+    await waitFor(() => expect(steps()).toHaveLength(CHANGED.length));
     expect(t.calls.find((c) => c.cmd === "preview_format")?.args).toEqual({ text: PHRASE, profile: "editor" });
     const card = await cardNamed("How a sentence is rewritten");
     expect(within(card).getByText("Code editors style").className).toContain("cap");
   });
 
-  it("names every stage the formatter ran", async () => {
+  it("shows only the stages that rewrote the sentence", async () => {
     mount();
-    await waitFor(() => expect(steps()).toHaveLength(5));
-    expect(steps().map((s) => s.querySelector(".sn")?.textContent)).toEqual([
-      "raw", "fillers", "dictionary", "commands", "capitalize",
-    ]);
-    expect(steps().map((s) => s.querySelector(".so")?.textContent)).toEqual(TRACE.map(([, out]) => out));
+    await waitFor(() => expect(names()).toEqual(CHANGED));
+    expect(steps().map((s) => s.querySelector(".so")?.textContent)).toEqual(
+      CHANGED.map((n) => TRACE.find(([stage]) => stage === n)?.[1]),
+    );
+    // Every row shown is a row that did something, so every row is tagged.
+    expect(steps().map((s) => s.querySelector(".tg")?.textContent)).toEqual(CHANGED.map(() => "changed"));
+    expect(steps().every((s) => s.classList.contains("ch"))).toBe(true);
   });
 
-  it("tags only the stages that changed the text", async () => {
+  it("offers the silent stages rather than hiding them", async () => {
     mount();
-    await waitFor(() => expect(steps()).toHaveLength(5));
-    // `fillers` drops a word, so it changed; `raw` is the starting point and
-    // cannot have.
-    expect(steps().map((s) => s.classList.contains("ch"))).toEqual([false, true, true, true, true]);
-    expect(steps().map((s) => s.querySelector(".tg")?.textContent ?? null))
-      .toEqual([null, "changed", "changed", "changed", "changed"]);
+    await waitFor(() => expect(steps()).toHaveLength(4));
+    const toggle = showAll();
+    expect(toggle.textContent).toContain("Show all 8 stages");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("names every stage the formatter ran once the rail is opened", async () => {
+    mount();
+    await waitFor(() => expect(steps()).toHaveLength(4));
+    fireEvent.click(showAll());
+    expect(names()).toEqual(TRACE.map(([stage]) => stage));
+    expect(steps().map((s) => s.querySelector(".so")?.textContent)).toEqual(TRACE.map(([, out]) => out));
+    // `parse` is the starting point and cannot have changed anything; the three
+    // rules that ran without effect are shown as having done nothing.
+    expect(steps().map((s) => s.classList.contains("ch")))
+      .toEqual([false, false, true, true, true, false, true, false]);
+    expect(showAll().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("closes the rail again", async () => {
+    mount();
+    await waitFor(() => expect(steps()).toHaveLength(4));
+    fireEvent.click(showAll());
+    expect(showAll().textContent).toContain("Show only what changed");
+    fireEvent.click(showAll());
+    expect(names()).toEqual(CHANGED);
   });
 
   it("marks exactly what each stage added", async () => {
     mount();
-    await waitFor(() => expect(steps()).toHaveLength(5));
+    await waitFor(() => expect(steps()).toHaveLength(4));
+    // `fillers` only removes words, so it marks nothing; the order is the
+    // engine's, which runs the spoken comma before the dictionary.
     expect([...document.querySelectorAll(".pipe mark")].map((m) => m.textContent))
-      .toEqual(["useEffect", ",", "S"]);
+      .toEqual([",", "useEffect", "S"]);
+  });
+
+  it("says so when no rule touched the sentence", async () => {
+    mount([["parse", PHRASE], ["repeats", PHRASE], ["fillers", PHRASE]]);
+    expect(await screen.findByText("Nothing was rewritten — this is exactly what you said.")).toBeTruthy();
+    expect(steps()).toHaveLength(0);
+    fireEvent.click(showAll());
+    expect(names()).toEqual(["parse", "repeats", "fillers"]);
   });
 
   it("re-traces as the sentence is edited", async () => {
     const t = mount();
-    await waitFor(() => expect(steps()).toHaveLength(5));
+    await waitFor(() => expect(steps()).toHaveLength(4));
     fireEvent.change(await screen.findByLabelText("A sentence to trace"), { target: { value: "hello there" } });
-    await waitFor(() => expect(steps()[1]?.querySelector(".so")?.textContent).toBe("HELLO THERE"));
+    await waitFor(() => expect(steps()[0]?.querySelector(".so")?.textContent).toBe("HELLO THERE"));
     expect(t.calls.filter((c) => c.cmd === "preview_format").map((c) => c.args.text))
       .toEqual([PHRASE, "hello there"]);
   });
