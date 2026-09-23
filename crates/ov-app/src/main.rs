@@ -1263,17 +1263,30 @@ static HUB_REVEALED: AtomicBool = AtomicBool::new(false);
 ///
 /// The Hub is a transparent window over Mica. Shown at creation it was solid white
 /// for ~600 ms on a cold start, until the page arrived; shown after the load there
-/// is nothing to see but Mica and then the page, and `material::repaint` is what
-/// makes the Mica show (see there). Once only, so a reload of a Hub that was closed
-/// to the tray does not pop it back up.
+/// is nothing to see but Mica and then the page. Once only, so a reload of a Hub
+/// that was closed to the tray does not pop it back up.
+///
+/// The page usually finishes loading before `setup` has even run, so this is the
+/// first moment anything can prepare the window: `keep_clear` goes on here, before
+/// `show`, and `repaint` produces the paint it clears on (see both).
+///
+/// All of it on the main thread, in that order. The fallback timer calls this from
+/// its own thread, and a window can only be subclassed from the thread that owns it.
 fn reveal_hub(app: &AppHandle) -> bool {
     if HUB_REVEALED.swap(true, Ordering::SeqCst) {
         return false;
     }
-    show_hub(app);
-    if let Some(win) = app.get_webview_window("hub") {
-        material::repaint(&win);
-    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let hub = handle.get_webview_window("hub");
+        if let Some(win) = &hub {
+            material::keep_clear(win);
+        }
+        show_hub(&handle);
+        if let Some(win) = &hub {
+            material::repaint(win);
+        }
+    });
     true
 }
 

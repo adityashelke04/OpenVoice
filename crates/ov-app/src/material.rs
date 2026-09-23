@@ -114,20 +114,16 @@ pub fn transparency_enabled() -> bool {
 
 /// Make a transparent window repaint its own surface after it is first shown.
 ///
-/// Tauri clears a transparent window's surface to alpha 0 (which is what lets Mica
-/// through) when the window is created and again on WM_PAINT. For a window created
-/// hidden, that first clear lands while it is invisible and does not stick, and
-/// showing it does not produce a WM_PAINT: the webview child covers the whole
-/// client area. Measured on the Hub: shown after load, the page sat on solid white
-/// instead of Mica until the first resize. Invalidating the window forces the
-/// WM_PAINT that runs the clear.
+/// The surface has to be cleared to alpha 0 for Mica to show through. For a window
+/// created hidden, the clear done at creation lands while it is invisible and does
+/// not stick, and showing it does not produce a WM_PAINT: the webview child covers
+/// the whole client area. Invalidating the window produces the WM_PAINT, and
+/// `keep_clear` makes sure that paint actually clears.
 pub fn repaint(win: &tauri::WebviewWindow) {
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::Graphics::Gdi::{
-            RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
-        };
+        use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE};
         let Ok(raw) = win.hwnd() else { return };
         // SAFETY: a live window handle owned by this process; no rect or region.
         unsafe {
@@ -135,12 +131,88 @@ pub fn repaint(win: &tauri::WebviewWindow) {
                 HWND(raw.0),
                 None,
                 None,
-                RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW,
+                RDW_INVALIDATE | RDW_ERASE | RDW_FRAME,
             );
         }
     }
     #[cfg(not(windows))]
     let _ = win;
+}
+
+/// Clear the window's surface to transparent on every WM_PAINT, ourselves.
+///
+/// Tauri does this clear already, but through tao's paint path, and tao drops any
+/// WM_PAINT that arrives while one of its event handlers is running
+/// (`should_buffer`): it re-queues an internal paint with no update region and
+/// never clears. The Hub is revealed from `on_page_load`, usually before `setup`
+/// has run, so its first paint landed in the middle of startup and was dropped.
+/// Nothing repainted it until the user resized, minimized or otherwise disturbed
+/// the window, and until then the stale light surface showed through the page's
+/// 72% tint: a washed-out grey Hub instead of dark Mica, for as long as it was
+/// left alone. Measured on 1.1.1: still grey 40 s after launch, and dark within a
+/// frame of any external repaint.
+///
+/// This runs ahead of tao on every WM_PAINT, mid-handler or not. It fills with
+/// black, which GDI writes with alpha 0 — the same pixels tao's own clear
+/// (`draw_surface`, no background colour) writes — and hands the message on
+/// unchanged. Installed by `reveal_hub`, before the window is first shown.
+pub fn keep_clear(win: &tauri::WebviewWindow) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Shell::SetWindowSubclass;
+        let Ok(raw) = win.hwnd() else { return };
+        // SAFETY: a live window handle owned by this process, subclassed from the
+        // main thread that created it (`reveal_hub`); `clear_proc` removes itself on
+        // WM_NCDESTROY. Subclassing again with the same proc and id is a no-op.
+        let ok = unsafe { SetWindowSubclass(HWND(raw.0), Some(clear_proc), CLEAR_ID, 0) };
+        if !ok.as_bool() {
+            tracing::warn!("could not subclass the hub; its backdrop may start light");
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = win;
+}
+
+#[cfg(windows)]
+const CLEAR_ID: usize = 0x4f56_434c; // "OVCL"
+
+#[cfg(windows)]
+unsafe extern "system" fn clear_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    _id: usize,
+    _data: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        FillRect, GetDC, GetStockObject, GetUpdateRect, ReleaseDC, BLACK_BRUSH, HBRUSH,
+    };
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, WM_NCDESTROY, WM_PAINT};
+
+    if msg == WM_PAINT {
+        // Only when something is actually invalid: tao's own re-queued internal
+        // paints carry no update region and must not cost a fill each.
+        let mut dirty = RECT::default();
+        if GetUpdateRect(hwnd, Some(&mut dirty), false).as_bool() {
+            // GetDC, not BeginPaint: the update region stays for tao to validate
+            // (or re-queue) exactly as it would have without this subclass.
+            let mut rc = RECT::default();
+            if GetClientRect(hwnd, &mut rc).is_ok() {
+                let dc = GetDC(hwnd);
+                if !dc.is_invalid() {
+                    FillRect(dc, &rc, HBRUSH(GetStockObject(BLACK_BRUSH).0));
+                    ReleaseDC(hwnd, dc);
+                }
+            }
+        }
+    } else if msg == WM_NCDESTROY {
+        let _ = RemoveWindowSubclass(hwnd, Some(clear_proc), CLEAR_ID);
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
 #[cfg(test)]
