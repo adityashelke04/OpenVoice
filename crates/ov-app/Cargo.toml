@@ -59,6 +59,9 @@ windows = { version = "0.58", features = [
     # RegGetValueW, for the Windows build number and the Transparency effects
     # setting that decide whether the Hub can show Mica (material.rs).
     "Win32_System_Registry",
+    # SetWindowSubclass, so the Hub clears its own surface on WM_PAINT instead of
+    # relying on tao's paint path, which drops paints mid-handler (material.rs).
+    "Win32_UI_Shell",
 ] }
 
 [lints.clippy]
