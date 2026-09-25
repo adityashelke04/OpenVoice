@@ -8,7 +8,7 @@ import type { CSSProperties } from "react";
  * microphone opens. Rounded to two places; at 16px tall the third place is less
  * than a tenth of a pixel.
  */
-export const MARK_HEIGHTS = [0.22, 0.46, 0.88, 0.62, 1, 0.38, 0.18] as const;
+const MARK_HEIGHTS = [0.22, 0.46, 0.88, 0.62, 1, 0.38, 0.18] as const;
 
 /**
  * The Flow Bar at rest: the seven-bar mark, monochrome and still.

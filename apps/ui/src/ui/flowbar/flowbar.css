@@ -1,0 +1,669 @@
+/* The Flow Bar: Aurora.
+ *
+ * One bar for every Hub theme and both modes. It floats over other people's
+ * applications, so it owns its world instead of borrowing the Hub's: obsidian
+ * glass that reads the same over a white document, a dark editor and a photo.
+ *
+ * Colour means the microphone is open. At rest the bar is monochrome and still;
+ * the spectrum — the logo's green through Lagoon mint and Glacier cyan to
+ * periwinkle — appears only while it is listening, and in the one pass of light
+ * that says a dictation landed.
+ *
+ * Nothing here paints outside the pill. The window is clipped to the pill's own
+ * box (see `geometry()` in Overlay.tsx), so a glow would be sliced flat at the
+ * region's edge, and it would bleed onto the app underneath if it were not. All
+ * the light lives inside the glass. */
+
+/* Registered so the rim's arc can turn: an unregistered custom property is a
+   string, and a string cannot be interpolated. */
+@property --fb-ang {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes fb-orbit {
+  to {
+    --fb-ang: 360deg;
+  }
+}
+
+/* Timed to the Overlay's `confirm`, which is up for 480ms. A pass longer than the
+   flag would be cut off mid-flight when React drops it. */
+@keyframes fb-land {
+  0% {
+    --fb-ang: -70deg;
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    --fb-ang: 290deg;
+    opacity: 0;
+  }
+}
+
+@keyframes fb-run {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(223%);
+  }
+}
+
+@keyframes fb-rail {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+
+@keyframes fb-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* A state change reads as the bar becoming something else, not as a label
+   quietly swapping text. Small and quick: this window is glanced at. */
+@keyframes fb-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.98);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+:where(html:not([data-window="hub"])) {
+  /* -- The bar's own tokens. Deliberately not the Hub's: those change with the
+        theme, and this must not. --------------------------------------------- */
+  --fb-s1: #44d62c; /* the logo */
+  --fb-s2: #52e3b0; /* Lagoon */
+  --fb-s3: #5ad7f0; /* Glacier */
+  --fb-s4: #8aa8ff; /* Glacier's second accent */
+  --fb-spectrum: linear-gradient(90deg, var(--fb-s1), var(--fb-s2) 34%, var(--fb-s3) 66%, var(--fb-s4));
+  --fb-spectrum-v: linear-gradient(180deg, var(--fb-s1), var(--fb-s2) 34%, var(--fb-s3) 66%, var(--fb-s4));
+
+  /* 93%: glass you cannot read through. The desktop tints the body without ever
+     competing with the words on it. */
+  --fb-body: rgb(10 13 20 / 93%);
+  --fb-sky: radial-gradient(120% 90% at 50% -30%, rgb(255 255 255 / 10%), transparent 60%);
+  --fb-ink: #f3f6fb;
+  --fb-ink-2: rgb(243 246 251 / 72%);
+  --fb-ink-3: rgb(243 246 251 / 46%);
+  --fb-coral: #ff8f80;
+  --fb-travel: cubic-bezier(0.22, 1, 0.36, 1);
+  --fb-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+
+  /* -------------------------------------------------------------- the glass -- */
+
+  .flowbar {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Whatever the window is: `geometry()` owns the box, and a size stated here
+       would be a second opinion about something that can only have one. */
+    height: 100%;
+    width: 100%;
+    padding: 0 12px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    overflow: hidden;
+    color: var(--fb-ink);
+    font-family: var(--font-sans);
+    /* Two rims of opposite polarity, because the bar has to survive both a white
+       page and a black editor. The dark outer edge is the border — translucent,
+       so it darkens whatever is behind it — and the light inner ring and lit top
+       edge sit just inside it. */
+    border: 1px solid rgb(0 0 0 / 55%);
+    background: var(--fb-sky), var(--fb-body);
+    background-clip: padding-box;
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 22%),
+      inset 0 0 0 1px rgb(255 255 255 / 9%);
+  }
+
+  /* Grain, at a whisper: the Hub's own noise, so the glass has a surface. */
+  .flowbar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background-image: var(--fb-grain);
+    opacity: 0.07;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+  }
+
+  /* The rim light: a 1px arc of spectrum running round the inside edge. Masked
+     to a ring, so it is a line of light rather than a filled shape. Off at rest. */
+  .flowbar::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    background: conic-gradient(
+      from var(--fb-ang),
+      transparent 0 58%,
+      var(--fb-s1) 70%,
+      var(--fb-s3) 80%,
+      var(--fb-s4) 88%,
+      transparent 96%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+
+  /* Listening. The voice lights the glass from below: three washes whose
+     strength and height follow `--level`, the peak-held meter the waveform's own
+     loop writes every frame. No React render is involved. */
+  .flowbar[data-live="true"] {
+    background:
+      var(--fb-sky),
+      radial-gradient(
+        70% 140% at 50% calc(150% - 60% * var(--level, 0)),
+        color-mix(in srgb, var(--fb-s3) calc(10% + 34% * var(--level, 0)), transparent),
+        transparent 70%
+      ),
+      radial-gradient(
+        50% 120% at 12% 120%,
+        color-mix(in srgb, var(--fb-s1) calc(8% + 24% * var(--level, 0)), transparent),
+        transparent 70%
+      ),
+      radial-gradient(
+        50% 120% at 88% 120%,
+        color-mix(in srgb, var(--fb-s4) calc(8% + 26% * var(--level, 0)), transparent),
+        transparent 70%
+      ),
+      var(--fb-body);
+    background-clip: padding-box;
+  }
+
+  .flowbar[data-live="true"]::after {
+    opacity: calc(0.55 + 0.45 * var(--level, 0));
+    animation: fb-orbit 3.2s linear infinite;
+  }
+
+  /* A real failure: coral, on the glyph and in a faint wash from its side. */
+  .flowbar[data-mode="failed"],
+  .flowbar[data-mode="enginefail"] {
+    background:
+      radial-gradient(60% 160% at 0% 50%, rgb(255 143 128 / 16%), transparent 70%),
+      var(--fb-sky),
+      var(--fb-body);
+    background-clip: padding-box;
+  }
+
+  /* Anything else that happened — text on the clipboard, a discard — is news,
+     not a warning. */
+  .flowbar[data-mode="notice"] {
+    background:
+      radial-gradient(60% 160% at 0% 50%, rgb(90 215 240 / 13%), transparent 70%),
+      var(--fb-sky),
+      var(--fb-body);
+    background-clip: padding-box;
+  }
+
+  /* The landing: one pass of light around the rim, and the mark catches it. */
+  .flowbar[data-confirm="true"]::after {
+    background: conic-gradient(
+      from var(--fb-ang),
+      transparent 0 40%,
+      var(--fb-s1) 55%,
+      var(--fb-s2) 65%,
+      var(--fb-s3) 75%,
+      var(--fb-s4) 85%,
+      transparent 98%
+    );
+    animation: fb-land 480ms var(--fb-travel) 1 both;
+  }
+
+  .flowbar[data-mini="true"] {
+    padding: 0 7px;
+  }
+
+  .flowbar[data-column="true"] {
+    flex-direction: column;
+    padding: 8px 0;
+  }
+
+  /* -------------------------------------------------------------- layout -- */
+
+  /* Keyed by mode in the component, so this carries the entrance too. */
+  .flowbar-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-width: 0;
+    min-height: 0;
+    animation: fb-enter 220ms var(--fb-travel) both;
+  }
+
+  .flowbar[data-column="true"] .flowbar-body {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  /* ---------------------------------------------------------------- mark -- */
+
+  /* The logo's seven bars. The spectrum is always painted, and a grayscale
+     filter makes it silver: a filter interpolates where a gradient cannot, so
+     the bars can *warm* into colour on hover and on a landing instead of
+     snapping. The gradient is one strip across the whole mark (7 bars at a 6px
+     pitch), and each bar shows its own slice of it. */
+  .flowbar-mark {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 16px;
+    flex: none;
+  }
+
+  .flowbar-mark i {
+    display: block;
+    width: 3px;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--fb-spectrum);
+    background-size: 39px 100%;
+    background-position: calc(var(--k) * -6px) 0;
+    transform: scaleY(var(--h));
+    filter: grayscale(1) brightness(1.45);
+    opacity: 0.62;
+    transition:
+      transform 0.45s var(--fb-travel),
+      filter 0.3s ease,
+      opacity 0.3s ease;
+  }
+
+  .flowbar:hover .flowbar-go .flowbar-mark i,
+  .flowbar-go:focus-visible .flowbar-mark i,
+  .flowbar[data-confirm="true"] .flowbar-mark i {
+    filter: none;
+    opacity: 1;
+    transform: scaleY(calc(var(--h) * 1.06 + 0.04));
+  }
+
+  .flowbar[data-mini="true"] .flowbar-mark {
+    height: 10px;
+    gap: 2px;
+  }
+
+  .flowbar[data-mini="true"] .flowbar-mark i {
+    width: 2px;
+    background-size: 26px 100%;
+    background-position: calc(var(--k) * -4px) 0;
+  }
+
+  /* Docked: the mark stands up with the bar. */
+  .flowbar[data-column="true"] .flowbar-mark {
+    flex-direction: column;
+    height: auto;
+    width: 16px;
+  }
+
+  .flowbar[data-column="true"] .flowbar-mark i {
+    width: 100%;
+    height: 3px;
+    background: var(--fb-spectrum-v);
+    background-size: 100% 39px;
+    background-position: 0 calc(var(--k) * -6px);
+    transform: scaleX(var(--h));
+  }
+
+  .flowbar[data-column="true"][data-mini="true"] .flowbar-mark {
+    width: 10px;
+  }
+
+  .flowbar[data-column="true"][data-mini="true"] .flowbar-mark i {
+    height: 2px;
+    background-size: 100% 26px;
+    background-position: 0 calc(var(--k) * -4px);
+  }
+
+  /* Compact and docked, between key-release and text landing: the mark breathes. */
+  .flowbar[data-working="true"] .flowbar-mark {
+    animation: fb-breathe 1.6s ease-in-out infinite;
+  }
+
+  /* The mark is the button that starts a dictation. Its hit area is padded out
+     past the mark, and pulled back in with a negative margin so the layout
+     centres the mark rather than the padding. */
+  .flowbar-go {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+    margin: -6px -12px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+
+  .flowbar-go:focus-visible {
+    outline: 1.5px solid var(--fb-s3);
+    outline-offset: -3px;
+  }
+
+  /* ------------------------------------------------------------ waveform -- */
+
+  .flowbar-wave {
+    flex: 1;
+    height: 20px;
+    min-width: 0;
+    --fb-bars: 26;
+    --fb-pitch: 5px;
+  }
+
+  .flowbar-wave .wave {
+    gap: 2.5px;
+  }
+
+  /* Each bar takes its slice of one spectrum laid across the whole row. */
+  .flowbar-wave .wave-bar {
+    width: 2.5px;
+    background: var(--fb-spectrum);
+    background-size: calc(var(--fb-bars) * var(--fb-pitch)) 100%;
+    background-position: calc(var(--k) * var(--fb-pitch) * -1) 0;
+  }
+
+  .flowbar[data-mini="true"] .flowbar-wave {
+    height: 12px;
+    --fb-bars: 9;
+    --fb-pitch: 4px;
+  }
+
+  .flowbar[data-mini="true"] .flowbar-wave .wave {
+    gap: 2px;
+  }
+
+  .flowbar[data-mini="true"] .flowbar-wave .wave-bar {
+    width: 2px;
+  }
+
+  /* Turned through ninety degrees with the rest of the bar. The loop writes a
+     magnitude (`--v`), not a transform, so this is a layout change rather than a
+     rotation and needs no advance knowledge of the column's length. */
+  .flowbar[data-column="true"] .flowbar-wave {
+    width: 18px;
+    height: auto;
+    min-height: 0;
+    --fb-bars: 10;
+    --fb-pitch: 5px;
+  }
+
+  .flowbar[data-column="true"] .flowbar-wave .wave {
+    flex-direction: column;
+  }
+
+  .flowbar[data-column="true"] .flowbar-wave .wave-bar {
+    width: 100%;
+    height: 2.5px;
+    background: var(--fb-spectrum-v);
+    background-size: 100% calc(var(--fb-bars) * var(--fb-pitch));
+    background-position: 0 calc(var(--k) * var(--fb-pitch) * -1);
+    transform: scaleX(var(--v, 0.05));
+  }
+
+  .flowbar[data-column="true"][data-mini="true"] .flowbar-wave {
+    width: 10px;
+  }
+
+  .flowbar-time {
+    flex: none;
+    font: 500 12px/1 var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    color: var(--fb-ink-2);
+  }
+
+  .flowbar-lock {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+    color: var(--fb-s3);
+  }
+
+  .flowbar-lock svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* Discard. Quiet until the pointer is on it; throwing away a sentence you did
+     not mean to say is a normal outcome, not an error. */
+  .flowbar-cancel {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    color: var(--fb-ink-3);
+    background: rgb(255 255 255 / 6%);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 8%);
+    cursor: pointer;
+    transition:
+      color 0.12s ease,
+      background-color 0.12s ease;
+  }
+
+  .flowbar-cancel svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .flowbar-cancel:hover {
+    color: var(--fb-ink);
+    background: rgb(255 255 255 / 13%);
+  }
+
+  .flowbar-cancel:focus-visible {
+    outline: 1.5px solid var(--fb-s3);
+    outline-offset: 1px;
+  }
+
+  /* ------------------------------------------------------------- working -- */
+
+  .flowbar-thread-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .flowbar-label {
+    flex: none;
+    font: 400 12px/1 var(--font-sans);
+    color: var(--fb-ink-2);
+  }
+
+  /* The wave folded into one line, with light running along it: the words are
+     on their way. */
+  .flowbar-thread {
+    flex: 1;
+    position: relative;
+    height: 2px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: rgb(255 255 255 / 12%);
+  }
+
+  .flowbar-thread::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 45%;
+    background: linear-gradient(90deg, transparent, var(--fb-s1), var(--fb-s3), var(--fb-s4), transparent);
+    animation: fb-run 1.15s cubic-bezier(0.6, 0, 0.4, 1) infinite;
+  }
+
+  /* ------------------------------------------------------------ messages -- */
+
+  .flowbar-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    color: var(--fb-ink-2);
+  }
+
+  .flowbar-icon svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .flowbar-icon[data-icon="warn"] {
+    color: var(--fb-coral);
+  }
+
+  .flowbar-icon[data-icon="clipboard"],
+  .flowbar-icon[data-icon="model"] {
+    color: var(--fb-s3);
+  }
+
+  /* One line, truncated: the bar cannot grow to fit an arbitrary engine
+     message, and a second line would break a pill the window is sized to
+     exactly. The full text is in the `title`, and in the Hub. Set at the size
+     `geometry()` measures with (SANS_12), so the box fits the words. */
+  .flowbar-msg {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font: 400 12px/1.3 var(--font-sans);
+    color: var(--fb-ink);
+  }
+
+  .flowbar-pct {
+    flex: none;
+    font: 500 12px/1 var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--fb-ink-2);
+  }
+
+  .flowbar-action {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* The one bright object on the bar: the thing to press. */
+  .flowbar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font: 600 11.5px/1 var(--font-sans);
+    color: #07121a;
+    background: linear-gradient(180deg, #ffffff, #dfe6ef);
+    box-shadow: inset 0 -1px 0 rgb(0 0 0 / 12%);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 0.12s ease;
+  }
+
+  .flowbar-btn kbd {
+    font: 600 10px/1 var(--font-mono);
+    opacity: 0.55;
+  }
+
+  .flowbar-btn:hover {
+    background: #ffffff;
+  }
+
+  .flowbar-btn:focus-visible {
+    outline: 1.5px solid var(--fb-s3);
+    outline-offset: 2px;
+  }
+
+  /* Progress rides the bottom edge of the glass, where it takes no room from the
+     words. */
+  .flowbar-rail {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 2px;
+    height: 1.5px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: rgb(255 255 255 / 8%);
+  }
+
+  .flowbar-rail-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--p, 0%);
+    background: var(--fb-spectrum);
+    transition: width 0.32s var(--fb-travel);
+  }
+
+  .flowbar-rail[data-indeterminate="true"] .flowbar-rail-fill {
+    width: 35%;
+    animation: fb-rail 1.6s cubic-bezier(0.6, 0, 0.4, 1) infinite;
+  }
+
+  .flowbar[data-mini="true"] .flowbar-rail,
+  .flowbar[data-column="true"] .flowbar-rail {
+    left: 6px;
+    right: 6px;
+    bottom: 1px;
+  }
+
+  /* Stillness was asked for. Every state still differs by content and colour;
+     only the motion goes. */
+  @media (prefers-reduced-motion: reduce) {
+    .flowbar-body,
+    .flowbar[data-live="true"]::after,
+    .flowbar[data-confirm="true"]::after,
+    .flowbar[data-working="true"] .flowbar-mark,
+    .flowbar-thread::after,
+    .flowbar-rail[data-indeterminate="true"] .flowbar-rail-fill {
+      animation: none;
+    }
+
+    .flowbar-mark i,
+    .flowbar-rail-fill {
+      transition: none;
+    }
+
+    /* The thread and the rail cannot run, so they show where the light would be. */
+    .flowbar-thread::after {
+      left: 27%;
+    }
+  }
+}
