@@ -359,7 +359,11 @@ export function checkContentCentering(
 
   const contentEls = Array.from(
     pillEl.querySelectorAll<HTMLElement>(
-      ".flowbar-mic, .flowbar-idle > *, .flowbar-msg, .flowbar-working-text, .flowbar-wave, .flowbar-time, .flowbar-cancel, .flowbar-go",
+      // Every top-level piece of content the bar can show, in any mode. Keep in
+      // step with FlowBar.tsx: a name missing here is content this check cannot
+      // see, and a bar whose content it cannot see is a check that never fires.
+      ".flowbar-mark, .flowbar-lock, .flowbar-wave, .flowbar-time, .flowbar-cancel, " +
+        ".flowbar-thread-wrap, .flowbar-icon, .flowbar-msg, .flowbar-pct, .flowbar-action",
     ),
   ).filter((e) => {
     const r = e.getBoundingClientRect();

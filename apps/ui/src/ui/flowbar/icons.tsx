@@ -15,6 +15,7 @@ export type FlowIconName =
   | "lock"
   | "close"
   | "mic"
+  | "record"
   | "stop"
   | "history"
   | "settings"
@@ -58,6 +59,12 @@ const PATHS: Record<FlowIconName, ReactElement> = {
     <>
       <rect x="6" y="2" width="4" height="8" rx="2" />
       <path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" />
+    </>
+  ),
+  record: (
+    <>
+      <circle cx="8" cy="8" r="5.5" />
+      <circle cx="8" cy="8" r="2.4" fill="currentColor" stroke="none" />
     </>
   ),
   stop: <rect x="4.5" y="4.5" width="7" height="7" rx="1.6" />,

@@ -96,3 +96,26 @@ describe("the rest of the menu", () => {
     expect(rows.some((r) => r.id === "dictate")).toBe(false);
   });
 });
+
+describe("flowMenuRows icons", () => {
+  it("gives every row a glyph that says which way its toggle points", () => {
+    const icons = (s: FlowMenuState) =>
+      Object.fromEntries(flowMenuRows(s, actions()).map((r) => [r.id, r.icon]));
+    expect(icons(IDLE)).toEqual({
+      dictate: "record",
+      paste: "clipboard",
+      history: "history",
+      mic: "mic",
+      settings: "settings",
+      recenter: "recenter",
+      mini: "compact",
+      "auto-collapse": "full",
+      snooze: "snooze",
+      "dictate-only": "eye",
+    });
+    const flipped = icons({ mini: true, live: true, working: false, autoCollapse: false });
+    expect(flipped.dictate).toBe("stop");
+    expect(flipped.mini).toBe("full");
+    expect(flipped["auto-collapse"]).toBe("shrink");
+  });
+});

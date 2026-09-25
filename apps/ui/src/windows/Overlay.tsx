@@ -10,8 +10,11 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FlowBar, Kbd, flowMode, flowSpeaks, flowText } from "../ui";
-import type { FlowEdge, FlowMode, FlowStatus } from "../ui";
+import { FlowBar, flowMode, flowSpeaks, flowText } from "../ui";
+import type { FlowEdge, FlowStatus } from "../ui";
+import { FlowIcon } from "../ui/flowbar/icons";
+import { FlowMark } from "../ui/flowbar/FlowMark";
+import { PILL_H, geometry } from "./geometry";
 import { playCompletionChime, playStartTone } from "../ui/sound";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
 import { useSettings } from "../screens/Settings";
@@ -29,7 +32,7 @@ import { useIdleCollapse } from "./useIdleCollapse";
 import { useFlowMenu } from "./useFlowMenu";
 import { useMenuHeight } from "./useMenuHeight";
 import { useMenuTimeout } from "./useMenuTimeout";
-import { MONO_11, SANS_12, resolveFont, useFontsReady } from "./useFontsReady";
+import { useFontsReady } from "./useFontsReady";
 import "./overlay.css";
 
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -41,17 +44,16 @@ async function call(cmd: string, args?: Record<string, unknown>) {
 }
 
 /**
- * Window space reserved on every side while listening, so the pill's glow has
- * somewhere to land.
+ * Window space reserved on every side while listening. Zero.
  *
- * A `box-shadow` is clipped at the window edge, and the window used to be sized
- * to the pill exactly — which is why this surface had no glow for so long
- * despite the design system granting it one. It is claimed only while
- * listening, because the window's *region* is the pill plus this margin: everything outside that is
- * clipped, so it neither paints nor takes clicks, and widening the region
- * widens the dead zone punched into whatever is underneath.
+ * It was 22, for an outer green glow painted into a margin around the pill. The
+ * Aurora bar keeps all of its light inside the glass, so the margin would be
+ * region with nothing painted in it — a 22px dead ring punched into whatever is
+ * underneath, for no pixel of benefit. The plumbing stays (Rust and the trace
+ * both understand a margin), so a future design that paints outside the pill
+ * has one number to change.
  */
-const GLOW_MARGIN = 22;
+const GLOW_MARGIN = 0;
 
 /**
  * The window's fixed width, and where the pill sits inside it.
@@ -82,64 +84,6 @@ const OVERLAY_H = 640;
 const PILL_TOP = 300;
 
 /**
- * The pill's height, in every state but the menu.
- *
- * Duplicated as `--pill-h` in `overlay.css` and as `PILL_H` in `overlay.rs`,
- * deliberately and with a comment at each end. CSS paints the box; Rust clips the
- * window to a region computed from the same number. If they disagree, the bar and
- * its clickable area come apart. Change one and the other two are wrong.
- */
-const PILL_H = 40;
-
-/**
- * The compact indicator's short axis.
- *
- * Big enough to hold the 7px status dot and a hairline border with room left to
- * read as a pill rather than as a line.
- */
-const MINI_H = 22;
-
-/**
- * The collapsed bar's width. Long enough to find, short enough to ignore.
- *
- * Was 64. Widened because "short enough to ignore" turned out to be the easy
- * half of that sentence and "long enough to find" the hard one: at 64x5 the
- * first person to use it could not locate the bar on their own screen.
- *
- * Its *height* is not here. The stroke is 4px, and that number lives only in
- * `overlay.css` as `--line-h`, because only CSS paints it — this file's business
- * is the box the window is clipped to, which is `LINE_HIT`. Putting the stroke
- * height here too would create a third opinion about a size, which is the exact
- * failure mode `geometry()` exists to prevent.
- */
-const LINE_W = 96;
-
-/**
- * The collapsed bar's *clickable* height, which is not the height it paints.
- *
- * This one lives here alone. `PILL_H` is triplicated because Rust genuinely
- * computes with it in `shape_rect`; this number only ever travels to Rust as
- * part of the box `set_shape` is handed, so a mirrored constant over there
- * would be a second opinion with no reader — the very thing `geometry()` exists
- * to prevent. Clippy caught it as dead code, and clippy was right.
- *
- * The stroke is 8px (`--line-h` in `overlay.css`), and the window is clipped to
- * a band three times that, so the extra is invisible target.
- *
- * This still sits under the 44px minimum-target guideline, and the reason is the
- * one in `useWindowBox`: on a transparent, click-through-less window every pixel
- * of hit area is a dead zone punched into whatever is underneath, so a 44px band
- * would be a 96x44 hole in the user's screen for a bar they deliberately put
- * away.
- *
- * But 16 was too far the other way. The dead-zone argument justifies being under
- * 44; it does not justify being as small as possible, and treating it as though
- * it did produced a control that was hard to find and hard to hit. 24 keeps the
- * hole modest while giving the pointer something real to land on.
- */
-const LINE_HIT = 24;
-
-/**
  * Pointer travel, in pixels, that turns a press into a drag rather than a click.
  *
  * There has to be a threshold, because the bar is both a handle and a button.
@@ -147,88 +91,6 @@ const LINE_HIT = 24;
  * on a mouse produces while clicking.
  */
 const DRAG_SLOP = 4;
-
-/** The pill's painted box, in logical pixels. */
-type Geo = { w: number; h: number };
-
-/**
- * How big the pill has to be to say what it is currently saying.
- *
- * One function, consulted by the shape sent to Rust and by the pill's own style,
- * so the region the window is clipped to and the box CSS paints cannot disagree.
- * It replaces a nested ternary that knew about four states and a fixed CSS height
- * that knew about none of them — which is what made a compact or a docked form
- * impossible to express.
- */
-function geometry(v: {
-  mode: FlowMode;
-  mini: boolean;
-  /** Put away on the idle clock. Outranks every tier below except the menu. */
-  collapsed?: boolean;
-  edge: FlowEdge;
-  menu: boolean;
-  hint: string;
-  hasAction?: boolean;
-  text?: string;
-}): Geo {
-  // When the menu is open, the pill is 280px wide to match the menu, but maintains
-  // its standard height (PILL_H or MINI_H). The window's overall shape is expanded
-  // to menuHeight(rows) separately in useWindowShape.
-  if (v.menu) return { w: 280, h: v.mini ? MINI_H : PILL_H };
-
-  // Put away. Above every tier below it and below the menu, because opening the
-  // menu is a deliberate act and a bar that stayed a stroke under its own open
-  // menu would be a panel hanging off nothing.
-  //
-  // No mode test here on purpose: every mode worth reading — live, working, and
-  // all four that `flowSpeaks` covers — blocks the clock in `useIdleCollapse`,
-  // so by the time this is reached the bar has nothing to say. Testing the mode
-  // again would be a second copy of that rule, drifting from the first.
-  if (v.collapsed) {
-    // The box is `LINE_HIT`, not `LINE_H`. What this function returns is the
-    // region the window is clipped to, and the 4px stroke is painted centred
-    // inside it by `overlay.css` — so the invisible margin that makes a 4px bar
-    // clickable lives in one place, and this stays the single sizing authority
-    // rather than growing a second rule about hit areas.
-    //
-    // On a side edge the stroke stands up with the bar. A horizontal line on a
-    // vertical edge reads as a scrap of some other window.
-    const column = v.edge !== "bottom";
-    return column ? { w: LINE_HIT, h: LINE_W } : { w: LINE_W, h: LINE_HIT };
-  }
-
-  // Docked to a side edge, with nothing that needs words: a column. Anything
-  // with a sentence to deliver unfurls back to horizontal — see `flowSpeaks`.
-  const column = v.edge !== "bottom" && !flowSpeaks(v.mode);
-  if (column) {
-    const short = v.mini ? MINI_H : 34;
-    if (v.mode === "live") return { w: short, h: v.mini ? 74 : 132 };
-    return { w: short, h: v.mini ? MINI_H : 52 };
-  }
-
-  if (v.mini) {
-    // Wide enough for the dot plus seven waveform bars while live; a squat pill
-    // around the dot alone otherwise.
-    return { w: v.mode === "live" ? 78 : 44, h: MINI_H };
-  }
-
-  if (v.mode === "live") return { w: 240, h: PILL_H };
-  if (v.mode === "working") return { w: 170, h: PILL_H };
-
-  // Measured from their own content rather than fixed. The old 248px alert tier
-  // truncated real engine messages at about thirty characters, which is reliably
-  // before the part that says what to do about it.
-  if (v.text !== undefined) {
-    const actionW = v.hasAction ? 96 : 0;
-    const w = Math.ceil(MSG_CHROME + textWidth(v.text, SANS_12) + actionW);
-    return { w: Math.min(380, Math.max(200, w)), h: PILL_H };
-  }
-
-  // Idle. The fixed 150px tier fit exactly one shortcut — the default — and any
-  // remap collided with the word "Hold" and was clipped.
-  const w = Math.ceil(IDLE_CHROME + textWidth(v.hint, MONO_11));
-  return { w: Math.max(150, w), h: PILL_H };
-}
 
 /**
  * The menu's height is **measured, never modelled**. See `useMenuHeight`.
@@ -285,40 +147,6 @@ const COMMANDED_HISTORY = 8;
  *  logical -> physical -> logical round trip on a fractional display scale. */
 function isEcho(history: Array<[number, number]>, x: number, y: number): boolean {
   return history.some(([cx, cy]) => Math.abs(cx - x) < 2 && Math.abs(cy - y) < 2);
-}
-
-/**
- * Everything in the idle pill that is not the shortcut itself: padding, border,
- * the status dot, two gaps, the word "Hold", and the key cap's own chrome.
- *
- * Measured off the rendered component rather than derived from the stylesheet,
- * because it is the sum of seven values that live in four rules. With the
- * default "Right Ctrl" it reproduces the 150px this tier was hardcoded to; the
- * point of computing it is every *other* shortcut, which previously collided
- * with the word "Hold" and got clipped by the pill's own `overflow: hidden`.
- */
-const IDLE_CHROME = 85 + 22;
-
-/** Padding, border, dot and gap around a message. Same method as above. */
-const MSG_CHROME = 49;
-
-/**
- * Width of a string as the bar will actually draw it.
- *
- * A canvas rather than a hidden DOM node: this has to be answered before the
- * window is sized, and a measuring element would need a layout pass inside a
- * window that is still the wrong size to hold it.
- */
-function textWidth(text: string, font: string): number {
-  const canvas = (textWidth as { c?: HTMLCanvasElement }).c ??
-    ((textWidth as { c?: HTMLCanvasElement }).c = document.createElement("canvas"));
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return text.length * 7;
-  // The same substitution the preload in `useFontsReady` applies, so the face
-  // that was loaded is by construction the face being measured. When it was
-  // written out twice, only one of the two knew what a `$mono` was.
-  ctx.font = resolveFont(font);
-  return ctx.measureText(text).width;
 }
 
 /** How long a failure or a clipboard fallback stays on the bar before it packs
@@ -1325,13 +1153,14 @@ export function Overlay() {
       type="button"
       className="flowbar-btn"
       title="Paste now (Ctrl+V)"
+      aria-label="Paste now"
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
         void call("paste_last");
       }}
     >
-      Paste Now <Kbd>Ctrl+V</Kbd>
+      Paste <kbd>Ctrl V</kbd>
     </button>
   ) : undefined;
 
@@ -1351,7 +1180,6 @@ export function Overlay() {
     collapsed,
     edge,
     menu,
-    hint,
     hasAction: Boolean(pasteAction),
     text: barText,
   });
@@ -1563,6 +1391,29 @@ export function Overlay() {
             ? alertText
             : `Ready. Hold ${hint} to dictate, or click the bar.`;
 
+  // The Flow Menu, on whichever side of the pill it opens. One function so the
+  // two placements cannot drift apart.
+  const flowMenu = (side: "above" | "below") => (
+    <div className={`overlay-menu overlay-menu--${side}`} role="menu" ref={menuRef}>
+      {/* The shortcut, which used to be written on the bar itself. This is where
+          someone who has forgotten it looks. */}
+      <div className="overlay-menu-head" aria-hidden>
+        <FlowMark />
+        <span>Hold to talk</span>
+        <kbd>{hint}</kbd>
+      </div>
+      {rows.map((r) => (
+        <div key={r.id}>
+          {r.sep && <div className="overlay-menu-sep" />}
+          <button role="menuitem" data-row={r.id} onClick={r.run}>
+            <FlowIcon name={r.icon} />
+            <span>{r.label}</span>
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div
       className="overlay-root"
@@ -1591,18 +1442,7 @@ export function Overlay() {
         {spoken}
       </span>
 
-      {menu && menuPlacement === "above" && (
-        <div className="overlay-menu overlay-menu--above" role="menu" ref={menuRef}>
-          {rows.map((r) => (
-            <div key={r.id}>
-              {r.sep && <div className="overlay-menu-sep" />}
-              <button role="menuitem" onClick={r.run}>
-                {r.label}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      {menu && menuPlacement === "above" && flowMenu("above")}
 
       <div
         className="overlay-hit"
@@ -1675,19 +1515,7 @@ export function Overlay() {
         />
       </div>
 
-      {menu && menuPlacement === "below" && (
-        <div className="overlay-menu overlay-menu--below" role="menu" ref={menuRef}>
-          {rows.map((r) => (
-            <div key={r.id}>
-              {r.sep && <div className="overlay-menu-sep" />}
-              <button role="menuitem" onClick={r.run}>
-                {r.label}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      {menu && menuPlacement === "below" && flowMenu("below")}
     </div>
   );
 }
-

@@ -240,5 +240,6 @@ export function Empty({ title, hint, action }: { title: string; hint?: string; a
 }
 
 export { Waveform } from "./Waveform";
-export { FlowBar, flowMode, flowSpeaks, flowText } from "./flowbar/FlowBar";
-export type { FlowEdge, FlowStatus, FlowMode } from "./flowbar/FlowBar";
+export { FlowBar } from "./flowbar/FlowBar";
+export { flowMode, flowSpeaks, flowText } from "./flowbar/mode";
+export type { FlowEdge, FlowStatus, FlowMode } from "./flowbar/mode";

@@ -61,7 +61,7 @@
  * this system does not otherwise use. Neutral, not green: the microphone is not
  * open, and nothing about placing a window should suggest that it is. */
 .overlay-hit[data-snapping="true"] .flowbar {
-  border-color: var(--mute);
+  border-color: rgb(255 255 255 / 50%);
 }
 
 .overlay-hit:active {
@@ -101,14 +101,25 @@
      and much wider than the menu should be. `geometry()` widens the pill to 280
      while the menu is open for exactly this reason. */
   width: var(--pill-w, 208px);
-  padding: var(--s-2);
-  background: rgb(16 16 18 / 98%);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-lg);
-  /* Same principled exception as the bar: this floats over content the design
-     system does not control. */
-  box-shadow: 0 2px 8px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 36%);
+  padding: 6px;
+  /* The bar's own obsidian glass (see `flowbar.css`), so the menu reads as the
+     bar opening up rather than as a second window. Nearly opaque for the same
+     reason: the rows must never compete with whatever is behind them. */
+  background:
+    radial-gradient(120% 60% at 50% -10%, rgb(255 255 255 / 8%), transparent 60%),
+    rgb(12 15 22 / 97%);
+  background-clip: padding-box;
+  border: 1px solid rgb(0 0 0 / 55%);
+  /* 12px, and `MENU_RADIUS` in overlay.rs says the same: the window's region is
+     cut to this corner, so the two must agree or the corners show white. */
+  border-radius: 12px;
+  /* No outer shadow: the region is cut to the menu's own box, so a shadow would
+     be sliced flat at its edge. The rims are inside, like the bar's. */
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 14%),
+    inset 0 0 0 1px rgb(255 255 255 / 8%);
   box-sizing: border-box;
+  font-family: var(--font-sans);
   z-index: 10;
 }
 
@@ -155,31 +166,85 @@
 }
 
 .overlay-menu button {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  height: 28px;
-  padding: 0 var(--s-3);
-  border-radius: var(--r-md);
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
   text-align: left;
-  font: 400 13px/28px var(--font-sans);
-  color: var(--body);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  font: 400 12.5px/1 var(--font-sans);
+  color: rgb(243 246 251 / 82%);
+  transition:
+    background-color 90ms ease,
+    color 90ms ease;
+}
+
+.overlay-menu button svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: rgb(243 246 251 / 50%);
+  transition: color 90ms ease;
 }
 
 .overlay-menu button:hover {
-  background: var(--surface-3);
-  color: var(--ink);
+  background: rgb(255 255 255 / 7%);
+  color: #ffffff;
+}
+
+.overlay-menu button:hover svg {
+  color: #5ad7f0;
+}
+
+/* The row that opens the microphone takes the logo's green, and only that row:
+   colour still means listening. */
+.overlay-menu button[data-row="dictate"] svg {
+  color: #44d62c;
 }
 
 .overlay-menu button:focus-visible {
-  outline: 2px solid var(--live);
-  outline-offset: -2px;
+  outline: 1.5px solid #5ad7f0;
+  outline-offset: -1.5px;
 }
 
 .overlay-menu-sep {
   height: 1px;
-  margin: var(--s-2) var(--s-2);
-  background: var(--hairline);
+  margin: 5px 8px;
+  background: rgb(255 255 255 / 8%);
+}
+
+/* The shortcut, which the resting bar no longer spells out. */
+.overlay-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 9px;
+  font: 500 11px/1 var(--font-mono);
+  color: rgb(243 246 251 / 50%);
+}
+
+.overlay-menu-head .flowbar-mark {
+  height: 10px;
+  gap: 2px;
+}
+
+.overlay-menu-head .flowbar-mark i {
+  width: 2px;
+  background-size: 26px 100%;
+  background-position: calc(var(--k) * -4px) 0;
+}
+
+.overlay-menu-head kbd {
+  margin-left: auto;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font: 500 11px/1 var(--font-mono);
+  color: rgb(243 246 251 / 82%);
+  background: rgb(255 255 255 / 7%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 9%);
+  white-space: nowrap;
 }
 
 /* The put-away bar.
@@ -270,7 +335,7 @@
    * stroke a light top and a dark underside, which is how every physical grab
    * handle is shaded, and why this reads as an object you could take hold of
    * rather than as a gap between two windows. */
-  background: linear-gradient(180deg, rgb(46 46 52), rgb(18 18 21));
+  background: linear-gradient(180deg, rgb(40 46 60), rgb(12 15 22));
 
   /* Two edges, opposite polarity, because there is no third option.
    *
@@ -357,6 +422,31 @@
     opacity 90ms var(--morph-exit),
     transform 160ms var(--morph-exit),
     filter 90ms var(--morph-exit);
+}
+
+/* A hairline of the bar's spectrum along the stroke's top: the put-away bar is
+   still recognisably the same object, and a strip of colour is easier to find
+   again on a busy desktop than a grey line. Quiet, at 70%. */
+.flowbar-line::after {
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: 1px;
+  height: 1px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, #44d62c, #52e3b0 34%, #5ad7f0 66%, #8aa8ff);
+  opacity: 0.7;
+}
+
+.overlay-root:not([data-edge="bottom"]) .flowbar-line::after {
+  left: 1px;
+  right: auto;
+  top: 18%;
+  bottom: 18%;
+  width: 1px;
+  height: auto;
+  background: linear-gradient(180deg, #44d62c, #52e3b0 34%, #5ad7f0 66%, #8aa8ff);
 }
 
 /* Dragging, and within reach of a snap line: the collapsed bar says so too. */
