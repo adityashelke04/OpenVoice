@@ -22,6 +22,26 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+### Changed
+
+- The Flow Bar has a new look that matches the redesigned Hub in every theme.
+  It is dark glass, and at rest it shows only the OpenVoice logo's seven bars:
+  no text, no colour, nothing moving. The moment the microphone opens, colour
+  arrives. The waveform runs from the logo's green through mint and cyan to
+  periwinkle, your voice lights the glass from inside, and a thin line of light
+  runs around its edge. When your words land, one pass of light goes round the
+  rim.
+- "Hold Right Ctrl" is no longer written on the bar. Your shortcut is in the
+  bar's tooltip and next to Start dictating in its menu (right-click the bar).
+- Messages on the bar carry an icon that says what happened. Text left on your
+  clipboard is no longer shown in warning amber; only a real failure is marked,
+  in coral. Downloading the speech model shows a progress line along the bar's
+  bottom edge.
+- The bar's menu has the same dark glass and an icon on every row, and it now
+  fits in full. Before, a few pixels at its outer edge were cut off.
+- While you dictate, the bar no longer blocks clicks in a 22-pixel band around
+  itself. That band held a glow the new design does not use.
+
 ## [1.1.2] - 2026-09-23
 
 ### Fixed
