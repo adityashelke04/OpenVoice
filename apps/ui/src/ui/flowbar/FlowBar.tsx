@@ -1,8 +1,10 @@
 import { useRef } from "react";
-import type { ReactNode } from "react";
-import { Kbd } from "../index";
-import { LoadingDots, TickingEllipsis } from "../LoadingDots";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { Waveform } from "../Waveform";
+import { FlowMark } from "./FlowMark";
+import { FlowIcon } from "./icons";
+import type { FlowIconName } from "./icons";
+import "./flowbar.css";
 
 /**
  * The Flow Bar — the floating overlay, and the only interface visible while
@@ -146,7 +148,7 @@ export function FlowBar({
   message?: string;
   /** Action control (e.g. interactive "Paste Now" button for clipboard fallback). */
   action?: ReactNode;
-  /** Momentary, on a clean landing. See `.flowbar-mic[data-confirm]`. */
+  /** Momentary, on a clean landing: one pass of light around the rim. See `.flowbar[data-confirm]`. */
   confirm?: boolean;
   /**
    * The microphone is held open without a key — see `taplatch.rs`.
@@ -196,10 +198,9 @@ export function FlowBar({
   /**
    * Where the live level gets published.
    *
-   * The overlay passes its own hit target, because that element also reserves
-   * the window margin the glow paints into. Everywhere else — the component
-   * sheet, the review surface — falls back to the pill itself, so the
-   * level-reactive parts still animate outside the app.
+   * The overlay passes its own hit target, which is also where the bar reads
+   * `--level` from. Everywhere else — the component sheet, the review surface —
+   * falls back to the pill itself, so the voice light still moves outside the app.
    */
   const root = useRef<HTMLDivElement>(null);
   const sink = publish ?? root;
@@ -207,8 +208,18 @@ export function FlowBar({
   const mode = flowMode({ live, working, failed, message, status });
   // Docked vertically *and* with nothing to say. See `flowSpeaks`.
   const column = edge !== "bottom" && !flowSpeaks(mode);
+  // The compact and docked forms carry the mark or the wave and nothing else.
+  const bare = mini || column;
 
   const text = flowText({ mode, message, progress });
+  // A percentage a screen reader can trust: clamped, and absent rather than
+  // wrong when the size of the download is not known.
+  const pct =
+    progress != null && Number.isFinite(progress)
+      ? Math.round(Math.min(1, Math.max(0, progress)) * 100)
+      : undefined;
+
+  const stop = (e: MouseEvent) => e.stopPropagation();
 
   return (
     <div
@@ -221,34 +232,36 @@ export function FlowBar({
       data-mini={mini}
       data-column={column}
       data-latched={latched}
+      data-confirm={confirm}
     >
-      <span className="flowbar-mic" data-confirm={confirm} />
       {/* Keyed on the mode so React replaces the subtree on every change, which
-          is what replays the entrance animation. Without the key the text
-          swaps in place and the bar reads as a label that changed rather than a
-          state that did. */}
+          is what replays the entrance animation. Without the key the text swaps
+          in place and the bar reads as a label that changed rather than a state
+          that did. */}
       <div className="flowbar-body" key={`${mode}:${mini}:${column}`}>
         {mode === "live" ? (
           <>
+            {latched && !bare ? (
+              // The single most important distinction this bar draws: a held
+              // session ends when you let go, a latched one does not.
+              <span className="flowbar-lock" role="img" aria-label="Hands-free">
+                <FlowIcon name="lock" />
+              </span>
+            ) : null}
             <div className="flowbar-wave">
-              {/* 24, not 32.
-                  At 1:1 — the size this is actually seen at, in the corner of an
-                  eye — thirty-two bars across ~150px read as a green texture
-                  rather than "a shape that travels", which is the whole claim
-                  the waveform makes.
-
-                  The compact forms get fewer still: the count has to fall with
-                  the space or the bars stop being individually visible and the
-                  shape stops travelling, which is the only thing this is for. */}
+              {/* 26 across the full bar: enough to read as a travelling shape at
+                  1:1, few enough that each bar stays individually visible. The
+                  compact forms need fewer still, or the bars fuse into texture. */}
               <Waveform
                 level={level}
                 levelRef={levelRef}
-                bars={mini ? 7 : column ? 10 : 24}
+                bars={mini ? 9 : column ? 10 : 26}
                 publish={sink}
+                shaped
               />
             </div>
-            {!mini && !column && <span className="flowbar-time">{elapsed}</span>}
-            {onCancel && !mini && !column ? (
+            {!bare && <span className="flowbar-time">{elapsed}</span>}
+            {onCancel && !bare ? (
               <button
                 type="button"
                 className="flowbar-cancel"
@@ -257,97 +270,93 @@ export function FlowBar({
                 // The pill is a drag handle: without this, pressing the button
                 // hands the pointer to the Windows move loop and the click never
                 // lands.
-                onMouseDown={(e) => e.stopPropagation()}
+                onMouseDown={stop}
                 onClick={(e) => {
                   e.stopPropagation();
                   onCancel();
                 }}
               >
-                <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden focusable="false">
-                  <path
-                    d="M3 3l6 6M9 3l-6 6"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
+                <FlowIcon name="close" />
               </button>
             ) : null}
           </>
         ) : mode === "loading" ? (
-          mini || column ? (
-            <LoadingDots size="sm" tone="warn" variant="wave" />
-          ) : (
-            <span className="flowbar-msg" title={text}>
-              {progress != null ? (
-                <TickingEllipsis
-                  text="Getting the speech model"
-                  suffix={` ${Math.round(progress * 100)}%`}
-                  tone="warn"
-                />
-              ) : (
-                <TickingEllipsis text="Starting the speech engine" tone="warn" />
-              )}
+          <>
+            <span className="flowbar-icon" data-icon="model">
+              <FlowIcon name="model" />
             </span>
-          )
+            {!bare && (
+              <span className="flowbar-msg" title={text}>
+                {pct != null ? "Getting the speech model" : "Starting the speech engine"}
+              </span>
+            )}
+            {!bare && pct != null && <span className="flowbar-pct">{pct}%</span>}
+            <span
+              className="flowbar-rail"
+              role="progressbar"
+              aria-label="Speech model"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct}
+              data-indeterminate={pct == null}
+              style={{ "--p": `${pct ?? 0}%` } as CSSProperties}
+            >
+              <span className="flowbar-rail-fill" />
+            </span>
+          </>
         ) : text !== undefined ? (
           <>
+            <span className="flowbar-icon" data-icon={iconFor(mode, text)}>
+              <FlowIcon name={iconFor(mode, text)} />
+            </span>
             <span className="flowbar-msg" title={text}>
               {text}
             </span>
-            {action && !mini && !column ? (
-              <div className="flowbar-action" onMouseDown={(e) => e.stopPropagation()}>
+            {action && !bare ? (
+              <div className="flowbar-action" onMouseDown={stop}>
                 {action}
               </div>
             ) : null}
           </>
         ) : mode === "working" ? (
-          mini || column ? (
-            <LoadingDots size="sm" tone="body" variant="wave" />
+          bare ? (
+            <FlowMark />
           ) : (
-            <span className="flowbar-working-text t-caption">
-              <TickingEllipsis text="Writing" tone="body" />
+            <span className="flowbar-thread-wrap">
+              <span className="flowbar-label">Writing</span>
+              <span className="flowbar-thread" aria-hidden />
             </span>
           )
-        ) : mini || column ? // Nothing but the dot. In the compact forms the dot *is* the bar, and
-        // the shortcut it would otherwise name is one the user already knows —
-        // which is why they made it small. Hovering brings the words back.
-        null : (
-          <div className="flowbar-idle">
-            <span className="t-caption" style={{ color: "var(--mute)" }}>
-              Hold
-            </span>
-            <Kbd>{hint}</Kbd>
-            {onToggle ? (
-              <button
-                type="button"
-                className="flowbar-go"
-                aria-label="Start dictating"
-                title="Click to dictate"
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggle();
-                }}
-              >
-                {/* A microphone, because this is the one control that opens one.
-                    Drawn rather than pulled from an icon font: two shapes and an
-                    arc is less code than a dependency. */}
-                <svg viewBox="0 0 12 16" width="10" height="13" aria-hidden focusable="false">
-                  <rect x="4" y="1" width="4" height="7" rx="2" fill="currentColor" />
-                  <path
-                    d="M2 7a4 4 0 0 0 8 0M6 11v3"
-                    stroke="currentColor"
-                    strokeWidth="1.3"
-                    strokeLinecap="round"
-                    fill="none"
-                  />
-                </svg>
-              </button>
-            ) : null}
-          </div>
+        ) : onToggle ? (
+          <button
+            type="button"
+            className="flowbar-go"
+            aria-label="Start dictating"
+            title={`Hold ${hint}, or click to dictate`}
+            onMouseDown={stop}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+          >
+            <FlowMark />
+          </button>
+        ) : (
+          <FlowMark />
         )}
       </div>
     </div>
   );
+}
+
+/**
+ * Which glyph names what happened.
+ *
+ * Colour no longer does this job — amber for a clipboard fallback made a normal
+ * outcome look like a warning. Only a real failure is marked, and it is marked on
+ * the glyph; everything else is said in words beside a neutral one.
+ */
+function iconFor(mode: FlowMode, text: string): FlowIconName {
+  if (mode === "failed" || mode === "enginefail") return "warn";
+  return /clipboard/i.test(text) ? "clipboard" : "info";
 }
