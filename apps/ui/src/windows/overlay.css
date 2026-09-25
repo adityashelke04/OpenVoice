@@ -103,11 +103,12 @@
   width: var(--pill-w, 208px);
   padding: 6px;
   /* The bar's own obsidian glass (see `flowbar.css`), so the menu reads as the
-     bar opening up rather than as a second window. Nearly opaque for the same
-     reason: the rows must never compete with whatever is behind them. */
+     bar opening up rather than as a second window. More opaque than the bar:
+     at 97% the words of whatever was behind ghosted between the rows, and a
+     menu is read line by line in a way a glanced-at bar is not. */
   background:
     radial-gradient(120% 60% at 50% -10%, rgb(255 255 255 / 8%), transparent 60%),
-    rgb(12 15 22 / 97%);
+    rgb(12 15 22 / 98.5%);
   background-clip: padding-box;
   border: 1px solid rgb(0 0 0 / 55%);
   /* 12px, and `MENU_RADIUS` in overlay.rs says the same: the window's region is
@@ -170,9 +171,11 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  height: 30px;
+  /* 26: ten rows, two separators and the padding have to fit in the 300px
+     between the pill and the window's edge. See overlay-menu-fit.test.ts. */
+  height: 26px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: 7px;
   text-align: left;
   font: 400 12.5px/1 var(--font-sans);
   color: rgb(243 246 251 / 82%);
@@ -211,37 +214,18 @@
 
 .overlay-menu-sep {
   height: 1px;
-  margin: 5px 8px;
+  margin: 4px 8px;
   background: rgb(255 255 255 / 8%);
 }
 
-/* The shortcut, which the resting bar no longer spells out. */
-.overlay-menu-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px 9px;
-  font: 500 11.5px/1 var(--font-sans);
-  color: rgb(243 246 251 / 55%);
-}
-
-.overlay-menu-head .flowbar-mark {
-  height: 10px;
-  gap: 2px;
-}
-
-.overlay-menu-head .flowbar-mark i {
-  width: 2px;
-  background-size: 26px 100%;
-  background-position: calc(var(--k) * -4px) 0;
-}
-
-.overlay-menu-head kbd {
+/* The shortcut, which the resting bar no longer spells out, beside the row that
+   does the same thing. */
+.overlay-menu button kbd {
   margin-left: auto;
-  padding: 4px 6px;
+  padding: 3px 6px;
   border-radius: 6px;
-  font: 500 11px/1 var(--font-mono);
-  color: rgb(243 246 251 / 82%);
+  font: 500 10.5px/1 var(--font-mono);
+  color: rgb(243 246 251 / 70%);
   background: rgb(255 255 255 / 7%);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 9%);
   white-space: nowrap;

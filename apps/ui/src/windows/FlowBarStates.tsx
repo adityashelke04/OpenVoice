@@ -20,7 +20,6 @@
 import { useEffect, useRef } from "react";
 import { FlowBar } from "../ui";
 import { FlowIcon } from "../ui/flowbar/icons";
-import { FlowMark } from "../ui/flowbar/FlowMark";
 import { geometry } from "./geometry";
 import type { GeometryInput } from "./geometry";
 import { flowMenuRows } from "./useFlowMenu";
@@ -258,17 +257,13 @@ export function FlowBarStates() {
         <div className="fbs-plate" data-plate="editor">
           <div className="fbs-menu">
             <div className="overlay-menu" role="presentation" style={{ width: 280 }}>
-              <div className="overlay-menu-head">
-                <FlowMark />
-                <span>Hold to talk</span>
-                <kbd>Right Ctrl</kbd>
-              </div>
               {rows.map((r) => (
                 <div key={r.id}>
                   {r.sep && <div className="overlay-menu-sep" />}
                   <button type="button" data-row={r.id}>
                     <FlowIcon name={r.icon} />
                     <span>{r.label}</span>
+                    {r.id === "dictate" && <kbd>Right Ctrl</kbd>}
                   </button>
                 </div>
               ))}

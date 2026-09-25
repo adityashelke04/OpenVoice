@@ -13,7 +13,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { FlowBar, flowMode, flowSpeaks, flowText } from "../ui";
 import type { FlowEdge, FlowStatus } from "../ui";
 import { FlowIcon } from "../ui/flowbar/icons";
-import { FlowMark } from "../ui/flowbar/FlowMark";
 import { PILL_H, geometry } from "./geometry";
 import { playCompletionChime, playStartTone } from "../ui/sound";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
@@ -1395,19 +1394,13 @@ export function Overlay() {
   // two placements cannot drift apart.
   const flowMenu = (side: "above" | "below") => (
     <div className={`overlay-menu overlay-menu--${side}`} role="menu" ref={menuRef}>
-      {/* The shortcut, which used to be written on the bar itself. This is where
-          someone who has forgotten it looks. */}
-      <div className="overlay-menu-head" aria-hidden>
-        <FlowMark />
-        <span>Hold to talk</span>
-        <kbd>{hint}</kbd>
-      </div>
       {rows.map((r) => (
         <div key={r.id}>
           {r.sep && <div className="overlay-menu-sep" />}
           <button role="menuitem" data-row={r.id} onClick={r.run}>
             <FlowIcon name={r.icon} />
             <span>{r.label}</span>
+            {r.id === "dictate" && <kbd>{hint}</kbd>}
           </button>
         </div>
       ))}
