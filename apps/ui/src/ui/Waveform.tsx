@@ -1,4 +1,18 @@
 import { useEffect, useRef } from "react";
+import type { CSSProperties } from "react";
+
+/**
+ * How tall bar `i` of `n` may reach, as a fraction of the full height.
+ *
+ * A row of bars that can all hit the ceiling reads as an equaliser. A voice seen
+ * on a waveform is fullest in the middle of a phrase and tapers at both ends, and
+ * shaping the row that way is most of what makes the Flow Bar's wave read as
+ * someone speaking rather than as a level meter. The floor is 0.35 so the ends
+ * still move visibly: an envelope that reached zero would leave dead bars.
+ */
+export function waveEnvelope(i: number, n: number): number {
+  return 0.35 + 0.65 * Math.sin((Math.PI * (i + 0.5)) / n);
+}
 
 /**
  * Scrolling live waveform.
@@ -19,6 +33,7 @@ export function Waveform({
   bars = 32,
   idle,
   publish,
+  shaped = false,
 }: {
   /** Static level. Used by the component sheet and previews. */
   level?: number;
@@ -44,6 +59,8 @@ export function Waveform({
    * inherit downward, so this has to be the element that *owns* the glow.
    */
   publish?: { current: HTMLElement | null };
+  /** Scale each bar by `waveEnvelope`, so the row tapers like a voice. */
+  shaped?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const latest = useRef(level ?? 0);
@@ -54,6 +71,8 @@ export function Waveform({
   external.current = levelRef;
   const sink = useRef(publish);
   sink.current = publish;
+  const isShaped = useRef(shaped);
+  isShaped.current = shaped;
 
   useEffect(() => {
     const el = host.current;
@@ -144,7 +163,8 @@ export function Waveform({
         current[i] += (target[i] - current[i]) * chase;
         // sqrt approximates perceived loudness, so quiet speech still moves the
         // bar visibly while loud speech does not slam into the ceiling.
-        const v = MIN + Math.sqrt(current[i]) * (1 - MIN);
+        const v =
+          MIN + Math.sqrt(current[i]) * (1 - MIN) * (isShaped.current ? waveEnvelope(i, n) : 1);
         // A custom property rather than the transform itself, so the stylesheet
         // owns which axis this scales. Docked to a side edge the bar runs
         // vertically and the wave has to run with it, and the alternative — a
@@ -162,7 +182,13 @@ export function Waveform({
   return (
     <div className="wave" data-idle={idle} ref={host} role="presentation">
       {Array.from({ length: bars }, (_, i) => (
-        <span key={i} className="wave-bar" />
+        <span
+          key={i}
+          className="wave-bar"
+          // The bar's place in the row, so the stylesheet can give it its slice
+          // of the spectrum without a colour being computed per frame.
+          style={{ "--k": i } as CSSProperties}
+        />
       ))}
     </div>
   );
