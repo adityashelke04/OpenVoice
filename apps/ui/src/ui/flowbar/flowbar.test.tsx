@@ -147,3 +147,15 @@ describe("FlowBar between and after", () => {
     expect(bar(container).dataset.confirm).toBe("true");
   });
 });
+
+describe("FlowBar progress rail", () => {
+  // The body carries the entrance animation, and an element with a transform
+  // animation is the containing block for anything absolutely positioned inside
+  // it. Inside the body, the rail rode the text baseline instead of the glass's
+  // bottom edge.
+  it("sits on the bar itself, outside the animated body", () => {
+    const { container } = render(<FlowBar live={false} status="loading" progress={0.4} elapsed="0:00" />);
+    const rail = container.querySelector(".flowbar-rail")!;
+    expect(rail.parentElement?.classList.contains("flowbar")).toBe(true);
+  });
+});

@@ -203,18 +203,6 @@ export function FlowBar({
               </span>
             )}
             {!bare && pct != null && <span className="flowbar-pct">{pct}%</span>}
-            <span
-              className="flowbar-rail"
-              role="progressbar"
-              aria-label="Speech model"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={pct}
-              data-indeterminate={pct == null}
-              style={{ "--p": `${pct ?? 0}%` } as CSSProperties}
-            >
-              <span className="flowbar-rail-fill" />
-            </span>
           </>
         ) : text !== undefined ? (
           <>
@@ -257,6 +245,23 @@ export function FlowBar({
           <FlowMark />
         )}
       </div>
+      {/* On the bar, not in the body: the body's entrance animation makes it the
+          containing block for anything absolutely positioned inside it, and the
+          rail belongs on the glass's bottom edge, not under the words. */}
+      {mode === "loading" ? (
+        <span
+          className="flowbar-rail"
+          role="progressbar"
+          aria-label="Speech model"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          data-indeterminate={pct == null}
+          style={{ "--p": `${pct ?? 0}%` } as CSSProperties}
+        >
+          <span className="flowbar-rail-fill" />
+        </span>
+      ) : null}
     </div>
   );
 }

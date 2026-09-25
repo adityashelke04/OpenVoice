@@ -221,8 +221,8 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px 9px;
-  font: 500 11px/1 var(--font-mono);
-  color: rgb(243 246 251 / 50%);
+  font: 500 11.5px/1 var(--font-sans);
+  color: rgb(243 246 251 / 55%);
 }
 
 .overlay-menu-head .flowbar-mark {
