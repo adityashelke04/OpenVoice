@@ -22,6 +22,8 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-27
+
 ### Changed
 
 - The Flow Bar has a new look that matches the redesigned Hub in every theme.
@@ -1016,7 +1018,8 @@ using an NVIDIA GPU still means running from source.
   sidecar was launched with. Found by writing a real end-to-end test against
   the frozen binary rather than trusting the unit tests already in place.
 
-[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/adityashelke04/OpenVoice/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/adityashelke04/OpenVoice/compare/v1.1.0...v1.1.1
