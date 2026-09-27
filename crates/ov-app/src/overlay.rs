@@ -366,14 +366,16 @@ type Rect = (f64, f64, f64, f64);
 /// offset downward — does not happen to cover.
 type Part = (Rect, f64);
 
-/// The corner radius of the Flow Menu, matching `--r-lg` in `tokens.css`.
+/// The corner radius of the Flow Menu, matching `.overlay-menu`'s
+/// `border-radius` in `overlay.css`.
 ///
 /// One of the numbers this file shares with the stylesheet by hand. It is here
 /// rather than measured because the region has to be right on the first frame,
 /// before anything has been laid out — and unlike the menu's *height*, which
 /// depends on fonts and content and therefore had to become a measurement, a
-/// corner radius is a constant the design owns. If `--r-lg` changes, change this.
-const MENU_RADIUS: f64 = 8.0;
+/// corner radius is a constant the design owns. If the CSS changes, change this:
+/// a region rounded less than the paint shows the webview's white in each corner.
+const MENU_RADIUS: f64 = 12.0;
 
 /// What the frontend is asking the window to be clipped to.
 ///
@@ -1778,7 +1780,10 @@ mod tests {
 
         let (menu, menu_r) = parts[1];
         assert_eq!(menu, (62.0, PILL_TOP - 280.0, 342.0, PILL_TOP));
-        assert_eq!(menu_r, MENU_RADIUS, "the menu keeps --r-lg");
+        assert_eq!(
+            menu_r, 12.0,
+            "the menu is cut to its CSS corner, 12px in overlay.css"
+        );
 
         // Flush: the menu's bottom edge is the pill's top edge, so the two rounded
         // boxes touch and the region has no seam between them.
@@ -2042,7 +2047,7 @@ mod region_tests {
         ((100, 300, 304, 340), 20.0), // the loading pill, 204x40 at 100%
         ((154, 300, 250, 324), 12.0), // the collapsed stroke, 96x24
         ((115, 300, 289, 340), 20.0), // the idle pill, 174x40
-        ((62, 340, 342, 536), 8.0),   // the Flow Menu, 280x196, --r-lg
+        ((62, 340, 342, 536), 12.0),  // the Flow Menu, 280x196, 12px corners
         ((125, 375, 380, 426), 25.0), // a pill at 125%
         ((125, 375, 380, 427), 25.0), // the same, rounded outward by a row
         ((0, 0, 40, 40), 20.0),       // the dot: a circle

@@ -75,13 +75,15 @@ const SHOTS = [
     // discarded on the component's next render.
     prepare: `(() => {
       [...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Dictionary"))?.click();
-      requestAnimationFrame(() => {
-        const el = [...document.querySelectorAll("input")].find((i) => (i.placeholder || "").includes("call use effect"));
+      // After the screen has mounted: a rAF can run before React commits it.
+      setTimeout(() => {
+        // A textarea since the redesign; the setter has to be the element's own.
+        const el = [...document.querySelectorAll("input, textarea")].find((i) => (i.placeholder || "").includes("call use effect"));
         if (!el) return;
-        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value").set;
         set.call(el, "um so we need to call use effect here comma then return null");
         el.dispatchEvent(new Event("input", { bubbles: true }));
-      });
+      }, 400);
     })()`,
   },
   {
@@ -120,6 +122,21 @@ const SHOTS = [
     stub: true,
     prepare: `[...document.querySelectorAll(".nav-item")].find((b) => b.textContent.trim().startsWith("Advanced"))?.click()`,
   },
+  // The same Home in the other themes, for the README's theme row. Each is a
+  // real capture: the stub writes the theme to localStorage before the Hub's
+  // pre-paint read, exactly as choosing it in Settings > Appearance would.
+  ...[
+    ["graphite", "dark"],
+    ["lagoon", "dark"],
+    ["glacier", "light"],
+  ].map(([theme, mode]) => ({
+    name: `hub-theme-${theme}-${mode}`,
+    url: `${BASE}/?window=hub`,
+    width: 1100,
+    height: 742,
+    stub: true,
+    prefs: { theme, mode, solid: false },
+  })),
   {
     name: "design-system",
     url: `${BASE}/?window=sheet`,
@@ -140,20 +157,21 @@ const SHOTS = [
     fit: ".fbs-plate-section",
   },
   {
+    // The README's lead image: the bar listening, over the busy photo plate so
+    // the obsidian glass is seen doing its job. The overlay window itself is
+    // 404x640 with the pill at y=300 (ADR 0007), so a small viewport onto it
+    // captures empty space; the review surface renders the same component at
+    // the size geometry() gives it, and `clip` crops to that one bar.
     name: "flow-bar",
-    url: `${BASE}/?window=overlay`,
-    // The bar now reports the engine honestly, which means that without a
-    // bridge it correctly renders "Starting the speech engine…" -- there is no
-    // engine behind a browser tab. The README wants the idle pill, so this shot
-    // needs the same stubbed `get_status` every other screen uses.
-    stub: true,
-    // Sized to the pill itself. Extra height would be captured as transparent
-    // padding, which reads in a README as a misaligned image.
-    width: 420,
-    height: 56,
-    // The overlay window is transparent by design; a black plate here would
-    // misrepresent how it sits over whatever the user is looking at.
-    transparent: true,
+    url: `${BASE}/?window=flowbar`,
+    width: 1100,
+    height: 900,
+    clip: { selector: '.fbs-plate[data-plate="photo"] .fbs-row:nth-of-type(3) .fbs-row-bar', pad: 18 },
+    // The row's own labels sit inside the margin; the image is of the bar.
+    prepare: `document.querySelectorAll(".fbs-row-label, .fbs-row-width").forEach((el) => (el.style.visibility = "hidden"))`,
+    // The waveform scrolls in from the right. Captured early, its left half is
+    // still the flat line it starts from, which misrepresents a voice.
+    settle: 3000,
   },
 ];
 
@@ -207,18 +225,36 @@ async function main() {
       let stubId = null;
       if (shot.stub) {
         ({ identifier: stubId } = await page.send("Page.addScriptToEvaluateOnNewDocument", {
-          source: tauriStub(),
+          // Every stubbed shot names its theme. The Chrome profile persists
+          // between runs, so a shot that left it to localStorage would inherit
+          // whichever theme the previous capture wrote.
+          source: tauriStub({ prefs: shot.prefs ?? { theme: "glacier", mode: "dark", solid: false } }),
         }));
       }
 
       await page.send("Page.navigate", { url: shot.url });
+      // Wait for the page to have painted text before timing anything from it.
+      // A cold Vite module graph can take longer than the fixed sleep below,
+      // and the capture was then a flat background with nothing on it.
+      for (let i = 0; i < 60; i++) {
+        const { result } = await page.send("Runtime.evaluate", {
+          expression: `document.readyState === "complete" && document.fonts.status === "loaded" && (document.body?.innerText.trim().length ?? 0) > 0`,
+          returnByValue: true,
+        });
+        if (result.value) break;
+        await sleep(250);
+      }
       // Fonts, then the entrance animations, then the shot. Capturing mid-motion
       // produces a half-faded screenshot that looks like a rendering bug.
       await sleep(1400);
       if (shot.prepare) {
         await page.send("Runtime.evaluate", { expression: shot.prepare, awaitPromise: true });
-        await sleep(700);
+        // Long enough for the screen's staggered entrance (shell.css: .7s rise,
+        // 60ms per card) to finish. At 700ms the later cards were still
+        // half-transparent and the capture read as a rendering fault.
+        await sleep(1600);
       }
+      if (shot.settle) await sleep(shot.settle);
 
       // Trim the viewport to one element instead of to a number guessed here.
       // A hard-coded height silently starts cutting through content the first
@@ -243,9 +279,35 @@ async function main() {
         }
       }
 
+      // Crop to one element plus a margin, measured in the page rather than
+      // typed in here, so the crop follows the component when it changes size.
+      let clip;
+      if (shot.clip) {
+        const { result } = await page.send("Runtime.evaluate", {
+          expression: `(() => {
+            const el = document.querySelector(${JSON.stringify(shot.clip.selector)});
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            // Document coordinates: CDP's clip is measured from the top of the
+            // page, not from the viewport.
+            return { x: r.left + scrollX, y: r.top + scrollY, width: r.width, height: r.height };
+          })()`,
+          returnByValue: true,
+        });
+        if (!result.value) throw new Error(`${shot.name}: nothing matches ${shot.clip.selector}`);
+        const { x, y, width, height } = result.value;
+        const pad = shot.clip.pad ?? 0;
+        clip = { x: x - pad, y: y - pad, width: width + pad * 2, height: height + pad * 2, scale: 1 };
+        shot.width = Math.round(clip.width);
+        shot.height = Math.round(clip.height);
+        await sleep(250);
+      }
+
       const { data } = await page.send("Page.captureScreenshot", {
         format: "png",
-        captureBeyondViewport: false,
+        // A clip below the fold needs the page captured past the viewport.
+        captureBeyondViewport: Boolean(clip),
+        ...(clip ? { clip } : {}),
       });
       // The target is reused across shots, so a stub left installed would follow
       // the design sheet and the overlay into their captures.

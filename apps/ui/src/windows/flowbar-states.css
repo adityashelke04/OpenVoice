@@ -60,44 +60,28 @@
 }
 
 /* Hold a one-shot animation at the frame worth looking at. Review surface only:
-   nothing in the app pauses an animation. */
-.fbs-row[data-freeze="true"] .flowbar-mic[data-confirm="true"] {
+   nothing in the app pauses an animation. The landing's pass of light is caught
+   a third of the way round. */
+.fbs-row[data-freeze="true"] .flowbar::after {
   animation-play-state: paused;
-  animation-delay: -120ms;
+  animation-delay: -160ms;
 }
 
-/* ---------------------------------------------------- the landing, framed -- */
-
-.fbs-film {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-6);
+/* The idle bar as the pointer finds it: the mark warmed into the spectrum. The
+   same declarations as `.flowbar:hover .flowbar-go .flowbar-mark i`, because a
+   review surface cannot hover every row at once. */
+.fbs-row[data-hover="true"] .flowbar-mark i {
+  filter: none;
+  opacity: 1;
+  transform: scaleY(calc(var(--h) * 1.06 + 0.04));
 }
 
-.fbs-frame {
+/* The menu hangs above the pill it belongs to, flush, as in the app. */
+.fbs-menu {
   display: flex;
   flex-direction: column;
-  gap: var(--s-2);
-}
-
-/* Each frame holds the same animation at a different offset, so a 420ms event
-   can be read as a sequence instead of guessed at. */
-.fbs-frame-bar {
-  width: 150px;
-  /* The pill takes its height from its window, which on this review surface is
-     whatever the row gives it. Without a height here it collapses to nothing. */
-  height: 40px;
-}
-
-.fbs-frame-bar .flowbar-mic[data-confirm="true"] {
-  animation-play-state: paused;
-  animation-delay: var(--freeze, 0ms);
-}
-
-.fbs-frame-t {
-  font: 400 11px/1 var(--font-mono);
-  color: var(--faint);
-  text-align: center;
+  align-items: center;
+  width: 280px;
 }
 
 .fbs-note {

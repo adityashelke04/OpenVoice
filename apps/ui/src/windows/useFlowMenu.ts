@@ -26,7 +26,11 @@
 import { useCallback } from "react";
 
 /** One row of the Flow Menu. `sep` renders a divider before the item. */
-export type MenuRow = { id: string; label: string; run: () => void; sep?: boolean };
+import type { FlowIconName } from "../ui/flowbar/icons";
+
+/** One row. `icon` follows the label: for a toggle it shows the way the row
+ *  would take the bar, which is what the label says too. */
+export type MenuRow = { id: string; label: string; icon: FlowIconName; run: () => void; sep?: boolean };
 
 /** What the bar is doing. Decides labels and which rows are offered at all. */
 export type FlowMenuState = {
@@ -54,9 +58,10 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
   const { mini, live, working, autoCollapse } = s;
   const { call, close, setMini, setAutoCollapse } = a;
 
-  return [
+  const rows: MenuRow[] = [
     {
       id: "dictate",
+      icon: live ? "stop" : "record",
       label: live ? "Stop dictating" : "Start dictating",
       run: () => {
         call("toggle_session");
@@ -65,6 +70,7 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
     },
     {
       id: "paste",
+      icon: "clipboard",
       label: "Paste last transcript",
       run: () => {
         call("paste_last");
@@ -73,6 +79,7 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
     },
     {
       id: "history",
+      icon: "history",
       label: "Transcript history",
       sep: true,
       run: () => {
@@ -82,6 +89,7 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
     },
     {
       id: "mic",
+      icon: "mic",
       label: "Microphone",
       run: () => {
         call("show_hub_cmd", { tab: "settings" });
@@ -90,6 +98,7 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
     },
     {
       id: "settings",
+      icon: "settings",
       label: "Settings",
       run: () => {
         call("show_hub_cmd", { tab: "settings" });
@@ -108,6 +117,7 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
       // a settings page; over somebody else's window, read once, in a hurry,
       // "Back to center" is the thing the user actually wants.
       id: "recenter",
+      icon: "recenter",
       label: "Back to center",
       sep: true,
       run: () => {
@@ -117,6 +127,7 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
     },
     {
       id: "mini",
+      icon: mini ? "full" : "compact",
       label: mini ? "Full bar" : "Compact bar",
       run: () => {
         setMini(!mini);
@@ -130,6 +141,7 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
       // the user actually wants, and the label has to survive being read once,
       // in a hurry, over somebody else's window.
       id: "auto-collapse",
+      icon: autoCollapse ? "full" : "shrink",
       label: autoCollapse ? "Stay full size" : "Shrink when idle",
       run: () => {
         setAutoCollapse(!autoCollapse);
@@ -141,6 +153,7 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
       // Named for what it does rather than for how long, because an hour is a
       // detail and "you will not see this again today" is the decision.
       id: "snooze",
+      icon: "snooze",
       label: "Hide for an hour",
       run: () => {
         call("overlay_snooze", { minutes: 60 });
@@ -149,13 +162,15 @@ export function flowMenuRows(s: FlowMenuState, a: FlowMenuActions): MenuRow[] {
     },
     {
       id: "dictate-only",
+      icon: "eye",
       label: "Only show while dictating",
       run: () => {
         call("overlay_always_visible", { on: false });
         close();
       },
     },
-  ].filter((r) => !(working && r.id === "dictate"));
+  ];
+  return rows.filter((r) => !(working && r.id === "dictate"));
 }
 
 /** `flowMenuRows` bound to the overlay's own `setMenu` and IPC helper. */
