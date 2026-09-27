@@ -231,7 +231,11 @@ button, input, select { font: inherit; color: inherit; }
 [data-mode="light"] .srow + .srow { border-top-color: rgb(20 40 70 / 8%); }
 .srow .lab { color: var(--ink); font-weight: 500; font-size: 13.5px; }
 .srow .hint { font-size: 12px; color: var(--mute); margin-top: 3px; max-width: 62ch; line-height: 1.45; }
-.scroll { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 14px; }
+.scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; margin-right: -8px; display: flex; flex-direction: column; gap: 14px; }
+    .scroll::-webkit-scrollbar { width: 8px; }
+    .scroll::-webkit-scrollbar-track { background: transparent; }
+    .scroll::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 4px; }
+    .scroll::-webkit-scrollbar-thumb:hover { background: var(--edge-hi); }
 mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); border-radius: 4px; padding: 0 3px; }
 
 /* =====================================================================
@@ -391,6 +395,10 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
 .step .so { font: 400 13px/1.4 var(--mono); color: var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .step.ch .so { color: var(--ink); }
 .step .tg { font-size: 11px; font-weight: 600; color: var(--accent); }
+    .pipe-more { margin-top: 8px; display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px 0 7px; border: 0; border-radius: var(--r-inner); background: none; color: var(--mute); font: 500 12.5px/1 var(--ui); cursor: pointer; }
+    .pipe-more i { font-size: 13px; }
+    .pipe-more:hover { background: var(--glass-2); color: var(--ink); }
+    .pipe-none { margin-top: 10px; }
 .kv { font: 500 12.5px/1 var(--mono); color: var(--ink); white-space: nowrap; }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -629,7 +637,7 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
           <article class="card glass">
             <div class="card-head"><div class="card-title"><i class="ph-bold ph-eye"></i>What that does</div></div>
             <div class="trybox" style="min-height:0"><div class="lbl">You say</div><div class="txt" style="color:var(--body)">um so basically the deploy is done and you know we should ship it</div></div>
-            <div class="trybox out" style="min-height:0; margin-top:8px"><div class="lbl">OpenVoice writes</div><div class="txt">The deploy is done and we should ship it.</div></div>
+            <div class="trybox out" style="min-height:0; margin-top:8px"><div class="lbl">OpenVoice writes</div><div class="txt">So the deploy is done and we should ship it.</div></div>
           </article>
           <article class="card glass">
             <div class="card-head"><div class="card-title"><i class="ph-bold ph-app-window"></i>Used in these apps</div></div>
@@ -716,13 +724,16 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: va
       <article class="card glass">
         <div class="card-head"><div class="card-title"><i class="ph-bold ph-git-diff"></i>How a sentence is rewritten</div><span class="right cap">Code editors style</span></div>
         <div class="field mono">um so we need to call use effect here comma then return null</div>
+        <!-- The four stages that rewrote this sentence, in the order ov-format
+             runs them. The other four (parse, repeats, case, profile) printed
+             the line above again and are behind the reveal. -->
         <div class="pipe">
-          <div class="step"><span class="n"></span><span class="sn">raw</span><span class="so">um so we need to call use effect here comma then return null</span><span></span></div>
           <div class="step ch"><span class="n"></span><span class="sn">fillers</span><span class="so">so we need to call use effect here comma then return null</span><span class="tg">changed</span></div>
-          <div class="step ch"><span class="n"></span><span class="sn">dictionary</span><span class="so">so we need to call <mark>useEffect</mark> here comma then return null</span><span class="tg">changed</span></div>
-          <div class="step ch"><span class="n"></span><span class="sn">commands</span><span class="so">so we need to call useEffect here<mark>,</mark> then return null</span><span class="tg">changed</span></div>
+          <div class="step ch"><span class="n"></span><span class="sn">commands</span><span class="so">so we need to call use effect here<mark>,</mark> then return null</span><span class="tg">changed</span></div>
+          <div class="step ch"><span class="n"></span><span class="sn">dictionary</span><span class="so">so we need to call <mark>useEffect</mark> here, then return null</span><span class="tg">changed</span></div>
           <div class="step ch"><span class="n"></span><span class="sn">capitalize</span><span class="so"><mark>S</mark>o we need to call useEffect here, then return null</span><span class="tg">changed</span></div>
         </div>
+        <button class="pipe-more" aria-expanded="false"><i class="ph-bold ph-caret-down"></i>Show all 8 stages</button>
       </article>
       <div class="set-grid">
         <article class="card glass">

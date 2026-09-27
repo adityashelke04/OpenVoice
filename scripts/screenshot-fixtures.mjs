@@ -273,32 +273,54 @@ export function responses(now = FROZEN_NOW, variant = "normal") {
  * full stop on the Advanced screen that the profile named directly above it
  * would never add, a screenshot contradicting the rules table beside it.
  *
- * The stages are the real ones for this sentence; it is the phrase README
- * quotes and `ov-format` asserts.
+ * EVERY STAGE, AS THE ENGINE RUNS THEM. This used to answer with five stages
+ * named `raw, fillers, dictionary, commands, capitalize`, copied off the
+ * reference page, which had invented them. `ov-format` runs eight — `parse`
+ * and then one per rule in `default_rules()`, with `commands` before
+ * `dictionary` and no stage called `end_period` (the `profile` rule adds the
+ * full stop) — and four of them leave this sentence alone.
+ *
+ * That mattered beyond the names: the Advanced screen's rail was three rows
+ * shorter here than in the app, so the twin check and the README screenshots
+ * both certified a layout that fitted the window while the real one pushed its
+ * last two cards out of sight. `src/test/trace-fixture.test.ts` now reads the
+ * stage list out of the Rust and holds this list to it.
+ *
+ * Verified against `Formatter::with_builtins(...).format_traced(...)`.
  */
 function previewFormat(profile) {
-  const stages = [
-    ["raw", "um so we need to call use effect here comma then return null"],
-    ["fillers", "so we need to call use effect here comma then return null"],
-    ["dictionary", "so we need to call useEffect here comma then return null"],
-    ["commands", "so we need to call useEffect here, then return null"],
-    ["capitalize", "So we need to call useEffect here, then return null"],
-  ];
   const endPeriod = (PROFILES.find((p) => p.name === profile) ?? PROFILES[0]).end_period;
-  if (endPeriod) {
-    stages.push(["end_period", "So we need to call useEffect here, then return null."]);
-  }
-  return stages;
+  const out = "So we need to call useEffect here, then return null";
+  return [
+    ["parse", "um so we need to call use effect here comma then return null"],
+    ["repeats", "um so we need to call use effect here comma then return null"],
+    ["fillers", "so we need to call use effect here comma then return null"],
+    ["commands", "so we need to call use effect here, then return null"],
+    ["dictionary", "so we need to call useEffect here, then return null"],
+    ["case", "so we need to call useEffect here, then return null"],
+    ["capitalize", out],
+    ["profile", endPeriod ? `${out}.` : out],
+  ];
 }
 
-/** The Writing style screen's sample sentence and its trace, as the reference
- *  shows it: fillers stripped, then capitalised, then the full stop. */
+/** The Writing style screen's sample sentence and its trace under `prose`.
+ *
+ *  Only the last line is read (the screen shows the finished sentence), but the
+ *  stages are the engine's for the same reason the one above is: a fixture that
+ *  invents them is a check that agrees with itself. `light` fillers take
+ *  "um", "basically" and "you know" and leave "so" alone, which the reference's
+ *  hand-written version did not know. */
 const STYLE_SAMPLE = "um so basically the deploy is done and you know we should ship it";
+const STYLE_DONE = "So the deploy is done and we should ship it";
 const STYLE_TRACE = [
-  ["raw", STYLE_SAMPLE],
-  ["fillers", "the deploy is done and we should ship it"],
-  ["capitalize", "The deploy is done and we should ship it"],
-  ["end_period", "The deploy is done and we should ship it."],
+  ["parse", STYLE_SAMPLE],
+  ["repeats", STYLE_SAMPLE],
+  ["fillers", "so the deploy is done and we should ship it"],
+  ["commands", "so the deploy is done and we should ship it"],
+  ["dictionary", "so the deploy is done and we should ship it"],
+  ["case", "so the deploy is done and we should ship it"],
+  ["capitalize", STYLE_DONE],
+  ["profile", `${STYLE_DONE}.`],
 ];
 
 /** Traces keyed by the exact input text. Anything else falls back to the

@@ -183,3 +183,17 @@ html[data-window="hub"] .trybox textarea.txt:focus-visible { outline: none; }
 .step .so { font: 400 13px/1.4 var(--mono); color: var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .step.ch .so { color: var(--ink); }
 .step .tg { font-size: 11px; font-weight: 600; color: var(--accent); }
+
+/* -- Additions: advanced ------------------------------------------------------ */
+/* The rail opens on the rules that rewrote the sentence (Advanced.tsx). This
+   reveals the rest. Quiet on purpose: it is the second question the screen gets
+   asked, not the first, and a real button here would compete with the rail. */
+.pipe-more { margin-top: 8px; display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px 0 7px; border: 0; border-radius: var(--r-inner); background: none; color: var(--mute); font: 500 12.5px/1 var(--ui); cursor: pointer; }
+.pipe-more svg { font-size: 13px; transition: transform .2s var(--ease); }
+.pipe-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+.pipe-more:hover { background: var(--glass-2); color: var(--ink); }
+/* The rail is empty because nothing happened, which is itself the answer. */
+.pipe-none { margin-top: 10px; }
+@media (prefers-reduced-motion: reduce) {
+  .pipe-more svg { transition: none; }
+}
