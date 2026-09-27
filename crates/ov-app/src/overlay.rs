@@ -1780,7 +1780,10 @@ mod tests {
 
         let (menu, menu_r) = parts[1];
         assert_eq!(menu, (62.0, PILL_TOP - 280.0, 342.0, PILL_TOP));
-        assert_eq!(menu_r, 12.0, "the menu is cut to its CSS corner, 12px in overlay.css");
+        assert_eq!(
+            menu_r, 12.0,
+            "the menu is cut to its CSS corner, 12px in overlay.css"
+        );
 
         // Flush: the menu's bottom edge is the pill's top edge, so the two rounded
         // boxes touch and the region has no seam between them.
