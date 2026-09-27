@@ -9,7 +9,7 @@ No cloud, no account, no telemetry.
 [![Release](https://img.shields.io/github/v/release/adityashelke04/OpenVoice?include_prereleases&label=release&color=44D62C)](https://github.com/adityashelke04/OpenVoice/releases)
 [![CI](https://github.com/adityashelke04/OpenVoice/actions/workflows/ci.yml/badge.svg)](https://github.com/adityashelke04/OpenVoice/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Status](https://img.shields.io/badge/status-alpha-orange)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%26%2011-5AD7F0)
 [![Website](https://img.shields.io/badge/website-openvoice--dictation.vercel.app-44D62C)](https://openvoice-dictation.vercel.app)
 
 **[openvoice-dictation.vercel.app](https://openvoice-dictation.vercel.app)**
@@ -17,25 +17,26 @@ No cloud, no account, no telemetry.
 **[⬇ Download for Windows](https://github.com/adityashelke04/OpenVoice/releases/download/download/OpenVoice-x64-setup.exe)** — one `.exe`, speech engine included.
 [All releases →](https://github.com/adityashelke04/OpenVoice/releases) · [Docs](https://openvoice-dictation.vercel.app/docs) · [Changelog](https://openvoice-dictation.vercel.app/changelog)
 
-<img src="docs/images/flow-bar.png" width="420" alt="The Flow Bar: a small floating pill reading &quot;Hold Right Ctrl&quot;">
+<img src="docs/images/flow-bar.png" width="420" alt="The Flow Bar while listening: a dark glass pill holding a waveform that runs from green through mint and cyan to periwinkle, a 0:04 timer, and a button to discard the dictation">
 
 </div>
 
-> **Status: alpha.** It runs end to end — hotkey, capture, transcription,
-> formatting, injection, and history all work on Windows, and `v0.4.2` is
-> published as a pre-release you can install today. What is not done is
-> distribution polish: nothing is code-signed, so Windows will warn you about an
-> unknown publisher, and the bundled speech engine is CPU-only.
+> **Status.** It runs end to end on Windows 10 and 11 — hotkey, capture,
+> transcription, formatting, injection and history — and every release is
+> published on the [releases page](https://github.com/adityashelke04/OpenVoice/releases).
+> Two things are not done: nothing is code-signed, so Windows will warn you about
+> an unknown publisher, and the bundled speech engine is CPU-only.
 
 ---
 
 <div align="center">
-<img src="docs/images/hub-home.png" width="880" alt="OpenVoice home screen: 9,540 words dictated, a speaking speed of 152 words per minute charted against a 40 wpm typing baseline and 150 wpm average speech, 2 hours 56 minutes saved, a 6 day streak, most-used app VS Code, and a list of recent dictations">
+<img src="docs/images/hub-home.png" width="880" alt="OpenVoice's Home screen in the Glacier theme, dark: frosted glass panels over a teal and blue backdrop. At the top, the last dictation, a two-sentence Slack message, with Copy and Fix a word buttons. Below, earlier dictations grouped by day with the app each went to, and on the right a speaking speed of 152 words per minute, 2 hours 56 minutes saved, a 6 day streak and 9,540 words dictated">
 <br>
-<sub>Home. Your speaking speed is measured from how long you actually spoke, not
-from wall-clock time, and placed against the 40 wpm typing baseline — because the
-alternative to dictating is typing, not silence. The figures here are fixture
-data; see <a href="#design">Design</a>.</sub>
+<sub>Home opens on the last thing you said, so the paragraph that went to the
+wrong window is one click from your clipboard. Your speaking speed is measured
+from how long you actually spoke and set against the 40 wpm typing baseline —
+because the alternative to dictating is typing, not silence. The figures here are
+fixture data; see <a href="#design">Design</a>.</sub>
 </div>
 
 ---
@@ -85,11 +86,28 @@ app deserves.
 One window and one floating pill. The window is where you teach it; the pill is
 the only part you see while you work.
 
+The window comes in three frosted-glass themes — **Glacier**, **Graphite** and
+**Lagoon** — each in light and dark, picked in Settings → Appearance or left to
+follow Windows.
+
+<table>
+<tr>
+<td><img src="docs/images/hub-theme-graphite-dark.png" alt="Home in the Graphite theme, dark: neutral slate glass with green accents"></td>
+<td><img src="docs/images/hub-theme-lagoon-dark.png" alt="Home in the Lagoon theme, dark: deep green-teal glass with mint accents"></td>
+<td><img src="docs/images/hub-theme-glacier-light.png" alt="Home in the Glacier theme, light: pale frosted glass over mint and sky blue, with teal accents"></td>
+</tr>
+<tr>
+<td align="center"><sub>Graphite, dark</sub></td>
+<td align="center"><sub>Lagoon, dark</sub></td>
+<td align="center"><sub>Glacier, light</sub></td>
+</tr>
+</table>
+
 <div align="center">
-<img src="docs/images/hub-advanced.png" width="880" alt="The Advanced screen. A box contains the phrase 'um so we need to call use effect here comma then return null', and beneath it a table shows the sentence after each rule in turn: raw, fillers, dictionary, commands, capitalize. Below that, a Files card gives the log path and the settings folder">
+<img src="docs/images/hub-advanced.png" width="880" alt="The Advanced screen. The phrase 'um so we need to call use effect here comma then return null' sits above four rows showing the sentence after each rule that changed it: fillers, commands, dictionary and capitalize, each marked changed, with a link to show all 8 stages">
 <br>
-<sub><b>The formatter, rule by rule.</b> Every stage the sentence passed through
-and what it looked like after each one. When a transcript comes out wrong this
+<sub><b>The formatter, rule by rule.</b> The rules that rewrote the sentence and
+what it looked like after each one; "Show all 8 stages" opens the whole pipeline. When a transcript comes out wrong this
 turns "the dictation is bad" into the name of the rule that did it — and it is
 the same trace <code>ov format --trace</code> prints in a terminal.</sub>
 </div>
@@ -97,7 +115,7 @@ the same trace <code>ov format --trace</code> prints in a terminal.</sub>
 <br>
 
 <div align="center">
-<img src="docs/images/hub-dictionary.png" width="880" alt="The Dictionary screen. A phrase typed into 'Try a phrase' reads 'um so we need to call use effect here comma then return null', and the box below shows the formatted result: 'So we need to call useEffect here, then return null.' Underneath, a table of corrections maps spoken forms such as 'use effect' and 'jason' to written forms useEffect and JSON">
+<img src="docs/images/hub-dictionary.png" width="880" alt="The Dictionary screen. Under 'Try a phrase', the box for what OpenVoice heard reads 'um so we need to call use effect here comma then return null', and the box beside it shows what lands at your cursor: 'So we need to call useEffect here, then return null.' Underneath, twelve corrections map spoken forms such as 'use effect', 'cube control' and 'jason' to useEffect, kubectl and JSON">
 <br>
 <sub><b>Dictionary.</b> Type what OpenVoice wrote, and watch the rules run on it.
 The corrections below are the ones it ships with; add your own and the box above
@@ -107,11 +125,12 @@ changes as you type.</sub>
 <br>
 
 <div align="center">
-<img src="docs/images/flow-bar-states.png" width="880" alt="The Flow Bar in six states over a white document: idle showing 'Hold Right Ctrl', listening with a green waveform and a 0:04 timer, working showing 'Writing…', landed, a clipboard fallback reading 'Copied to clipboard — press Ctrl+V', and a failure reading 'No text was produced'">
+<img src="docs/images/flow-bar-states.png" width="880" alt="Every Flow Bar state over a white document. At rest it is a small dark glass pill holding the logo's seven grey bars. Listening and hands-free widen it and fill it with a green-to-periwinkle waveform, a timer and a discard button. Writing shows a thin progress line. Landed lights the seven bars in the spectrum. Clipboard, failed, discarded, starting, downloading and engine-down each show an icon and a short message. Compact, put-away and docked forms follow">
 <br>
 <sub><b>The Flow Bar</b>, every state, over a white document — one of the four
-backdrops it is reviewed against, because a border that reads on black and
-disappears on white is a defect worth catching before you ship it.</sub>
+backdrops it is reviewed against. It is one design in every theme: dark glass
+with the logo's seven bars at rest, and colour only while the microphone is
+open.</sub>
 </div>
 
 <details>
@@ -120,7 +139,7 @@ disappears on white is a defect worth catching before you ship it.</sub>
 <br>
 
 <div align="center">
-<img src="docs/images/hub-writing-style.png" width="880" alt="The Writing style screen with tabs for default, Terminals, Code editors, and Messages and documents. The default tab shows toggles for capitalising sentences, ending with a full stop, spoken punctuation and spoken naming styles, and a dropdown for filler word removal set to Light">
+<img src="docs/images/hub-writing-style.png" width="880" alt="The Writing style screen with tabs for Messages and documents, Code editors, Terminals and Everything else. The Messages tab shows toggles for capitalising sentences, ending with a full stop, spoken punctuation and spoken naming styles, filler word removal set to Aggressive, and beside them a before-and-after example of what the rules do">
 <br>
 <sub>The same words should look different depending on where they land. Four sets
 of rules, and OpenVoice picks one from whichever app has focus — a chat message
@@ -130,7 +149,7 @@ gets a capital letter and a full stop, a terminal command gets neither.</sub>
 <br>
 
 <div align="center">
-<img src="docs/images/hub-settings.png" width="880" alt="The Settings screen: shortcut set to Right Ctrl, activation set to Hold to talk, microphone on the system default, language on auto-detect, sound feedback on, maximum recording of 2 minutes, and an Updates section explaining that the launch check sends one request carrying no identifier">
+<img src="docs/images/hub-settings.png" width="880" alt="The Settings screen. Dictation: shortcut Right Ctrl, Hold to talk, microphone on the system default, sound feedback on, maximum recording 2 minutes. Appearance: theme cards for Glacier, Graphite and Lagoon, light, system or dark, and reduce transparency. Privacy: keep recordings off, hide secrets in history on, keep history forever, sends nothing anywhere. Updates: check on launch, check now, and the version">
 <br>
 <sub>Nothing here is decorative. Transcript redaction, audio retention, toggle
 activation and the recording limit were all controls with nothing behind them
@@ -424,14 +443,13 @@ says.
 
 ## Design
 
-One accent colour, `#44D62C`, and it means exactly one thing: the microphone is
-open. Never success, never links, never emphasis. The surface ladder spans 28 hex
-points end to end, because a dark UI that jumps `#111 → #222 → #333` is the
-clearest marker of a system nobody thought about.
-
-<div align="center">
-<img src="docs/images/design-system.png" width="880" alt="The OpenVoice design system sheet: the surface and text ladders with their contrast ratios, the single accent colour, and the type scale">
-</div>
+The Hub is frosted glass over Windows 11 Mica, in three themes that each come in
+light and dark. The Flow Bar deliberately does not follow them: it floats over
+other people's apps, so it is one design everywhere — obsidian glass, the logo's
+seven bars at rest, no text, and colour only while the microphone is open. Then
+the waveform runs from the logo's green through mint and cyan to periwinkle
+(`#44d62c → #52e3b0 → #5ad7f0 → #8aa8ff`), and when your words land one pass of
+light goes round the rim.
 
 The whole system is a live page rather than a document. It needs no Rust and no
 Windows — the frontend runs standalone in any browser:
@@ -442,8 +460,9 @@ npm run dev:ui          # then open http://localhost:5199/?window=sheet
 ```
 
 `?window=hub` is the main window, `?window=overlay` is the Flow Bar on its own,
-and `?window=flowbar` is every Flow Bar state at once, over the four kinds of
-surface it has to stay legible against.
+`?window=flowbar` is every Flow Bar state at once, over the four kinds of
+surface it has to stay legible against, and `?window=sheet` is the original
+component sheet.
 
 Every screenshot in this README is captured from that same running UI by
 [`scripts/screenshots.mjs`](scripts/screenshots.mjs), so none of them can drift
@@ -455,7 +474,8 @@ month's worth of totals. Nothing here is a mocked component or a drawing of a
 screen: the real `Hub` renders against the real `invoke` boundary, and only the
 far side of it is canned. That is also why these are safe to recapture — the
 previous versions came off a live machine and published whatever had last been
-dictated into it.
+dictated into it. The PNGs are reduced to 256 colours afterwards, to keep the
+repository small.
 
 ## Contributing
 
