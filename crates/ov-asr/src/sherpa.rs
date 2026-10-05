@@ -73,6 +73,91 @@ use crate::catalog::{ModelKind, ModelSpec};
 /// takes the smaller share deliberately. `ov bench --threads` is how to revisit it.
 pub const DEFAULT_DECODE_THREADS: i32 = 4;
 
+/// How hard the decoder leans toward a hotword, in sherpa-onnx's score units.
+///
+/// Measured on Parakeet v2 against 150 LibriSpeech clips (2,563 words) and 16
+/// synthesized dictations of coding-tool names:
+///
+/// | score | tool-name errors | everyday English errors |
+/// |------:|-----------------:|------------------------:|
+/// | none  |              14% |                    1.4% |
+/// | 1.5   |             2.5% |                    1.4% |
+/// | 2.0   |             0.8% |                    1.7% |
+///
+/// 2.0 is a little better on the names and starts costing ordinary speech, which
+/// is the wrong trade for a tool used mostly for ordinary speech.
+pub const HOTWORD_SCORE: f32 = 1.5;
+
+/// Most terms offered to one decode. The score applies per term, so a long list
+/// stops being a hint and starts being a pull on every word.
+pub const MAX_HOTWORDS: usize = 64;
+
+/// Audio quieter than this is never decoded with hotwords.
+///
+/// Measured: with hotwords on, two seconds of digital silence came back as
+/// "Claude" twelve times. A model that is told a word is likely will say it
+/// into nothing. Plain decoding returns empty text for silence, and that is the
+/// property the app leans on instead of a voice-activity filter.
+const MIN_HOTWORD_RMS: f32 = 0.004;
+
+/// The vocabulary as sherpa-onnx wants it: terms separated by `/`.
+///
+/// A term holding `/` would split in two and one holding `:` would be read as a
+/// score, so those are dropped rather than quietly changing meaning.
+fn hotwords_arg(terms: &[String]) -> Option<String> {
+    let mut kept: Vec<&str> = Vec::new();
+    for t in terms {
+        let t = t.trim();
+        if t.is_empty() || t.contains('/') || t.contains(':') || kept.contains(&t) {
+            continue;
+        }
+        kept.push(t);
+        if kept.len() == MAX_HOTWORDS {
+            break;
+        }
+    }
+    (!kept.is_empty()).then(|| kept.join("/"))
+}
+
+/// Whether `text` says one word three times running.
+///
+/// Nobody dictates that on purpose, and it is what a decoder biased toward a
+/// word produces from noise. Used to throw a boosted decode away.
+fn repeats_a_word(text: &str) -> bool {
+    let words: Vec<String> = text
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .collect();
+    words
+        .windows(3)
+        .any(|w| !w[0].is_empty() && w[0] == w[1] && w[1] == w[2])
+}
+
+/// The token list rewritten as the vocabulary file hotwords are encoded with.
+///
+/// The release ships `tokens.txt` and no `bpe.vocab`. sherpa-onnx's own Parakeet
+/// hotword example derives one this way: every token at an equal score, which
+/// makes the encoder prefer the longest match.
+fn bpe_vocab_from_tokens(tokens: &str) -> String {
+    tokens
+        .lines()
+        .filter_map(|l| l.split(' ').next().filter(|t| !t.is_empty()))
+        .map(|t| format!("{t}\t-1.0\n"))
+        .collect()
+}
+
+/// Whether `samples` is loud enough to be speech rather than silence or hiss.
+fn has_speech_energy(samples: &[f32]) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+    let mean_square = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+    mean_square.sqrt() >= MIN_HOTWORD_RMS
+}
+
 /// A loaded model, ready to decode.
 pub struct SherpaTranscriber {
     /// Which catalogue entry this is. Carried so `model_id` reports the id that
@@ -80,6 +165,10 @@ pub struct SherpaTranscriber {
     /// directory name a user could rename.
     spec: &'static ModelSpec,
     recognizer: OfflineRecognizer,
+    /// Whether the recognizer was built to accept hotwords. False for a model
+    /// that was not measured with them, and when the vocabulary file they need
+    /// could not be written -- in which case dictation still works, unboosted.
+    hotwords: bool,
 }
 
 // `OfflineRecognizer` wraps an opaque C pointer and has nothing printable in it,
@@ -159,6 +248,7 @@ impl SherpaTranscriber {
             }
         }
         cfg.model_config.num_threads = threads;
+        let hotwords = spec.hotwords && enable_hotwords(&mut cfg, &dir, spec);
 
         let started = std::time::Instant::now();
         let recognizer = OfflineRecognizer::create(&cfg).ok_or_else(|| {
@@ -175,8 +265,38 @@ impl SherpaTranscriber {
             "speech model loaded"
         );
 
-        Ok(Self { spec, recognizer })
+        Ok(Self {
+            spec,
+            recognizer,
+            hotwords,
+        })
     }
+}
+
+/// Switch `cfg` to beam search with hotwords. Returns false, leaving `cfg` as it
+/// was, if the vocabulary file they need cannot be made.
+///
+/// The file goes in the temp directory rather than beside the model: the model
+/// lives under the install directory, which a normal user cannot write to.
+fn enable_hotwords(cfg: &mut OfflineRecognizerConfig, dir: &Path, spec: &ModelSpec) -> bool {
+    let vocab = std::fs::read_to_string(dir.join("tokens.txt"))
+        .map(|t| bpe_vocab_from_tokens(&t))
+        .and_then(|v| {
+            let path = std::env::temp_dir().join(format!("openvoice-{}.bpe.vocab", spec.id));
+            std::fs::write(&path, v).map(|()| path)
+        });
+    let Some(path) = vocab.ok().and_then(|p| p.to_str().map(str::to_owned)) else {
+        tracing::warn!(
+            model = spec.id,
+            "hotword vocabulary could not be written; decoding without hotwords"
+        );
+        return false;
+    };
+    cfg.model_config.modeling_unit = Some("bpe".into());
+    cfg.model_config.bpe_vocab = Some(path);
+    cfg.decoding_method = Some("modified_beam_search".into());
+    cfg.hotwords_score = HOTWORD_SCORE;
+    true
 }
 
 /// A path under `dir`, as the UTF-8 string the C API requires.
@@ -190,6 +310,19 @@ fn path_str(dir: &Path, file: &str) -> Result<String> {
     })
 }
 
+impl SherpaTranscriber {
+    /// One decode, optionally leaning toward `hotwords`.
+    fn decode(&self, samples: &[f32], hotwords: Option<&str>) -> String {
+        let stream = match hotwords {
+            Some(h) => self.recognizer.create_stream_with_hotwords(h),
+            None => self.recognizer.create_stream(),
+        };
+        stream.accept_waveform(Pcm16k::RATE as i32, samples);
+        self.recognizer.decode(&stream);
+        stream.get_result().map(|r| r.text).unwrap_or_default()
+    }
+}
+
 impl Transcriber for SherpaTranscriber {
     fn warm(&self) -> Result<()> {
         // Weights are already resident: `new` loaded them, and loading twice
@@ -198,16 +331,20 @@ impl Transcriber for SherpaTranscriber {
         Ok(())
     }
 
-    fn transcribe(&self, audio: &Pcm16k, _hint: &DecodeHint) -> Result<Transcript> {
+    fn transcribe(&self, audio: &Pcm16k, hint: &DecodeHint) -> Result<Transcript> {
         if audio.samples.is_empty() {
             return Err(Error::Transcription("no audio to transcribe".into()));
         }
 
         let started = std::time::Instant::now();
-        let stream = self.recognizer.create_stream();
-        stream.accept_waveform(Pcm16k::RATE as i32, &audio.samples);
-        self.recognizer.decode(&stream);
-        let text = stream.get_result().map(|r| r.text).unwrap_or_default();
+        let boost = (self.hotwords && has_speech_energy(&audio.samples))
+            .then(|| hotwords_arg(&hint.vocabulary))
+            .flatten();
+        let mut text = self.decode(&audio.samples, boost.as_deref());
+        if boost.is_some() && repeats_a_word(&text) {
+            tracing::warn!(%text, "boosted decode repeated a word; decoding without hotwords");
+            text = self.decode(&audio.samples, None);
+        }
 
         tracing::debug!(
             decode_ms = started.elapsed().as_millis() as u64,
@@ -293,6 +430,134 @@ mod tests {
                 .samples::<i16>()
                 .map(|s| f32::from(s.expect("sample")) / 32768.0)
                 .collect(),
+        }
+    }
+
+    #[test]
+    fn hotwords_are_joined_with_slashes_and_cleaned() {
+        let v: Vec<String> = [" Claude Code ", "", "a/b", "c:d", "Codex", "Codex"]
+            .map(String::from)
+            .into();
+        // sherpa-onnx splits on `/` and reads `:` as a score, so a term holding
+        // either would silently become two terms or a boost it never asked for.
+        assert_eq!(hotwords_arg(&v).as_deref(), Some("Claude Code/Codex"));
+        assert_eq!(hotwords_arg(&[]), None);
+        assert_eq!(hotwords_arg(&[String::new()]), None);
+    }
+
+    #[test]
+    fn hotwords_are_capped() {
+        let v: Vec<String> = (0..MAX_HOTWORDS + 20).map(|i| format!("term{i}")).collect();
+        let arg = hotwords_arg(&v).expect("some terms");
+        assert_eq!(arg.split('/').count(), MAX_HOTWORDS);
+    }
+
+    #[test]
+    fn a_word_said_three_times_running_is_a_hallucination() {
+        assert!(repeats_a_word("Claude Claude Claude"));
+        assert!(repeats_a_word("so Claude, Claude, claude."));
+        assert!(!repeats_a_word("Claude Claude"));
+        assert!(!repeats_a_word("that that is odd"));
+        assert!(!repeats_a_word(""));
+    }
+
+    #[test]
+    fn the_vocabulary_for_hotwords_is_derived_from_tokens() {
+        let tokens = "<unk> 0\n\u{2581}t 1\n\n\u{2581}th 2\n";
+        assert_eq!(
+            bpe_vocab_from_tokens(tokens),
+            "<unk>\t-1.0\n\u{2581}t\t-1.0\n\u{2581}th\t-1.0\n"
+        );
+    }
+
+    #[test]
+    fn quiet_audio_is_not_trusted_with_hotwords() {
+        assert!(!has_speech_energy(&vec![0.0; 16_000]));
+        assert!(!has_speech_energy(&vec![0.001; 16_000]));
+        assert!(has_speech_energy(&vec![0.1; 16_000]));
+        assert!(!has_speech_energy(&[]));
+    }
+
+    /// Deterministic noise, so a failure is reproducible.
+    fn noise(len: usize, amplitude: f32) -> Pcm16k {
+        let mut x: u32 = 0x1234_5678;
+        Pcm16k {
+            samples: (0..len)
+                .map(|_| {
+                    x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    ((x >> 8) as f32 / 8_388_608.0 - 1.0) * amplitude
+                })
+                .collect(),
+        }
+    }
+
+    fn names() -> DecodeHint {
+        DecodeHint {
+            vocabulary: ["Claude Code", "Codex", "Docling", "PaddleOCR", "Claude"]
+                .map(String::from)
+                .into(),
+            language: None,
+        }
+    }
+
+    #[test]
+    fn silence_with_a_vocabulary_still_yields_empty_text() {
+        if skip() {
+            return;
+        }
+        // Measured: with hotwords on and no guard, two seconds of silence came
+        // back as "Claude Claude Claude Claude ...". Silence must stay empty.
+        let out = load().transcribe(&silence(), &names()).expect("decode");
+        assert_eq!(out.text, "", "silence must not produce words");
+    }
+
+    #[test]
+    fn noise_with_a_vocabulary_does_not_invent_the_vocabulary() {
+        if skip() {
+            return;
+        }
+        let t = load();
+        for amplitude in [0.002, 0.02, 0.2] {
+            let out = t
+                .transcribe(&noise(48_000, amplitude), &names())
+                .expect("decode");
+            let text = out.text.to_lowercase();
+            assert!(
+                !text.contains("claude") && !text.contains("codex") && !text.contains("docling"),
+                "noise at {amplitude} produced {:?}",
+                out.text
+            );
+        }
+    }
+
+    #[test]
+    fn a_vocabulary_does_not_change_what_ordinary_speech_says() {
+        if skip() {
+            return;
+        }
+        let t = load();
+        let plain = t
+            .transcribe(&speech(), &DecodeHint::default())
+            .expect("decode");
+        let boosted = t.transcribe(&speech(), &names()).expect("decode");
+        assert_eq!(plain.text, boosted.text);
+    }
+
+    #[test]
+    fn only_the_verified_model_decodes_with_hotwords() {
+        // Upstream reports empty or invented text about one time in five when
+        // beam search runs on Parakeet v3 (k2-fsa/sherpa-onnx#3267). v2 was
+        // measured here; v3 has not been, so it stays on greedy search.
+        assert!(bundled().hotwords);
+        for spec in crate::catalog::CATALOG
+            .iter()
+            .filter(|m| m.id != bundled().id)
+        {
+            assert!(
+                !spec.hotwords,
+                "{} was never measured with hotwords",
+                spec.id
+            );
         }
     }
 

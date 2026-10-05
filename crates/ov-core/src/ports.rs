@@ -132,14 +132,16 @@ pub trait AudioSource: Send + Sync {
 
 /// Hints that bias decoding toward the vocabulary the user actually uses.
 ///
-/// **`vocabulary` is off by default, and that is a measured result rather than an
-/// oversight.** Seeding Whisper's initial prompt with the user's terms was supposed
-/// to beat repairing them afterwards, because the decoder still has acoustic
-/// evidence that post-processing has thrown away. An A/B on identical audio showed
-/// the opposite: a prompt full of camelCase identifiers teaches the model to *write*
-/// camelCase, so it welds ordinary spoken words together — including the very
-/// command words the formatter needs to see. See the `ov_format::dictionary` module
-/// docs and `docs/ARCHITECTURE.md` §5.2 for the transcripts.
+/// What `vocabulary` does depends on the model. For Whisper it seeded the initial
+/// prompt, and that was measured to make output *worse*: a prompt full of
+/// camelCase identifiers teaches the model to *write* camelCase, so it welds
+/// ordinary spoken words together -- including the command words the formatter
+/// needs to see. See the `ov_format::dictionary` module docs.
+///
+/// For Parakeet it becomes hotwords, which bias how a word the audio already
+/// supports is *spelled* and do not touch the rest. That was measured to help a
+/// great deal; see `ov_asr::sherpa::HOTWORD_SCORE`. A model not measured with
+/// hotwords ignores the vocabulary.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DecodeHint {
     /// Vocabulary terms, packed into the model's initial prompt budget.

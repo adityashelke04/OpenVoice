@@ -24,8 +24,11 @@
 //! the problem it solves, because this dictionary can fix `use effect` anyway,
 //! whereas nothing downstream can recover words the model already welded together.
 //!
-//! Hints remain available for genuinely unguessable proper nouns, but they are off
-//! by default. See `ov_core::ports::DecodeHint`.
+//! Hints remain available for genuinely unguessable proper nouns. For Whisper
+//! they were off by default; for Parakeet they are the decoder's hotwords, which
+//! bias the *spelling* of a word the audio already supports rather than seeding
+//! a prompt, and which measured as a large gain. See `ov_core::ports::DecodeHint`
+//! and `ov_asr::sherpa`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -206,6 +209,32 @@ pub fn hint_terms(entries: &[Entry]) -> Vec<String> {
     seen
 }
 
+/// Terms offered to the decoder: the user's own dictionary first, then the
+/// builtin proper nouns.
+///
+/// The user's entries all go, not just flagged ones: typing a term into the
+/// Dictionary is already saying it matters. Builtins stay limited to
+/// [`hint_terms`], for the reason given there. Bounded, because the decoder
+/// leans toward every term it is given and a long list pulls on every word.
+#[must_use]
+pub fn decoder_terms(user: &[Entry], builtin: &[Entry]) -> Vec<String> {
+    const MAX: usize = 48;
+    let mut terms: Vec<String> = Vec::new();
+    let offered = user
+        .iter()
+        .map(|e| e.written.clone())
+        .chain(hint_terms(builtin));
+    for t in offered {
+        if !terms.contains(&t) {
+            terms.push(t);
+        }
+        if terms.len() == MAX {
+            break;
+        }
+    }
+    terms
+}
+
 /// The vocabulary shipped by default.
 ///
 /// Kept deliberately small. A large shipped dictionary produces confident wrong
@@ -299,10 +328,37 @@ pub fn builtin_entries() -> Vec<Entry> {
         // acoustically, before any of this runs.
         Entry::proper(
             "Claude Code",
-            &["cloud code", "plot code", "clod code", "cloud coat"],
+            &[
+                "cloud code",
+                "plot code",
+                "clod code",
+                "cloud coat",
+                "clawed code",
+                "claw code",
+                "clot code",
+                // The speech model hears "Code" as the product name next to it.
+                // "Claude Codex" is not a thing anyone dictates on purpose.
+                "claude codex",
+            ],
             "code",
         ),
         Entry::proper("Claude", &["clawed", "claud", "clode"], "code"),
+        // Spoken forms are the ones the model produced from real dictation, as
+        // above. These are offered to the decoder too: the model has never seen
+        // "Docling" or "PaddleOCR", so it can only spell them if told they are
+        // candidates while it still has the audio.
+        Entry::proper("Codex", &["codex"], "code"),
+        Entry::proper(
+            "Docling",
+            &["doc ling", "dock ling", "dockling", "dock link"],
+            "code",
+        ),
+        Entry::proper(
+            "PaddleOCR",
+            &["paddle ocr", "paddle o c r", "paddle o see are"],
+            "code",
+        ),
+        Entry::proper("OpenCV", &["open c v", "open cv", "open see v"], "code"),
     ]
 }
 
@@ -374,6 +430,70 @@ mod tests {
             d.lookup(&["use".into(), "effect".into()]),
             Some("useEffect")
         );
+    }
+
+    fn words(s: &str) -> Vec<String> {
+        s.split(' ').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn repairs_the_tool_names_heard_in_real_dictation() {
+        // Every left-hand side here is a transcript the speech model really
+        // produced from the owner's own history, not a plausible guess.
+        let d = dict();
+        for (heard, written) in [
+            ("doc ling", "Docling"),
+            ("dock ling", "Docling"),
+            ("dockling", "Docling"),
+            ("paddle ocr", "PaddleOCR"),
+            ("paddle o c r", "PaddleOCR"),
+            ("open c v", "OpenCV"),
+            ("open cv", "OpenCV"),
+            ("clawed code", "Claude Code"),
+            ("claude codex", "Claude Code"),
+            ("clot code", "Claude Code"),
+        ] {
+            assert_eq!(d.lookup(&words(heard)), Some(written), "heard {heard:?}");
+        }
+    }
+
+    #[test]
+    fn the_tool_names_are_offered_to_the_decoder() {
+        let hints = hint_terms(&builtin_entries());
+        for name in ["Claude Code", "Codex", "Docling", "PaddleOCR", "OpenCV"] {
+            assert!(hints.iter().any(|h| h == name), "{name} missing: {hints:?}");
+        }
+    }
+
+    #[test]
+    fn a_users_own_terms_go_to_the_decoder_ahead_of_the_builtins() {
+        // Someone who typed a term into their dictionary has told us it matters,
+        // whether or not they thought to call it a proper noun.
+        let user = vec![
+            Entry::new("Zyma", &["zima"], "code"),
+            Entry::new("Claude", &["cloud"], "code"),
+        ];
+        let terms = decoder_terms(&user, &builtin_entries());
+        assert_eq!(terms[0], "Zyma");
+        assert_eq!(terms[1], "Claude");
+        assert!(terms.iter().any(|t| t == "Claude Code"), "{terms:?}");
+        assert_eq!(
+            terms.iter().filter(|t| *t == "Claude").count(),
+            1,
+            "a term the user and the builtins share is offered once"
+        );
+        assert!(
+            !terms.iter().any(|t| t == "useEffect"),
+            "builtin identifiers are still not offered"
+        );
+    }
+
+    #[test]
+    fn the_decoder_vocabulary_is_bounded() {
+        let user: Vec<Entry> = (0..200)
+            .map(|i| Entry::new(&format!("term{i}"), &["x"], "code"))
+            .collect();
+        assert!(decoder_terms(&user, &builtin_entries()).len() <= 48);
     }
 
     #[test]

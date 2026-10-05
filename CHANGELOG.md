@@ -22,6 +22,15 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+### Fixed
+- Names of coding tools are now spelled correctly far more often. "Claude Code",
+  "Codex", "Docling", "PaddleOCR", "OpenCV", "Vercel" and "Tauri" used to come out
+  as "clawed code", "dockling", "Paddle OCR", "Versal" and "Tori". On a test of
+  16 spoken sentences the error rate on those names fell from 14% to 2.5%, and
+  everyday English was unchanged. The speech model is now told your Dictionary
+  terms before it listens, so a word you add helps the next dictation, not just
+  the clean-up afterwards. Silence and noise still produce no text.
+
 ## [1.2.0] - 2026-09-27
 
 ### Changed

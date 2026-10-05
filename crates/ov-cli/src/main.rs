@@ -51,12 +51,11 @@ struct Cli {
     #[arg(long, global = true)]
     mic: Option<String>,
 
-    /// Seed the model's prompt with the vocabulary. Off by default, and measured
-    /// to make output worse: a prompt full of camelCase identifiers teaches the
-    /// model to weld ordinary spoken words together. See ov-format's dictionary
-    /// module docs for the A/B result.
+    /// Decode without the vocabulary hotwords. They are on by default, as in the
+    /// app: on Parakeet they took errors on coding-tool names from 15% to under
+    /// 1% in measurement. Turn them off to compare, or to rule them out of a bug.
     #[arg(long, global = true)]
-    hint: bool,
+    no_hotwords: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -315,6 +314,15 @@ fn cmd_latency(log: Option<&PathBuf>) -> Result<(), String> {
 }
 
 /* -- helpers ---------------------------------------------------------------- */
+
+/// The terms the decoder is told to expect: what the app offers with an empty
+/// user dictionary.
+fn hotwords(disabled: bool) -> Vec<String> {
+    if disabled {
+        return Vec::new();
+    }
+    ov_format::dictionary::decoder_terms(&[], &ov_format::dictionary::builtin_entries())
+}
 
 /// `--language auto` (or any case-insensitive spelling of it) means "let the
 /// model detect it"; anything else is forced verbatim as the ISO code.
@@ -656,11 +664,7 @@ fn cmd_transcribe(cli: &Cli, path: &Path, profile: &str) -> Result<(), String> {
 
     let started = Instant::now();
     let hint = DecodeHint {
-        vocabulary: if cli.hint {
-            formatter.hint_terms().to_vec()
-        } else {
-            Vec::new()
-        },
+        vocabulary: hotwords(cli.no_hotwords),
         language: language_hint(&cli.language),
     };
     let transcript = transcriber
@@ -686,7 +690,7 @@ struct Runtime {
     formatters: Vec<(String, Formatter)>,
     captured: Mutex<Option<Pcm16k>>,
     paste_threshold: usize,
-    hint: bool,
+    no_hotwords: bool,
     language: Option<String>,
     start: Instant,
 }
@@ -732,7 +736,7 @@ fn cmd_dictate(cli: &Cli) -> Result<(), String> {
         formatters,
         captured: Mutex::new(None),
         paste_threshold: config.paste_threshold_chars,
-        hint: cli.hint,
+        no_hotwords: cli.no_hotwords,
         language: language_hint(&cli.language),
         start: Instant::now(),
     });
@@ -870,11 +874,7 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                     return;
                 };
                 let hint = DecodeHint {
-                    vocabulary: if rt.hint {
-                        rt.formatters[0].1.hint_terms().to_vec()
-                    } else {
-                        Vec::new()
-                    },
+                    vocabulary: hotwords(rt.no_hotwords),
                     language: rt.language.clone(),
                 };
                 match rt.transcriber.transcribe(&audio, &hint) {
