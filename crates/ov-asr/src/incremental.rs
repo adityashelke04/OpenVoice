@@ -731,9 +731,15 @@ mod tests {
         }
         let (_, facts) = d.finish(S, &pcm(&speech(2_000))).expect("finish");
         assert!(facts.fallback);
-        assert_eq!(
-            fake.hints.lock().unwrap().last(),
-            Some(&vec!["Claude".to_owned()])
+        // Not `last()`: `begin` queues a priming decode with an empty hint on the
+        // worker thread, and under load it can run after the fallback has already
+        // decoded on this one, which made this test fail about one run in fifteen.
+        assert!(
+            fake.hints
+                .lock()
+                .unwrap()
+                .contains(&vec!["Claude".to_owned()]),
+            "the fallback decode must carry the vocabulary"
         );
     }
 

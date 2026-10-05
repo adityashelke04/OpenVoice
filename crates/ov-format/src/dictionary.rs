@@ -314,7 +314,11 @@ pub fn builtin_entries() -> Vec<Entry> {
         // plausible-looking guesses. An earlier version of this block guessed —
         // "tow ree" for Tauri — and caught nothing, while the form the model
         // really produces, "Tori", went straight through.
-        Entry::proper("Vercel", &["versel", "ver cell", "verse elle"], "code"),
+        Entry::proper(
+            "Vercel",
+            &["versel", "ver cell", "verse elle", "versal"],
+            "code",
+        ),
         Entry::proper("Tauri", &["tori", "taury", "torrey"], "code"),
         Entry::proper("OpenVoice", &["open voice"], "code"),
         Entry::new("GitHub", &["git hub"], "code"),
@@ -521,6 +525,7 @@ mod tests {
         let d = dict();
         for (heard, written) in [
             ("open tv", "OpenCV"),
+            ("versal", "Vercel"),
             ("para lociar", "PaddleOCR"),
             ("get commit", "git commit"),
             ("get push", "git push"),

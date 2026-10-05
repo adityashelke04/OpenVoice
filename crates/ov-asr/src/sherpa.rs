@@ -248,10 +248,18 @@ impl SherpaTranscriber {
             }
         }
         cfg.model_config.num_threads = threads;
-        let hotwords = spec.hotwords && enable_hotwords(&mut cfg, &dir, spec);
+        let vocab_file = spec
+            .hotwords
+            .then(|| enable_hotwords(&mut cfg, &dir, spec))
+            .flatten();
 
         let started = std::time::Instant::now();
-        let recognizer = OfflineRecognizer::create(&cfg).ok_or_else(|| {
+        let created = OfflineRecognizer::create(&cfg);
+        // Read once, while the recognizer was created; nothing needs it after.
+        if let Some(file) = &vocab_file {
+            let _ = std::fs::remove_file(file);
+        }
+        let recognizer = created.ok_or_else(|| {
             Error::Transcription(format!(
                 "the {} model at {} could not be loaded",
                 spec.id,
@@ -268,35 +276,55 @@ impl SherpaTranscriber {
         Ok(Self {
             spec,
             recognizer,
-            hotwords,
+            hotwords: vocab_file.is_some(),
         })
     }
 }
 
-/// Switch `cfg` to beam search with hotwords. Returns false, leaving `cfg` as it
-/// was, if the vocabulary file they need cannot be made.
+/// Where to write the vocabulary hotwords are encoded with, one path per load.
+///
+/// The process id is in the name because the app and `ov` can load the same model
+/// at the same moment, and a shared path would let one truncate the file the
+/// other is reading. A counter is in it because one process can load twice at
+/// once -- the test suite does -- and the file is deleted once its load is done.
+fn hotword_vocab_path(model_id: &str) -> PathBuf {
+    static LOADS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "openvoice-{model_id}-{}-{n}.bpe.vocab",
+        std::process::id()
+    ))
+}
+
+/// Switch `cfg` to beam search with hotwords, returning the vocabulary file the
+/// recognizer must read while it is created. `None`, leaving `cfg` as it was, if
+/// that file cannot be made. The caller deletes it afterwards.
 ///
 /// The file goes in the temp directory rather than beside the model: the model
 /// lives under the install directory, which a normal user cannot write to.
-fn enable_hotwords(cfg: &mut OfflineRecognizerConfig, dir: &Path, spec: &ModelSpec) -> bool {
-    let vocab = std::fs::read_to_string(dir.join("tokens.txt"))
+fn enable_hotwords(
+    cfg: &mut OfflineRecognizerConfig,
+    dir: &Path,
+    spec: &ModelSpec,
+) -> Option<PathBuf> {
+    let path = hotword_vocab_path(spec.id);
+    let written = std::fs::read_to_string(dir.join("tokens.txt"))
         .map(|t| bpe_vocab_from_tokens(&t))
-        .and_then(|v| {
-            let path = std::env::temp_dir().join(format!("openvoice-{}.bpe.vocab", spec.id));
-            std::fs::write(&path, v).map(|()| path)
-        });
-    let Some(path) = vocab.ok().and_then(|p| p.to_str().map(str::to_owned)) else {
+        .and_then(|v| std::fs::write(&path, v));
+    let vocab = written.ok().and_then(|()| path.to_str().map(str::to_owned));
+    let Some(vocab) = vocab else {
         tracing::warn!(
             model = spec.id,
             "hotword vocabulary could not be written; decoding without hotwords"
         );
-        return false;
+        let _ = std::fs::remove_file(&path);
+        return None;
     };
     cfg.model_config.modeling_unit = Some("bpe".into());
-    cfg.model_config.bpe_vocab = Some(path);
+    cfg.model_config.bpe_vocab = Some(vocab);
     cfg.decoding_method = Some("modified_beam_search".into());
     cfg.hotwords_score = HOTWORD_SCORE;
-    true
+    Some(path)
 }
 
 /// A path under `dir`, as the UTF-8 string the C API requires.
@@ -554,6 +582,19 @@ mod tests {
             let parakeet = spec.id.starts_with("parakeet");
             assert_eq!(spec.hotwords, parakeet, "{}", spec.id);
         }
+    }
+
+    #[test]
+    fn two_processes_do_not_share_a_vocabulary_file() {
+        // The app and `ov` can load the same model at the same moment. A shared
+        // path would let one truncate the file the other is reading.
+        let path = hotword_vocab_path("parakeet-tdt-0.6b-v2");
+        assert!(
+            path.to_string_lossy()
+                .contains(&std::process::id().to_string()),
+            "{}",
+            path.display()
+        );
     }
 
     #[test]
