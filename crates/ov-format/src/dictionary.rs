@@ -220,8 +220,11 @@ pub fn hint_terms(entries: &[Entry]) -> Vec<String> {
 pub fn decoder_terms(user: &[Entry], builtin: &[Entry]) -> Vec<String> {
     const MAX: usize = 48;
     let mut terms: Vec<String> = Vec::new();
+    // An entry that lists its own written form as a spoken form says "leave this
+    // word alone"; offering it would pull the decoder toward it.
     let offered = user
         .iter()
+        .filter(|e| !e.spoken.iter().any(|s| s.eq_ignore_ascii_case(&e.written)))
         .map(|e| e.written.clone())
         .chain(hint_terms(builtin));
     for t in offered {
@@ -276,6 +279,18 @@ pub fn builtin_entries() -> Vec<Entry> {
         // makes confident wrong corrections is worse than no dictionary; the user
         // can add "get" themselves if their own usage justifies it.
         Entry::new("git", &["git"], "shell"),
+        // The speech model hears "git" as "get" next to a git subcommand. These
+        // pairs are not English ("get commit", "get checkout"), so they are safe
+        // to claim everywhere; "get status" is, so it stays in the shell group.
+        Entry::new("git commit", &["get commit"], "code"),
+        Entry::new("git push", &["get push"], "code"),
+        Entry::new("git pull", &["get pull"], "code"),
+        Entry::new("git diff", &["get diff"], "code"),
+        Entry::new("git checkout", &["get checkout"], "code"),
+        Entry::new("git rebase", &["get rebase"], "code"),
+        Entry::new("git stash", &["get stash"], "code"),
+        Entry::new("git clone", &["get clone"], "code"),
+        Entry::new("git status", &["get status"], "shell"),
         // Rust
         Entry::new("async", &["a sync", "ay sink"], "code"),
         Entry::new("Vec", &["vec", "veck"], "code"),
@@ -355,10 +370,21 @@ pub fn builtin_entries() -> Vec<Entry> {
         ),
         Entry::proper(
             "PaddleOCR",
-            &["paddle ocr", "paddle o c r", "paddle o see are"],
+            &[
+                "paddle ocr",
+                "paddle o c r",
+                "paddle o see are",
+                "para lociar",
+            ],
             "code",
         ),
-        Entry::proper("OpenCV", &["open c v", "open cv", "open see v"], "code"),
+        // "open tv" is what the model wrote for a spoken "Open CV". It is a real
+        // phrase, but not one that anyone dictating code says.
+        Entry::proper(
+            "OpenCV",
+            &["open c v", "open cv", "open see v", "open tv"],
+            "code",
+        ),
     ]
 }
 
@@ -486,6 +512,45 @@ mod tests {
             !terms.iter().any(|t| t == "useEffect"),
             "builtin identifiers are still not offered"
         );
+    }
+
+    #[test]
+    fn repairs_what_the_owner_actually_said_aloud() {
+        // Read off the owner's own history: "Open CV" came back as "Open Tv",
+        // "Paddle OCR" as "Para lociar", and "git commit" as "get commit".
+        let d = dict();
+        for (heard, written) in [
+            ("open tv", "OpenCV"),
+            ("para lociar", "PaddleOCR"),
+            ("get commit", "git commit"),
+            ("get push", "git push"),
+            ("get checkout", "git checkout"),
+            ("get status", "git status"),
+        ] {
+            assert_eq!(d.lookup(&words(heard)), Some(written), "heard {heard:?}");
+        }
+    }
+
+    #[test]
+    fn get_status_is_only_claimed_where_a_command_is_likely() {
+        // "get status" is ordinary English ("get status updates"), so it is only
+        // rewritten for the shell group. "get commit" is not, so it is always.
+        let code_only = Dictionary::compile(&builtin_entries(), &["code".into()]);
+        assert_eq!(code_only.lookup(&words("get status")), None);
+        assert_eq!(code_only.lookup(&words("get commit")), Some("git commit"));
+    }
+
+    #[test]
+    fn a_keep_it_as_written_entry_is_not_a_vocabulary_term() {
+        // `cloud -> cloud` says "leave this word alone". Offering it to the decoder
+        // would pull every "Claude" toward "cloud".
+        let user = vec![
+            Entry::new("cloud", &["cloud"], "code"),
+            Entry::new("Zyma", &["zima"], "code"),
+        ];
+        let terms = decoder_terms(&user, &builtin_entries());
+        assert!(!terms.iter().any(|t| t == "cloud"), "{terms:?}");
+        assert!(terms.iter().any(|t| t == "Zyma"));
     }
 
     #[test]
