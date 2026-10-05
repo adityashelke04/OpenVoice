@@ -398,9 +398,11 @@ The benefit it was supposed to buy is one the dictionary already delivers: `use
 effect` → `useEffect` is a post-processing fix, and a reliable one. So the mechanism
 loses on both sides of the trade.
 
-**Decision: hints are off by default.** The plumbing stays (`DecodeHint`, `--hint`)
-because genuinely unguessable proper nouns may still justify it, but it is opt-in and
-must be re-measured before it is ever made default again.
+**Decision: for Whisper, hints are off.** That measurement was Whisper's prompt.
+Parakeet has no prompt; its equivalent is hotwords, which bias how a word the audio
+already supports is *spelled*, and which were re-measured and are on by default (see
+`ov_asr::sherpa::HOTWORD_SCORE` and ADR 0008). `ov --no-hotwords` turns them off to
+compare. The decision above stands for any model that takes a prompt.
 
 **The general lesson, worth keeping:** this was a plausible, well-argued design that
 survived review and was written into three files before anyone ran it. It took one

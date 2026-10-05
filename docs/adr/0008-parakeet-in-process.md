@@ -80,6 +80,12 @@ two; no IPC, no job object, no orphan risk, no supervision. `ov-asr` drops from 
   That distinction cannot be repaired downstream once the audio is gone.
   sherpa-onnx hotwords are the replacement and degrade gracefully rather than
   crashing (verified), but need a `bpe.model` the release asset omits. Follow-up.
+
+  **Resolved 2026-10-05.** sherpa-onnx's own Parakeet example derives the
+  vocabulary hotwords need from `tokens.txt`, so nothing is missing. Hotwords
+  now run for both Parakeet models: errors on coding-tool names fell from about
+  15% to under 3%, everyday English was unchanged, and silence is guarded. See
+  `ov_asr::sherpa`.
 - **No confidence score.** A transducer emits no per-segment log-probability.
 - **Process isolation is gone.** A native fault now takes the app down where a
   sidecar crash only degraded it.

@@ -22,6 +22,29 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-05
+
+Coding-tool names and git commands are spelled correctly far more often.
+
+### Fixed
+
+- "Claude Code", "Codex", "Docling", "PaddleOCR", "OpenCV", "Vercel" and "Tauri"
+  used to come out as "clawed code", "dockling", "Paddle OCR", "Open Tv", "Versal"
+  and "Tori". On a test of 16 spoken sentences the error rate on those names fell
+  from 14% to 2.5%, and everyday English was unchanged. The speech model is now
+  told your Dictionary terms before it listens, so a word you add helps the next
+  dictation, not just the clean-up afterwards. Silence and noise still produce no
+  text. Both Parakeet models get this; the Whisper model does not.
+- "get commit", "get push", "get pull", "get diff", "get checkout", "get rebase",
+  "get stash" and "get clone" now come out as the git command. "get status" is
+  ordinary English, so it is only rewritten in a terminal; add it to your
+  Dictionary if you want it everywhere.
+
+### Changed
+
+- `ov --hint` is replaced by `ov --no-hotwords`. The vocabulary is offered to the
+  speech model by default, as in the app; the flag turns it off to compare.
+
 ## [1.2.0] - 2026-09-27
 
 ### Changed

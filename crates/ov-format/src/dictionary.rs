@@ -24,8 +24,11 @@
 //! the problem it solves, because this dictionary can fix `use effect` anyway,
 //! whereas nothing downstream can recover words the model already welded together.
 //!
-//! Hints remain available for genuinely unguessable proper nouns, but they are off
-//! by default. See `ov_core::ports::DecodeHint`.
+//! Hints remain available for genuinely unguessable proper nouns. For Whisper
+//! they were off by default; for Parakeet they are the decoder's hotwords, which
+//! bias the *spelling* of a word the audio already supports rather than seeding
+//! a prompt, and which measured as a large gain. See `ov_core::ports::DecodeHint`
+//! and `ov_asr::sherpa`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -206,6 +209,35 @@ pub fn hint_terms(entries: &[Entry]) -> Vec<String> {
     seen
 }
 
+/// Terms offered to the decoder: the user's own dictionary first, then the
+/// builtin proper nouns.
+///
+/// The user's entries all go, not just flagged ones: typing a term into the
+/// Dictionary is already saying it matters. Builtins stay limited to
+/// [`hint_terms`], for the reason given there. Bounded, because the decoder
+/// leans toward every term it is given and a long list pulls on every word.
+#[must_use]
+pub fn decoder_terms(user: &[Entry], builtin: &[Entry]) -> Vec<String> {
+    const MAX: usize = 48;
+    let mut terms: Vec<String> = Vec::new();
+    // An entry that lists its own written form as a spoken form says "leave this
+    // word alone"; offering it would pull the decoder toward it.
+    let offered = user
+        .iter()
+        .filter(|e| !e.spoken.iter().any(|s| s.eq_ignore_ascii_case(&e.written)))
+        .map(|e| e.written.clone())
+        .chain(hint_terms(builtin));
+    for t in offered {
+        if !terms.contains(&t) {
+            terms.push(t);
+        }
+        if terms.len() == MAX {
+            break;
+        }
+    }
+    terms
+}
+
 /// The vocabulary shipped by default.
 ///
 /// Kept deliberately small. A large shipped dictionary produces confident wrong
@@ -247,6 +279,18 @@ pub fn builtin_entries() -> Vec<Entry> {
         // makes confident wrong corrections is worse than no dictionary; the user
         // can add "get" themselves if their own usage justifies it.
         Entry::new("git", &["git"], "shell"),
+        // The speech model hears "git" as "get" next to a git subcommand. These
+        // pairs are not English ("get commit", "get checkout"), so they are safe
+        // to claim everywhere; "get status" is, so it stays in the shell group.
+        Entry::new("git commit", &["get commit"], "code"),
+        Entry::new("git push", &["get push"], "code"),
+        Entry::new("git pull", &["get pull"], "code"),
+        Entry::new("git diff", &["get diff"], "code"),
+        Entry::new("git checkout", &["get checkout"], "code"),
+        Entry::new("git rebase", &["get rebase"], "code"),
+        Entry::new("git stash", &["get stash"], "code"),
+        Entry::new("git clone", &["get clone"], "code"),
+        Entry::new("git status", &["get status"], "shell"),
         // Rust
         Entry::new("async", &["a sync", "ay sink"], "code"),
         Entry::new("Vec", &["vec", "veck"], "code"),
@@ -270,7 +314,11 @@ pub fn builtin_entries() -> Vec<Entry> {
         // plausible-looking guesses. An earlier version of this block guessed —
         // "tow ree" for Tauri — and caught nothing, while the form the model
         // really produces, "Tori", went straight through.
-        Entry::proper("Vercel", &["versel", "ver cell", "verse elle"], "code"),
+        Entry::proper(
+            "Vercel",
+            &["versel", "ver cell", "verse elle", "versal"],
+            "code",
+        ),
         Entry::proper("Tauri", &["tori", "taury", "torrey"], "code"),
         Entry::proper("OpenVoice", &["open voice"], "code"),
         Entry::new("GitHub", &["git hub"], "code"),
@@ -299,10 +347,48 @@ pub fn builtin_entries() -> Vec<Entry> {
         // acoustically, before any of this runs.
         Entry::proper(
             "Claude Code",
-            &["cloud code", "plot code", "clod code", "cloud coat"],
+            &[
+                "cloud code",
+                "plot code",
+                "clod code",
+                "cloud coat",
+                "clawed code",
+                "claw code",
+                "clot code",
+                // The speech model hears "Code" as the product name next to it.
+                // "Claude Codex" is not a thing anyone dictates on purpose.
+                "claude codex",
+            ],
             "code",
         ),
         Entry::proper("Claude", &["clawed", "claud", "clode"], "code"),
+        // Spoken forms are the ones the model produced from real dictation, as
+        // above. These are offered to the decoder too: the model has never seen
+        // "Docling" or "PaddleOCR", so it can only spell them if told they are
+        // candidates while it still has the audio.
+        Entry::proper("Codex", &["codex"], "code"),
+        Entry::proper(
+            "Docling",
+            &["doc ling", "dock ling", "dockling", "dock link"],
+            "code",
+        ),
+        Entry::proper(
+            "PaddleOCR",
+            &[
+                "paddle ocr",
+                "paddle o c r",
+                "paddle o see are",
+                "para lociar",
+            ],
+            "code",
+        ),
+        // "open tv" is what the model wrote for a spoken "Open CV". It is a real
+        // phrase, but not one that anyone dictating code says.
+        Entry::proper(
+            "OpenCV",
+            &["open c v", "open cv", "open see v", "open tv"],
+            "code",
+        ),
     ]
 }
 
@@ -374,6 +460,110 @@ mod tests {
             d.lookup(&["use".into(), "effect".into()]),
             Some("useEffect")
         );
+    }
+
+    fn words(s: &str) -> Vec<String> {
+        s.split(' ').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn repairs_the_tool_names_heard_in_real_dictation() {
+        // Every left-hand side here is a transcript the speech model really
+        // produced from the owner's own history, not a plausible guess.
+        let d = dict();
+        for (heard, written) in [
+            ("doc ling", "Docling"),
+            ("dock ling", "Docling"),
+            ("dockling", "Docling"),
+            ("paddle ocr", "PaddleOCR"),
+            ("paddle o c r", "PaddleOCR"),
+            ("open c v", "OpenCV"),
+            ("open cv", "OpenCV"),
+            ("clawed code", "Claude Code"),
+            ("claude codex", "Claude Code"),
+            ("clot code", "Claude Code"),
+        ] {
+            assert_eq!(d.lookup(&words(heard)), Some(written), "heard {heard:?}");
+        }
+    }
+
+    #[test]
+    fn the_tool_names_are_offered_to_the_decoder() {
+        let hints = hint_terms(&builtin_entries());
+        for name in ["Claude Code", "Codex", "Docling", "PaddleOCR", "OpenCV"] {
+            assert!(hints.iter().any(|h| h == name), "{name} missing: {hints:?}");
+        }
+    }
+
+    #[test]
+    fn a_users_own_terms_go_to_the_decoder_ahead_of_the_builtins() {
+        // Someone who typed a term into their dictionary has told us it matters,
+        // whether or not they thought to call it a proper noun.
+        let user = vec![
+            Entry::new("Zyma", &["zima"], "code"),
+            Entry::new("Claude", &["cloud"], "code"),
+        ];
+        let terms = decoder_terms(&user, &builtin_entries());
+        assert_eq!(terms[0], "Zyma");
+        assert_eq!(terms[1], "Claude");
+        assert!(terms.iter().any(|t| t == "Claude Code"), "{terms:?}");
+        assert_eq!(
+            terms.iter().filter(|t| *t == "Claude").count(),
+            1,
+            "a term the user and the builtins share is offered once"
+        );
+        assert!(
+            !terms.iter().any(|t| t == "useEffect"),
+            "builtin identifiers are still not offered"
+        );
+    }
+
+    #[test]
+    fn repairs_what_the_owner_actually_said_aloud() {
+        // Read off the owner's own history: "Open CV" came back as "Open Tv",
+        // "Paddle OCR" as "Para lociar", and "git commit" as "get commit".
+        let d = dict();
+        for (heard, written) in [
+            ("open tv", "OpenCV"),
+            ("versal", "Vercel"),
+            ("para lociar", "PaddleOCR"),
+            ("get commit", "git commit"),
+            ("get push", "git push"),
+            ("get checkout", "git checkout"),
+            ("get status", "git status"),
+        ] {
+            assert_eq!(d.lookup(&words(heard)), Some(written), "heard {heard:?}");
+        }
+    }
+
+    #[test]
+    fn get_status_is_only_claimed_where_a_command_is_likely() {
+        // "get status" is ordinary English ("get status updates"), so it is only
+        // rewritten for the shell group. "get commit" is not, so it is always.
+        let code_only = Dictionary::compile(&builtin_entries(), &["code".into()]);
+        assert_eq!(code_only.lookup(&words("get status")), None);
+        assert_eq!(code_only.lookup(&words("get commit")), Some("git commit"));
+    }
+
+    #[test]
+    fn a_keep_it_as_written_entry_is_not_a_vocabulary_term() {
+        // `cloud -> cloud` says "leave this word alone". Offering it to the decoder
+        // would pull every "Claude" toward "cloud".
+        let user = vec![
+            Entry::new("cloud", &["cloud"], "code"),
+            Entry::new("Zyma", &["zima"], "code"),
+        ];
+        let terms = decoder_terms(&user, &builtin_entries());
+        assert!(!terms.iter().any(|t| t == "cloud"), "{terms:?}");
+        assert!(terms.iter().any(|t| t == "Zyma"));
+    }
+
+    #[test]
+    fn the_decoder_vocabulary_is_bounded() {
+        let user: Vec<Entry> = (0..200)
+            .map(|i| Entry::new(&format!("term{i}"), &["x"], "code"))
+            .collect();
+        assert!(decoder_terms(&user, &builtin_entries()).len() <= 48);
     }
 
     #[test]

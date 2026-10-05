@@ -81,8 +81,9 @@ pub trait Shell: Send + Sync + 'static {
 struct Rules {
     profiles: Vec<Profile>,
     formatters: Vec<(String, Formatter)>,
-    /// Proper nouns offered to the decoder. Rebuilt with the rest, so a term the
-    /// user adds starts helping the *model* on the next utterance, not just the
+    /// Terms offered to the decoder as hotwords: the user's dictionary and the
+    /// builtin proper nouns. Rebuilt with the rest, so a term the user adds
+    /// starts helping the *model* on the next utterance, not just the
     /// post-processing.
     hints: Vec<String>,
 }
@@ -91,15 +92,16 @@ impl Rules {
     fn build(settings: &crate::settings::Settings) -> Self {
         // User terms first so they win over the builtins — `Dictionary::compile`
         // keeps the first writer for a spoken phrase.
+        let builtin = ov_format::dictionary::builtin_entries();
         let mut entries = settings.dictionary.clone();
-        entries.extend(ov_format::dictionary::builtin_entries());
+        entries.extend(builtin.iter().cloned());
 
         let profiles = settings.profiles.clone();
         let formatters = profiles
             .iter()
             .map(|p| (p.name.clone(), Formatter::new(p.clone(), &entries)))
             .collect();
-        let hints = ov_format::dictionary::hint_terms(&entries);
+        let hints = ov_format::dictionary::decoder_terms(&settings.dictionary, &builtin);
         Self {
             profiles,
             formatters,

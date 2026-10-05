@@ -73,6 +73,15 @@ pub struct ModelSpec {
     /// English only. Worth saying in a picker rather than leaving someone to
     /// deduce it from a bad transcript.
     pub english_only: bool,
+    /// Decode with beam search so the user's vocabulary can bias the result.
+    ///
+    /// Only for a model that was measured doing it. Beam search changes how a
+    /// transducer decodes, and upstream reports it returning empty or invented
+    /// text roughly one time in five on Parakeet v3 (k2-fsa/sherpa-onnx#3267).
+    /// That did not reproduce here -- both Parakeet models were measured with no
+    /// extra empty results -- but a model nobody measured stays on the decoding
+    /// it always had.
+    pub hotwords: bool,
 }
 
 /// Every model this build can load, best-for-most-people first.
@@ -95,6 +104,7 @@ pub const CATALOG: &[ModelSpec] = &[
         ],
         bundled: true,
         english_only: true,
+        hotwords: true,
     },
     ModelSpec {
         id: "parakeet-tdt-0.6b-v3",
@@ -111,6 +121,7 @@ pub const CATALOG: &[ModelSpec] = &[
         ],
         bundled: false,
         english_only: false,
+        hotwords: true,
     },
     ModelSpec {
         id: "whisper-tiny.en",
@@ -126,6 +137,7 @@ pub const CATALOG: &[ModelSpec] = &[
         ],
         bundled: false,
         english_only: true,
+        hotwords: false,
     },
 ];
 
