@@ -78,7 +78,9 @@ pub struct ModelSpec {
     /// Only for a model that was measured doing it. Beam search changes how a
     /// transducer decodes, and upstream reports it returning empty or invented
     /// text roughly one time in five on Parakeet v3 (k2-fsa/sherpa-onnx#3267).
-    /// A model without this flag decodes exactly as it always did.
+    /// That did not reproduce here -- both Parakeet models were measured with no
+    /// extra empty results -- but a model nobody measured stays on the decoding
+    /// it always had.
     pub hotwords: bool,
 }
 
@@ -119,7 +121,7 @@ pub const CATALOG: &[ModelSpec] = &[
         ],
         bundled: false,
         english_only: false,
-        hotwords: false,
+        hotwords: true,
     },
     ModelSpec {
         id: "whisper-tiny.en",
