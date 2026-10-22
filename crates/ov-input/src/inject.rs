@@ -8,7 +8,7 @@
 //!   slow past a couple of hundred characters, and some applications drop input
 //!   delivered that fast.
 //! - **Long text → clipboard paste, with the clipboard restored afterwards.**
-//!   Instant regardless of length, but it borrows a resource the user owns.
+//!   Most targets need one paste; verified Claude targets use paced pieces.
 //!
 //! Two details here are non-obvious and each costs an afternoon to rediscover:
 //!
@@ -21,13 +21,16 @@
 //!    does nothing.
 
 use ov_core::error::{Error, Result};
+use ov_core::ports::AppContext;
 use ov_core::ports::TextSink;
-use ov_core::types::{InjectMode, InjectReceipt};
+use ov_core::types::{ForegroundApp, InjectMode, InjectReceipt};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use windows::Win32::Foundation::{HANDLE, HGLOBAL};
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard,
-    SetClipboardData,
+    CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardOwner,
+    GetClipboardSequenceNumber, OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
@@ -36,7 +39,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VIRTUAL_KEY,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+};
 
 const CF_UNICODETEXT: u32 = 13;
 const VK_CONTROL: u16 = 0x11;
@@ -48,23 +53,37 @@ const VK_V: u16 = 0x56;
 /// copying bytes. Attempting it would corrupt memory, so they are skipped and the
 /// caller is told the snapshot is partial.
 const NON_GLOBAL_FORMATS: &[u32] = &[
-    2,  // CF_BITMAP        (HBITMAP)
-    3,  // CF_METAFILEPICT  (HMETAFILEPICT)
-    9,  // CF_PALETTE       (HPALETTE)
-    14, // CF_ENHMETAFILE   (HENHMETAFILE)
+    2,    // CF_BITMAP        (HBITMAP)
+    3,    // CF_METAFILEPICT  (HMETAFILEPICT)
+    9,    // CF_PALETTE       (HPALETTE)
+    14,   // CF_ENHMETAFILE   (HENHMETAFILE)
+    0x80, // CF_OWNERDISPLAY
+    0x82, // CF_DSPBITMAP
+    0x83, // CF_DSPMETAFILEPICT
+    0x8e, // CF_DSPENHMETAFILE
 ];
 
 /// `TextSink` for Windows.
 pub struct WinTextSink {
     /// Above this many characters, injection switches to clipboard paste.
     paste_threshold: usize,
+    clipboard: Arc<Mutex<crate::ownership::Lease<ClipboardSnapshot>>>,
+    serial: Mutex<()>,
 }
 
 impl WinTextSink {
     /// Create a sink. `paste_threshold` comes from `Config::paste_threshold_chars`.
     #[must_use]
     pub fn new(paste_threshold: usize) -> Self {
-        Self { paste_threshold }
+        Self {
+            paste_threshold,
+            clipboard: Arc::new(Mutex::new(crate::ownership::Lease {
+                snapshot: None,
+                sequence: 0,
+                generation: 0,
+            })),
+            serial: Mutex::new(()),
+        }
     }
 }
 
@@ -76,54 +95,82 @@ impl Default for WinTextSink {
 
 impl TextSink for WinTextSink {
     fn inject(&self, text: &str, mode: InjectMode) -> Result<InjectReceipt> {
+        let target = crate::WinForeground.foreground().unwrap_or_default();
+        self.inject_guarded(text, mode, &target, &AtomicBool::new(false))
+    }
+}
+
+impl WinTextSink {
+    /// Deliver only to the captured window; Escape is checked before every piece.
+    /// Windows cannot make focus validation and SendInput one atomic operation.
+    /// Callers must retain `text` for manual Copy on error; clipboard recovery is
+    /// never allowed to overwrite content another application has just copied.
+    pub fn inject_guarded(
+        &self,
+        text: &str,
+        mode: InjectMode,
+        target: &ForegroundApp,
+        cancelled: &AtomicBool,
+    ) -> Result<InjectReceipt> {
+        let _serial = self.serial.lock().expect("delivery mutex");
+        if cancelled.load(Ordering::Acquire) {
+            return Err(Error::Injection("delivery cancelled".into()));
+        }
         if text.is_empty() {
             return Ok(InjectReceipt { mode, chars: 0 });
         }
         let chars = text.chars().count();
 
+        if mode != InjectMode::ClipboardOnly {
+            check_target(target, cancelled)?;
+        }
+
         let chosen = mode;
         match chosen {
             InjectMode::ClipboardOnly => {
-                set_clipboard_text(text)?;
+                self.copy_recovery(text, cancelled)?;
                 Ok(InjectReceipt {
                     mode: chosen,
                     chars,
                 })
             }
             InjectMode::Keystrokes if chars <= self.paste_threshold => {
-                match send_unicode(text) {
-                    Ok(()) => Ok(InjectReceipt {
-                        mode: InjectMode::Keystrokes,
-                        chars,
-                    }),
-                    Err(e) => {
-                        // Same safety net as the clipboard-paste path below: if the
-                        // synthesized keystrokes didn't land, leave the text on the
-                        // clipboard so Ctrl+V still works, rather than losing it
-                        // silently. This was the actual gap: only the long-text path
-                        // had this fallback, so a failed *short* dictation -- the
-                        // overwhelming majority of them -- left nothing behind at all.
-                        let _ = set_clipboard_text(text);
-                        Err(e)
-                    }
-                }
+                send_unicode(text, target, cancelled)?;
+                Ok(InjectReceipt {
+                    mode: InjectMode::Keystrokes,
+                    chars,
+                })
             }
             _ => {
                 // Long text, or the caller explicitly asked to paste.
-                match paste_with_restore(text) {
-                    Ok(()) => Ok(InjectReceipt {
-                        mode: InjectMode::ClipboardPaste,
-                        chars,
-                    }),
-                    Err(e) => {
-                        // Leave the text on the clipboard so nothing is lost, and
-                        // let the caller tell the user to press Ctrl+V themselves.
-                        let _ = set_clipboard_text(text);
-                        Err(e)
-                    }
-                }
+                paste_with_restore(text, target, cancelled, &self.clipboard)?;
+                Ok(InjectReceipt {
+                    mode: InjectMode::ClipboardPaste,
+                    chars,
+                })
             }
         }
+    }
+
+    fn copy_recovery(&self, text: &str, cancelled: &AtomicBool) -> Result<()> {
+        let mut owner = self.clipboard.lock().expect("clipboard ownership");
+        let mut guard = ClipboardGuard::open()?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(Error::Injection("copy cancelled".into()));
+        }
+        guard.write_text(text)?;
+        owner.generation += 1;
+        owner.snapshot = None;
+        Ok(())
+    }
+}
+
+fn check_target(target: &ForegroundApp, cancelled: &AtomicBool) -> Result<()> {
+    let current = crate::WinForeground.foreground().unwrap_or_default();
+    if crate::delivery::allowed(target, &current, cancelled.load(Ordering::Acquire)) {
+        Ok(())
+    } else {
+        Err(Error::Injection("delivery cancelled or original window no longer focused; use Copy for the complete transcript".into()))
     }
 }
 
@@ -131,8 +178,8 @@ impl TextSink for WinTextSink {
 ///
 /// Clipboard paste is the default for anything but the shortest text, which
 /// reverses the original design. The reason is empirical: synthesized keystrokes
-/// were corrupting real dictation (see `KEYSTROKE_CHUNK` in this module), and a
-/// *atomic* — the target reads the whole string from the clipboard in one
+/// were corrupting real dictation (see the paced Unicode sender), and a paste is
+/// atomic — the target reads the whole string from the clipboard in one
 /// operation, so there is no queue to overflow and no way to lose characters.
 ///
 /// The cost is that the clipboard is briefly borrowed, which the snapshot and
@@ -170,7 +217,6 @@ pub fn mode_for(text: &str, threshold: usize) -> InjectMode {
 /// Output length always matched the input exactly, a short prefix was correct,
 /// and the rest was a run of the string's *last* character. Reproduced
 /// independently in a standalone script with no audio and no model involved.
-const KEYSTROKE_CHUNK: usize = 4;
 const KEYSTROKE_GAP: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// Synthesize one Unicode key event per UTF-16 code unit, paced.
@@ -181,10 +227,9 @@ const KEYSTROKE_GAP: std::time::Duration = std::time::Duration::from_millis(2);
 /// Pacing reduces the corruption above but does not eliminate it for long strings,
 /// which is why [`InjectMode::ClipboardPaste`] is the primary path and this is the
 /// fallback for short text and for targets that refuse a paste.
-fn send_unicode(text: &str) -> Result<()> {
-    let units: Vec<u16> = text.encode_utf16().collect();
-
-    for chunk in units.chunks(KEYSTROKE_CHUNK) {
+fn send_unicode(text: &str, target: &ForegroundApp, cancelled: &AtomicBool) -> Result<()> {
+    crate::delivery::unicode(text, |chunk| {
+        check_target(target, cancelled)?;
         let mut inputs: Vec<INPUT> = Vec::with_capacity(chunk.len() * 2);
         for &unit in chunk {
             inputs.push(key_input(0, unit, KEYEVENTF_UNICODE));
@@ -192,8 +237,8 @@ fn send_unicode(text: &str) -> Result<()> {
         }
         send_inputs(&inputs)?;
         std::thread::sleep(KEYSTROKE_GAP);
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Tag on our synthetic events.
@@ -201,7 +246,7 @@ fn send_unicode(text: &str) -> Result<()> {
 /// Two purposes: it makes OpenVoice's own input identifiable, and a distinct
 /// `dwExtraInfo` discourages the input queue from coalescing adjacent
 /// `VK_PACKET` entries, which is the mechanism behind the corruption described on
-/// [`KEYSTROKE_CHUNK`].
+/// [`send_unicode`].
 const OV_EXTRA_INFO: usize = 0x4F56_0001; // "OV\0\1"
 
 fn key_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
@@ -259,131 +304,123 @@ const CLIPBOARD_HOLD: std::time::Duration = std::time::Duration::from_secs(15);
 /// Claude Code hides any paste over 800 characters behind a `[Pasted text #N]`
 /// placeholder, so a long dictation looked like it never arrived. See
 /// [`crate::chunk`] for the measurement. 700 leaves headroom under that limit.
-const PASTE_CHUNK_CHARS: usize = 700;
 /// Claude Code also collapses pastes of more than three lines.
-const PASTE_CHUNK_LINE_BREAKS: usize = 2;
 /// Pause between pieces, so the target finishes one paste before the next one
 /// arrives. 250 ms is the gap verified end to end; pieces sent back to back can
 /// be merged or reassembled out of order by a terminal agent's paste detector.
 const PASTE_CHUNK_GAP: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Snapshot the clipboard, paste, then put the clipboard back later.
-fn paste_with_restore(text: &str) -> Result<()> {
-    let snapshot = ClipboardSnapshot::capture()?;
-    let pieces = crate::chunk::paste_chunks(text, PASTE_CHUNK_CHARS, PASTE_CHUNK_LINE_BREAKS);
-    let result = paste_pieces(&pieces);
-    // Whether the synthetic Ctrl+V actually reached the target, not merely
-    // whether we attempted it. See `should_restore`: this is what the restore
-    // decision must key on, not just "does the clipboard still hold our text".
-    let paste_sent = result.is_ok();
-
-    // Restore off-thread so injection returns immediately. Blocking here made every
-    // dictation feel slower *and* still lost the race.
-    //
-    // After a successful multi-piece paste the clipboard holds the *last* piece,
-    // so that is what "still ours" must compare against.
-    let ours = pieces.last().copied().unwrap_or_default().to_string();
+fn paste_with_restore(
+    text: &str,
+    target: &ForegroundApp,
+    cancelled: &AtomicBool,
+    ownership: &Arc<Mutex<crate::ownership::Lease<ClipboardSnapshot>>>,
+) -> Result<()> {
+    let mut owner = ownership.lock().expect("clipboard ownership");
+    {
+        let _guard = ClipboardGuard::open()?;
+        let snapshot = ClipboardSnapshot::capture_locked()?;
+        snapshot.require_complete()?;
+        owner.begin(unsafe { GetClipboardSequenceNumber() }, snapshot);
+    }
+    let generation = owner.generation;
+    let started = std::time::Instant::now();
+    let result = crate::delivery::paste(
+        text,
+        target,
+        &mut NativePaste {
+            target,
+            cancelled,
+            owner: &mut owner,
+        },
+    );
+    // The engine keeps full text in memory for Copy. Never replace a user's
+    // intervening clipboard copy in an attempt to recover automatically.
+    result?;
+    tracing::info!(
+        chars = text.chars().count(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "pasted transcript"
+    );
+    drop(owner);
+    let ownership = ownership.clone();
+    let ours = text.to_owned();
     std::thread::Builder::new()
         .name("ov-clipboard-restore".into())
         .spawn(move || {
             std::thread::sleep(CLIPBOARD_HOLD);
-            let current = read_clipboard_text();
-            if should_restore(paste_sent, current.as_deref(), &ours) {
-                snapshot.restore();
+            let mut owner = ownership.lock().expect("clipboard ownership");
+            if generation != owner.generation {
+                return;
+            }
+            let Ok(_guard) = ClipboardGuard::open() else {
+                return;
+            };
+            let current = read_clipboard_text_locked();
+            if should_restore(true, current.as_deref(), &ours) {
+                if let Some(snapshot) =
+                    owner.take_for_restore(generation, unsafe { GetClipboardSequenceNumber() })
+                {
+                    snapshot.restore_locked();
+                }
             } else {
-                tracing::debug!(
-                    paste_sent,
-                    matches_ours = current.as_deref() == Some(ours.as_str()),
-                    "not restoring clipboard after paste"
-                );
+                owner.snapshot = None;
             }
         })
         .map_err(|e| Error::Injection(format!("clipboard restore thread: {e}")))?;
 
-    result
-}
-
-/// Paste each piece in order into the window that was focused at the start.
-///
-/// Stops at the first failure rather than carrying on: a later piece landing
-/// without an earlier one is exactly the "missing words" failure this exists to
-/// prevent. The caller then leaves the *whole* transcript on the clipboard.
-fn paste_pieces(pieces: &[&str]) -> Result<()> {
-    let started = std::time::Instant::now();
-    let chars: usize = pieces.iter().map(|p| p.chars().count()).sum();
-    // SAFETY: GetForegroundWindow has no preconditions.
-    let target = unsafe { GetForegroundWindow() };
-
-    for (index, piece) in pieces.iter().enumerate() {
-        if index > 0 {
-            std::thread::sleep(PASTE_CHUNK_GAP);
-            // SAFETY: as above.
-            if unsafe { GetForegroundWindow() } != target {
-                tracing::warn!(
-                    pasted = index,
-                    pieces = pieces.len(),
-                    "focus moved to another window mid-paste; stopping"
-                );
-                return Err(Error::Injection(format!(
-                    "focus moved to another window after {index} of {} pieces",
-                    pieces.len()
-                )));
-            }
-        }
-        set_verified_clipboard_text(piece)?;
-        send_paste_chord()?;
-    }
-
-    tracing::info!(
-        chars,
-        pieces = pieces.len(),
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "pasted transcript"
-    );
     Ok(())
 }
 
-/// Put `text` on the clipboard and read it back before anything pastes it.
-///
-/// A clipboard manager or another app can replace the contents between our write
-/// and the target's read. Pasting whatever happens to be there would put the
-/// wrong words in the user's document, so a mismatch is retried once and then
-/// reported as a failure.
-fn set_verified_clipboard_text(text: &str) -> Result<()> {
-    for attempt in 0..2 {
-        set_clipboard_text(text)?;
-        if read_clipboard_text().as_deref() == Some(text) {
-            return Ok(());
-        }
-        tracing::warn!(attempt, "clipboard did not hold the text just written");
+struct NativePaste<'a> {
+    target: &'a ForegroundApp,
+    cancelled: &'a AtomicBool,
+    owner: &'a mut crate::ownership::Lease<ClipboardSnapshot>,
+}
+
+impl crate::delivery::PasteIo for NativePaste<'_> {
+    fn check(&mut self) -> Result<()> {
+        check_target(self.target, self.cancelled)
     }
-    Err(Error::Injection(
-        "the clipboard kept changing, so the paste could not be trusted".into(),
-    ))
+
+    fn write(&mut self, text: &str) -> Result<()> {
+        let mut guard = ClipboardGuard::open()?;
+        check_target(self.target, self.cancelled)?;
+        // Validate and replace under one lock; finalize only after rechecking
+        // the same owner and text so a concurrent copy cannot become our lease.
+        self.owner
+            .write(unsafe { GetClipboardSequenceNumber() }, || {
+                guard.write_text(text)
+            })
+    }
+
+    fn paste(&mut self) -> Result<()> {
+        {
+            let _guard = ClipboardGuard::open()?;
+            if unsafe { GetClipboardSequenceNumber() } != self.owner.sequence {
+                return Err(Error::Injection(
+                    "clipboard changed before paste; use Copy for the complete transcript".into(),
+                ));
+            }
+        }
+        check_target(self.target, self.cancelled)?;
+        // Windows cannot atomically bind SendInput to a window or clipboard
+        // sequence. Validate as late as possible; never steal foreground focus.
+        send_paste_chord()
+    }
+
+    fn wait(&mut self) {
+        std::thread::sleep(PASTE_CHUNK_GAP);
+    }
 }
 
 /// Whether the background thread should hand the clipboard back to whatever
 /// held it before the paste.
 ///
-/// Regression: the decision used to look *only* at whether the clipboard
-/// still held our own text, never at whether the paste actually sent. That
-/// missed exactly the failure path it exists to protect: when `send_paste_chord`
-/// fails (`SendInput` blocked by a more-privileged window, say), the target
-/// never reads our text from the clipboard at all, and `WinTextSink::inject`'s
-/// caller deliberately re-copies `text` to the clipboard as the safety net a
-/// failed injection is supposed to leave behind ("leave the text on the
-/// clipboard so nothing is lost"). A second later, this same clipboard
-/// content trivially satisfies `current == ours` regardless of *why* it got
-/// there, so the old code restored right over that safety net, silently
-/// destroying the one thing a failed injection promised to leave the user.
-///
-/// `paste_sent` is `send_paste_chord`'s own result. If it never sent, nothing
-/// currently on the clipboard can be attributed to a successful paste that
-/// has finished being read, so the pre-paste snapshot must never come back —
-/// restoring it would either destroy the just-explained safety net, or
-/// destroy something the user copied in the meantime. Only once the paste is
-/// known to have gone through does "does the clipboard still hold our text"
-/// become a meaningful signal that it is safe to hand the old contents back.
+/// A failed paste must not schedule a restore over recovery text. Text equality
+/// is only an extra check: the caller also checks the clipboard sequence and
+/// lease generation while holding the clipboard open.
 #[must_use]
 fn should_restore(paste_sent: bool, current: Option<&str>, ours: &str) -> bool {
     if !paste_sent {
@@ -395,13 +432,12 @@ fn should_restore(paste_sent: bool, current: Option<&str>, ours: &str) -> bool {
     // transcript on it.
     match current {
         Some(c) => c == ours,
-        None => true,
+        None => false,
     }
 }
 
 /// Current clipboard text, if any.
-fn read_clipboard_text() -> Option<String> {
-    let _guard = ClipboardGuard::open().ok()?;
+fn read_clipboard_text_locked() -> Option<String> {
     // SAFETY: the clipboard is open and the format is checked before the handle is
     // interpreted as UTF-16 text.
     let handle = unsafe { GetClipboardData(CF_UNICODETEXT) }.ok()?;
@@ -441,16 +477,74 @@ fn send_paste_chord() -> Result<()> {
 }
 
 /// RAII guard for the clipboard, so it is always closed even on an early return.
-struct ClipboardGuard;
+struct ClipboardGuard {
+    window: HWND,
+    open: bool,
+}
+
+fn clipboard_window() -> Result<HWND> {
+    // OpenClipboard(NULL) followed by EmptyClipboard leaves no owner, which
+    // violates SetClipboardData's contract. A message-only window never takes focus.
+    unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            windows::core::w!("STATIC"),
+            windows::core::w!("OpenVoice clipboard"),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            None,
+            None,
+            None,
+        )
+    }
+    .map_err(|e| Error::Injection(format!("clipboard owner window: {e}")))
+}
 
 impl ClipboardGuard {
+    fn write_text(&mut self, text: &str) -> Result<u32> {
+        set_clipboard_text_locked(text)?;
+        // Windows adds synthesized text formats on close, changing the sequence.
+        unsafe { CloseClipboard() }
+            .map_err(|e| Error::Injection(format!("CloseClipboard: {e}")))?;
+        self.open = false;
+        self.acquire()?;
+        self.written_sequence(text)
+    }
+
+    fn written_sequence(&self, text: &str) -> Result<u32> {
+        // Keep this HWND alive across close/reopen so a new copy cannot be adopted.
+        if unsafe { GetClipboardOwner() }.ok() != Some(self.window)
+            || read_clipboard_text_locked().as_deref() != Some(text)
+        {
+            return Err(Error::Injection(
+                "clipboard changed while finalizing paste; use Copy for the complete transcript"
+                    .into(),
+            ));
+        }
+        Ok(unsafe { GetClipboardSequenceNumber() })
+    }
+
     fn open() -> Result<Self> {
+        let mut guard = Self {
+            window: clipboard_window()?,
+            open: false,
+        };
+        guard.acquire()?;
+        Ok(guard)
+    }
+
+    fn acquire(&mut self) -> Result<()> {
         // The clipboard is a shared, singly-owned system resource; another process
         // may hold it briefly. Retrying is normal, not exceptional.
         for attempt in 0..10 {
-            // SAFETY: passing None requests association with the current task.
-            if unsafe { OpenClipboard(None) }.is_ok() {
-                return Ok(Self);
+            // SAFETY: this thread owns a live message-only window.
+            if unsafe { OpenClipboard(self.window) }.is_ok() {
+                self.open = true;
+                return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1)));
         }
@@ -464,7 +558,10 @@ impl Drop for ClipboardGuard {
     fn drop(&mut self) {
         // SAFETY: only constructed after a successful OpenClipboard.
         unsafe {
-            let _ = CloseClipboard();
+            if self.open {
+                let _ = CloseClipboard();
+            }
+            let _ = DestroyWindow(self.window);
         }
     }
 }
@@ -476,8 +573,13 @@ struct ClipboardSnapshot {
 }
 
 impl ClipboardSnapshot {
-    fn capture() -> Result<Self> {
-        let _guard = ClipboardGuard::open()?;
+    fn require_complete(&self) -> Result<()> {
+        if self.partial {
+            return Err(Error::Injection("clipboard has formats that cannot be preserved; clipboard unchanged, use Copy for the complete transcript".into()));
+        }
+        Ok(())
+    }
+    fn capture_locked() -> Result<Self> {
         let mut items = Vec::new();
         let mut partial = false;
         let mut format = 0u32;
@@ -489,7 +591,7 @@ impl ClipboardSnapshot {
             if format == 0 {
                 break;
             }
-            if NON_GLOBAL_FORMATS.contains(&format) {
+            if NON_GLOBAL_FORMATS.contains(&format) || (0x200..=0x2ff).contains(&format) {
                 partial = true;
                 continue;
             }
@@ -516,14 +618,7 @@ impl ClipboardSnapshot {
         Ok(Self { items, partial })
     }
 
-    fn restore(self) {
-        if self.items.is_empty() && !self.partial {
-            return;
-        }
-        let Ok(_guard) = ClipboardGuard::open() else {
-            tracing::warn!("could not reopen clipboard to restore previous contents");
-            return;
-        };
+    fn restore_locked(self) {
         // SAFETY: the clipboard is open and owned by this task.
         unsafe {
             let _ = EmptyClipboard();
@@ -570,6 +665,7 @@ fn alloc_global(bytes: &[u8]) -> Option<HGLOBAL> {
         let hglobal = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).ok()?;
         let ptr = GlobalLock(hglobal);
         if ptr.is_null() {
+            let _ = GlobalFree(hglobal);
             return None;
         }
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
@@ -579,22 +675,24 @@ fn alloc_global(bytes: &[u8]) -> Option<HGLOBAL> {
 }
 
 /// Replace the clipboard with `text` as `CF_UNICODETEXT`.
-fn set_clipboard_text(text: &str) -> Result<()> {
+fn set_clipboard_text_locked(text: &str) -> Result<()> {
     let mut utf16: Vec<u16> = text.encode_utf16().collect();
     utf16.push(0); // clipboard text must be NUL-terminated
     let bytes: Vec<u8> = utf16.iter().flat_map(|u| u.to_le_bytes()).collect();
 
-    let _guard = ClipboardGuard::open()?;
-    // SAFETY: the clipboard is open and owned by this task.
-    unsafe {
-        EmptyClipboard().map_err(|e| Error::Injection(format!("EmptyClipboard: {e}")))?;
-    }
     let handle = alloc_global(&bytes)
         .ok_or_else(|| Error::Injection("could not allocate clipboard memory".into()))?;
-    // SAFETY: fresh allocation of the correct size; the system takes ownership.
+    // Allocate before EmptyClipboard so allocation failure preserves user data.
+    // SAFETY: clipboard is open; the system owns the fresh handle only on success.
     unsafe {
-        SetClipboardData(CF_UNICODETEXT, HANDLE(handle.0))
-            .map_err(|e| Error::Injection(format!("SetClipboardData: {e}")))?;
+        if let Err(error) = EmptyClipboard() {
+            let _ = GlobalFree(handle);
+            return Err(Error::Injection(format!("EmptyClipboard: {error}")));
+        }
+        if let Err(error) = SetClipboardData(CF_UNICODETEXT, HANDLE(handle.0)) {
+            let _ = GlobalFree(handle);
+            return Err(Error::Injection(format!("SetClipboardData: {error}")));
+        }
     }
     Ok(())
 }
@@ -603,11 +701,158 @@ fn set_clipboard_text(text: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn isolated_clipboard(test: &str, run: impl FnOnce()) {
+        const CHILD: &str = "OV_ISOLATED_CLIPBOARD_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", test, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated native clipboard regression failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        // A separate station has its own clipboard: never inspect or change the user's.
+        use windows::Win32::System::StationsAndDesktops::{
+            CreateDesktopW, CreateWindowStationW, SetProcessWindowStation, SetThreadDesktop,
+            DESKTOP_CONTROL_FLAGS,
+        };
+        unsafe {
+            let station = CreateWindowStationW(None, 0, 0x1000_0000, None).unwrap();
+            SetProcessWindowStation(station).unwrap();
+            let desktop = CreateDesktopW(
+                windows::core::w!("OpenVoiceClipboardRegression"),
+                None,
+                None,
+                DESKTOP_CONTROL_FLAGS(0),
+                0x1000_0000,
+                None,
+            )
+            .unwrap();
+            SetThreadDesktop(desktop).unwrap();
+        }
+        run();
+    }
+
+    #[test]
+    fn clipboard_write_sequence_survives_close_and_owner_cleanup() {
+        isolated_clipboard(
+            "inject::tests::clipboard_write_sequence_survives_close_and_owner_cleanup",
+            || {
+                let mut guard = ClipboardGuard::open().unwrap();
+                let written = guard.write_text("public clipboard regression").unwrap();
+                drop(guard);
+                let _guard = ClipboardGuard::open().unwrap();
+                assert_eq!(
+                    read_clipboard_text_locked().as_deref(),
+                    Some("public clipboard regression")
+                );
+                assert_eq!(
+                    unsafe { GetClipboardSequenceNumber() },
+                    written,
+                    "closing our own write invalidates the lease before paste"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn finalized_write_rejects_identical_text_copied_by_another_owner() {
+        isolated_clipboard(
+            "inject::tests::finalized_write_rejects_identical_text_copied_by_another_owner",
+            || {
+                let mut original = ClipboardGuard::open().unwrap();
+                original.write_text("identical public text").unwrap();
+                unsafe { CloseClipboard().unwrap() };
+                original.open = false;
+                let mut other = ClipboardGuard::open().unwrap();
+                other.write_text("identical public text").unwrap();
+                unsafe { CloseClipboard().unwrap() };
+                other.open = false;
+                original.acquire().unwrap();
+                assert!(original.written_sequence("identical public text").is_err());
+                assert_eq!(
+                    read_clipboard_text_locked().as_deref(),
+                    Some("identical public text")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn finalized_consecutive_writes_restore_original_native_clipboard() {
+        isolated_clipboard(
+            "inject::tests::finalized_consecutive_writes_restore_original_native_clipboard",
+            || {
+                let mut guard = ClipboardGuard::open().unwrap();
+                guard.write_text("original public text").unwrap();
+                drop(guard);
+                let mut lease = crate::ownership::Lease {
+                    snapshot: None,
+                    sequence: 0,
+                    generation: 0,
+                };
+                for text in ["first dictation", "second dictation"] {
+                    let mut guard = ClipboardGuard::open().unwrap();
+                    let snapshot = ClipboardSnapshot::capture_locked().unwrap();
+                    snapshot.require_complete().unwrap();
+                    lease.begin(unsafe { GetClipboardSequenceNumber() }, snapshot);
+                    lease
+                        .write(unsafe { GetClipboardSequenceNumber() }, || {
+                            guard.write_text(text)
+                        })
+                        .unwrap();
+                    drop(guard);
+                    let _guard = ClipboardGuard::open().unwrap();
+                    assert_eq!(unsafe { GetClipboardSequenceNumber() }, lease.sequence);
+                    assert_eq!(read_clipboard_text_locked().as_deref(), Some(text));
+                }
+                let _guard = ClipboardGuard::open().unwrap();
+                lease
+                    .take_for_restore(lease.generation, unsafe { GetClipboardSequenceNumber() })
+                    .unwrap()
+                    .restore_locked();
+                drop(_guard);
+                let _guard = ClipboardGuard::open().unwrap();
+                assert_eq!(
+                    read_clipboard_text_locked().as_deref(),
+                    Some("original public text")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn partial_snapshot_cannot_authorize_replacing_original_image() {
+        let snapshot = ClipboardSnapshot {
+            items: vec![],
+            partial: true,
+        };
+        assert!(snapshot.require_complete().is_err());
+    }
+
+    #[test]
+    fn clipboard_writes_have_a_valid_private_window_owner() {
+        let hwnd = clipboard_window().unwrap();
+        assert!(unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(hwnd) }.as_bool());
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    fn already_cancelled_short_unicode_never_reaches_send_input() {
+        assert!(send_unicode("abc😀", &ForegroundApp::default(), &AtomicBool::new(true)).is_err());
+    }
+
     #[test]
     fn never_restores_when_the_paste_never_sent() {
-        // The exact regression: a failed `send_paste_chord` means the caller's
-        // own safety net (re-copying `text` to the clipboard, see
-        // `WinTextSink::inject`) is sitting there, and it must survive.
+        // A failed paste leaves its text available until an explicit user copy.
         assert!(!should_restore(false, Some("our text"), "our text"));
         assert!(!should_restore(false, None, "our text"));
         assert!(!should_restore(false, Some("something else"), "our text"));
@@ -624,10 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn restores_after_success_when_no_text_is_present() {
-        // No CF_UNICODETEXT at all is treated as "safe to restore" once the
-        // paste is known to have gone through -- see the doc comment on
-        // `should_restore` for the ambiguity this still carries.
-        assert!(should_restore(true, None, "our text"));
+    fn non_text_clipboard_is_not_ours_to_restore() {
+        assert!(!should_restore(true, None, "our text"));
     }
 }

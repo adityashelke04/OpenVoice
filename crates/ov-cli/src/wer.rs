@@ -3,10 +3,19 @@
 /// Lower-case words, with punctuation other than apostrophes treated as spaces.
 #[must_use]
 pub fn normalize(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '\'' {
+    let chars: Vec<char> = text.to_lowercase().chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            let next_digit = chars.get(i + 1).is_some_and(char::is_ascii_digit);
+            let previous_digit = i > 0 && chars[i - 1].is_ascii_digit();
+            if c.is_alphanumeric()
+                || c == '\''
+                || c == '_'
+                || ((c == '.' || c == ',') && previous_digit && next_digit)
+                || ((c == '-' || c == '+') && next_digit && !previous_digit)
+            {
                 c
             } else {
                 ' '
@@ -52,12 +61,43 @@ pub fn wer(pairs: &[(String, String)]) -> f64 {
     }
 }
 
+/// Number of annotated names/numbers whose exact token sequence is missing.
+pub fn protected_errors(expected: &[String], hypothesis: &str) -> usize {
+    let heard = normalize(hypothesis);
+    expected
+        .iter()
+        .filter(|term| {
+            let words = normalize(term);
+            words.is_empty() || !heard.windows(words.len()).any(|window| window == words)
+        })
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn w(r: &str, h: &str) -> f64 {
         wer(&[(r.to_owned(), h.to_owned())])
+    }
+
+    #[test]
+    fn decimal_and_negative_number_errors_are_not_normalized_away() {
+        assert!(w("pay 3.14", "pay 3 14") > 0.0);
+        assert!(w("set -12", "set 12") > 0.0);
+        assert!(w("call Aditya", "call Aditi") > 0.0);
+    }
+
+    #[test]
+    fn annotated_names_and_numbers_are_exact_terms_not_substrings() {
+        assert_eq!(
+            protected_errors(&["Ann".into(), "-12.5".into()], "Joanne paid 12.5"),
+            2
+        );
+        assert_eq!(
+            protected_errors(&["Ann".into(), "-12.5".into()], "ANN paid -12.5."),
+            0
+        );
     }
 
     #[test]

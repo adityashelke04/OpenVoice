@@ -35,8 +35,20 @@ $Extras = @{ 'test_wavs/0.wav' = 'test.wav' }
 $Expected = $Files + $Extras.Values
 
 if (-not $Force -and (Test-Path $Dest)) {
-    $missing = $Expected | Where-Object { -not (Test-Path (Join-Path $Dest $_)) }
-    if (-not $missing) {
+    $missing = $Expected | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Dest $_) -PathType Leaf) }
+    $verified = $false
+    $manifestPath = Join-Path $Dest 'verified-files.json'
+    if (-not $missing -and (Test-Path -LiteralPath $manifestPath)) {
+        try {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            $verified = $manifest.archiveSha256 -eq $Sha256
+            foreach ($file in $Expected) {
+                $hash = (Get-FileHash -LiteralPath (Join-Path $Dest $file) -Algorithm SHA256).Hash.ToLower()
+                if ($manifest.files.$file -ne $hash) { $verified = $false }
+            }
+        } catch { $verified = $false }
+    }
+    if ($verified) {
         Write-Host "Model already present at $Dest"
         exit 0
     }
@@ -62,8 +74,13 @@ if ($actual -ne $Sha256) {
 }
 Write-Host 'Checksum OK.'
 
-$staging = Join-Path ([System.IO.Path]::GetTempPath()) "ov-model-$(Get-Random)"
-New-Item -ItemType Directory -Path $staging -Force | Out-Null
+$modelsRoot = [System.IO.Path]::GetFullPath((Join-Path $Root 'models'))
+$Dest = [System.IO.Path]::GetFullPath($Dest)
+if (-not $Dest.StartsWith($modelsRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Model destination escaped checkout.' }
+New-Item -ItemType Directory -Path $modelsRoot -Force | Out-Null
+$staging = Join-Path $modelsRoot ('.fetch-' + [guid]::NewGuid().ToString('N'))
+$backup = Join-Path $modelsRoot ('.previous-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $staging | Out-Null
 try {
     tar -xjf $tmp -C $staging
     if ($LASTEXITCODE -ne 0) { throw "tar failed to extract $tmp (exit $LASTEXITCODE)" }
@@ -71,17 +88,34 @@ try {
     # The archive expands to a directory named after the upstream release asset.
     # Install under a stable name so nothing downstream — the resolver, the NSIS
     # hook, the tests — has to encode that filename.
-    if (Test-Path $Dest) { Remove-Item $Dest -Recurse -Force }
-    New-Item -ItemType Directory -Path $Dest -Force | Out-Null
+    $prepared = Join-Path $staging 'prepared'
+    New-Item -ItemType Directory -Path $prepared | Out-Null
     foreach ($f in $Files) {
-        Copy-Item (Join-Path $staging "$Name/$f") (Join-Path $Dest $f)
+        Copy-Item -LiteralPath (Join-Path $staging "$Name/$f") -Destination (Join-Path $prepared $f)
     }
     foreach ($src in $Extras.Keys) {
-        Copy-Item (Join-Path $staging "$Name/$src") (Join-Path $Dest $Extras[$src])
+        Copy-Item -LiteralPath (Join-Path $staging "$Name/$src") -Destination (Join-Path $prepared $Extras[$src])
     }
+    $hashes = @{}
+    foreach ($file in $Expected) {
+        $hashes[$file] = (Get-FileHash -LiteralPath (Join-Path $prepared $file) -Algorithm SHA256).Hash.ToLower()
+    }
+    @{ archiveSha256 = $Sha256; files = $hashes } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $prepared 'verified-files.json')
+    $hadPrevious = Test-Path -LiteralPath $Dest
+    if ($hadPrevious) { Move-Item -LiteralPath $Dest -Destination $backup }
+    try { Move-Item -LiteralPath $prepared -Destination $Dest }
+    catch {
+        if ($hadPrevious) { Move-Item -LiteralPath $backup -Destination $Dest }
+        throw
+    }
+    $resolvedBackup = [System.IO.Path]::GetFullPath($backup)
+    if (-not $resolvedBackup.StartsWith($modelsRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Backup directory escaped checkout.' }
+    if (Test-Path -LiteralPath $resolvedBackup) { Remove-Item -LiteralPath $resolvedBackup -Recurse -Force }
 } finally {
-    if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+    $resolvedStage = [System.IO.Path]::GetFullPath($staging)
+    if (-not $resolvedStage.StartsWith($modelsRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Staging directory escaped checkout.' }
+    if (Test-Path -LiteralPath $resolvedStage) { Remove-Item -LiteralPath $resolvedStage -Recurse -Force }
 }
 
-Remove-Item $tmp -Force
+Remove-Item -LiteralPath $tmp -Force
 Write-Host "Model ready at $Dest"

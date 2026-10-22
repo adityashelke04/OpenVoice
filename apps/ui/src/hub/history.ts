@@ -11,9 +11,10 @@ export const FILTERS: { value: ProfileFilter; label: string }[] = [
 /** Newest first. Search answers come back in relevance order (FTS rank), and a
  *  day-grouped list needs them by time or the same day would appear twice. */
 export const newestFirst = (rows: Row[]) => [...rows].sort((a, b) => b.created_at - a.created_at);
-export type OutcomeKind = "delivered" | "clipboard" | "failed";
+export type OutcomeKind = "delivered" | "clipboard" | "held" | "failed";
 export function outcomeInfo(row: Pick<Row, "outcome">): OutcomeKind {
   if (row.outcome === "delivered") return "delivered";
+  if (row.outcome === "delivery_held") return "held";
   return row.outcome === "clipboard_fallback" ? "clipboard" : "failed";
 }
 export interface DayGroup { key: string; label: string; rows: Row[] }

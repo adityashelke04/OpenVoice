@@ -7,8 +7,8 @@
 
 use std::path::Path;
 
-use ov_core::error::Result;
-use ov_core::ports::{HistoryStore, Utterance};
+use ov_core::error::{Error, Result};
+use ov_core::ports::Utterance;
 use serde::Deserialize;
 
 use crate::SqliteStore;
@@ -43,14 +43,32 @@ struct Row {
 /// user's history until the import is proven good, and a rename costs nothing.
 pub fn import_jsonl(store: &SqliteStore, path: impl AsRef<Path>) -> Result<usize> {
     let path = path.as_ref();
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Ok(0);
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(Error::Storage(format!("reading legacy history: {e}"))),
     };
+    let source = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let mut conn = store.conn.lock().expect("store mutex");
+    let tx = conn
+        .transaction()
+        .map_err(|e| Error::Storage(format!("starting history import: {e}")))?;
+    let done: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM history_import WHERE source = ?1)",
+            [&source],
+            |r| r.get(0),
+        )
+        .map_err(|e| Error::Storage(format!("checking history import: {e}")))?;
 
     let mut imported = 0usize;
     let mut skipped = 0usize;
 
-    for line in text.lines() {
+    for line in text.lines().filter(|_| !done) {
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -77,18 +95,29 @@ pub fn import_jsonl(store: &SqliteStore, path: impl AsRef<Path>) -> Result<usize
             latency_ms: r.latency_ms,
         };
 
-        if store.append(&entry).is_ok() {
-            imported += 1;
-        } else {
-            skipped += 1;
-        }
+        crate::append_on(&tx, &entry)?;
+        imported += 1;
+    }
+
+    tx.execute(
+        "INSERT OR IGNORE INTO history_import(source) VALUES (?1)",
+        [&source],
+    )
+    .map_err(|e| Error::Storage(format!("marking history import: {e}")))?;
+    tx.commit()
+        .map_err(|e| Error::Storage(format!("committing history import: {e}")))?;
+    drop(conn);
+    if !store.is_persistent() {
+        return Ok(imported);
     }
 
     // Keep the original, out of the way. If the import turns out to be wrong it is
     // still recoverable, and it costs one filename.
     let archived = path.with_extension("jsonl.imported");
     if let Err(e) = std::fs::rename(path, &archived) {
-        tracing::warn!(error = %e, "could not archive the old history file");
+        return Err(Error::Storage(format!(
+            "history imported safely, but could not archive legacy file: {e}"
+        )));
     }
 
     tracing::info!(
@@ -106,10 +135,67 @@ mod tests {
     use ov_core::ports::HistoryStore;
 
     fn temp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("ov-import-{name}.jsonl"));
+        let p = std::env::temp_dir().join(format!("ov-import-{}-{name}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_file(p.with_extension("jsonl.imported"));
         p
+    }
+
+    #[test]
+    fn volatile_import_keeps_source_and_does_not_duplicate() {
+        let path = temp("volatile");
+        std::fs::write(
+            &path,
+            r#"{"created_at":1,"outcome":"delivered","final_text":"keep me"}"#,
+        )
+        .unwrap();
+        let store = SqliteStore::open(":memory:").unwrap();
+        assert_eq!(import_jsonl(&store, &path).unwrap(), 1);
+        assert!(
+            path.exists(),
+            "volatile database must never archive the only durable copy"
+        );
+        assert_eq!(import_jsonl(&store, &path).unwrap(), 0);
+        assert_eq!(store.recent(10).unwrap().len(), 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn insert_failure_rolls_back_and_preserves_source() {
+        let path = temp("rollback");
+        std::fs::write(
+            &path,
+            "{\"final_text\":\"first\"}\n{\"final_text\":\"fail\"}",
+        )
+        .unwrap();
+        let store = SqliteStore::open(":memory:").unwrap();
+        store.conn.lock().unwrap().execute_batch("CREATE TRIGGER reject_import BEFORE INSERT ON utterance WHEN new.final_text = 'fail' BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert!(import_jsonl(&store, &path).is_err());
+        assert!(path.exists());
+        assert!(store.recent(10).unwrap().is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn archive_failure_does_not_duplicate_after_reopen() {
+        let path = temp("archive-failure");
+        let db = path.with_extension("db");
+        let _ = std::fs::remove_file(&db);
+        let archived = path.with_extension("jsonl.imported");
+        std::fs::create_dir(&archived).unwrap();
+        std::fs::write(&path, r#"{"final_text":"once"}"#).unwrap();
+        {
+            let store = SqliteStore::open(&db).unwrap();
+            let _ = import_jsonl(&store, &path);
+            assert_eq!(store.recent(10).unwrap().len(), 1);
+        }
+        let store = SqliteStore::open(&db).unwrap();
+        let _ = import_jsonl(&store, &path);
+        assert_eq!(store.recent(10).unwrap().len(), 1);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(archived).unwrap();
+        drop(store);
+        let _ = std::fs::remove_file(db);
     }
 
     #[test]
@@ -123,7 +209,7 @@ mod tests {
         )
         .unwrap();
 
-        let store = SqliteStore::open(":memory:").unwrap();
+        let store = SqliteStore::open(path.with_extension("db")).unwrap();
         assert_eq!(import_jsonl(&store, &path).unwrap(), 2);
 
         let rows = store.recent(10).unwrap();

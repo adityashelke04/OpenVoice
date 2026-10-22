@@ -15,12 +15,8 @@ pub enum FillerLevel {
     /// Remove unambiguous disfluencies only: "um", "uh", "erm", "mhm".
     #[default]
     Light,
-    /// Also remove discourse markers: "like", "you know", "basically",
-    /// "sort of", "kind of".
-    ///
-    /// Deliberately not the default. These words are sometimes load-bearing —
-    /// "sort of" can be the actual meaning — and silently deleting them produces
-    /// sentences the user did not say.
+    /// Legacy setting retained for saved profiles. Uses the same safe cleanup
+    /// as Light; ambiguous discourse markers can carry meaning.
     Aggressive,
 }
 
@@ -138,7 +134,7 @@ impl Profile {
             ],
             capitalize: Capitalization::Sentence,
             end_period: true,
-            fillers: FillerLevel::Aggressive,
+            fillers: FillerLevel::Light,
             voice_commands: true,
             case_transforms: false,
             dictionaries: vec!["code".into()],

@@ -104,6 +104,8 @@ export function addDictionaryTerm(
 }
 
 export interface Settings {
+  revision?: number;
+  load_warning?: string;
   config: Config;
   model: string;
   dictionary: DictEntry[];
@@ -117,6 +119,7 @@ const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
   if (!inTauri()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
+  if (!inTauri()) return null;
   return invoke<T>(cmd, args);
 }
 
@@ -270,7 +273,7 @@ export const MODEL_COPY: Record<string, { name: string; detail: string; speed: s
   "parakeet-tdt-0.6b-v3": {
     name: "Multilingual",
     detail:
-      "25 languages, detected as you speak with nothing to configure. Same speed and size as Standard.",
+      "25 European languages, detected automatically. Hindi is not supported.",
     speed: "~0.6 s",
   },
   "whisper-tiny.en": {
@@ -280,3 +283,15 @@ export const MODEL_COPY: Record<string, { name: string; detail: string; speed: s
     speed: "~0.5 s",
   },
 };
+
+export interface RecoveryAudio { session: number; durationMs: number; partial: boolean }
+export const getRecovery = () => call<RecoveryAudio>("get_recovery");
+export const retryAudio = (session: number) => call<void>("retry_audio", { session });
+export const discardRecovery = () => call<void>("discard_recovery");
+
+export const getStorageStatus = () => call<boolean>("get_storage_status");
+export const getLastText = () => call<string>("get_last_text");
+
+export interface LastTranscript { text: string; partial: boolean }
+export const getLastTranscript = () => call<LastTranscript>("get_last_transcript");
+export const getStorageWarning = () => call<string>("get_storage_warning");

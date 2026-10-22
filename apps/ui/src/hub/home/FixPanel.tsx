@@ -21,12 +21,14 @@ import type { Row } from "../../engine/stats";
 
 export function FixPanel({ row, patch, onDone }: {
   row: Row;
-  patch: (fn: (s: Settings) => void) => void;
+  patch: (fn: (s: Settings) => void) => void | Promise<boolean>;
   onDone: () => void;
 }) {
   const id = useId();
   const [heard, setHeard] = useState("");
   const [written, setWritten] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
 
   const words = row.raw_text.split(/\s+/).filter(Boolean);
@@ -40,10 +42,16 @@ export function FixPanel({ row, patch, onDone }: {
     opener?.focus();
   };
 
-  const save = () => {
-    if (!canSave) return;
-    patch((s) => { addDictionaryTerm(s, heard, written); });
-    close();
+  const save = async () => {
+    if (!canSave || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      if (await patch((s) => { addDictionaryTerm(s, heard, written); }) === false) {
+        setError("Could not save correction. Check disk space and folder permissions, then retry.");
+      } else close();
+    } catch (e) { setError(`Could not save correction. Retry. ${String(e)}`); }
+    finally { setSaving(false); }
   };
 
   // Escape belongs to the panel while focus is in it: it closes the panel and
@@ -81,9 +89,10 @@ export function FixPanel({ row, patch, onDone }: {
             onKeyDown={(e) => { if (e.key === "Enter") save(); }}
           />
         </div>
-        <Button variant="primary" size="sm" onClick={save} disabled={!canSave}>Save</Button>
+        <Button variant="primary" size="sm" onClick={save} disabled={!canSave || saving}>Save</Button>
         <Button size="sm" onClick={close}>Cancel</Button>
       </div>
+      {error && <p role="alert">{error}</p>}
       <p className="cap">Applies to the next thing you dictate. Nothing already written changes.</p>
     </div>
   );

@@ -26,13 +26,16 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
+mod audio_effects;
 mod clickaway;
 mod engine;
 mod history;
+mod history_state;
 mod material;
 mod models;
 mod names;
 mod overlay;
+mod recovery;
 mod settings;
 mod taplatch;
 mod topmost;
@@ -282,14 +285,17 @@ struct AppState {
     /// what is now on disk, and a snapshot of what it booted with is the one
     /// source that cannot drift as settings are added.
     booted: Mutex<Option<settings::Settings>>,
+    live_apply_error: Mutex<Option<String>>,
     overlay: overlay::Overlay,
     settings: settings::Store,
     store: Arc<ov_store::SqliteStore>,
+    storage_warning: Option<String>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         let settings = settings::Store::load();
+        let (store, storage_warning) = open_history(&settings);
         Self {
             engine: Mutex::new(None),
             ready: Mutex::new(None),
@@ -298,8 +304,10 @@ impl Default for AppState {
             starting: AtomicBool::new(true),
             download: Mutex::new(None),
             booted: Mutex::new(None),
+            live_apply_error: Mutex::new(None),
             overlay: overlay::Overlay::new(),
-            store: open_history(&settings),
+            store,
+            storage_warning,
             settings,
         }
     }
@@ -310,27 +318,17 @@ impl Default for AppState {
 /// If SQLite cannot be opened the app still starts, on an in-memory database.
 /// Dictation working without a saved transcript is a far better failure than an
 /// app that refuses to launch because a file is locked.
-fn open_history(settings: &settings::Store) -> Arc<ov_store::SqliteStore> {
+fn open_history(settings: &settings::Store) -> (Arc<ov_store::SqliteStore>, Option<String>) {
     use ov_core::ports::HistoryStore;
 
     let dir = history::data_dir();
-    let store = ov_store::SqliteStore::open(dir.join("history.db")).unwrap_or_else(|e| {
-        tracing::error!(error = %e, "history database unavailable; using memory only");
-        ov_store::SqliteStore::open(":memory:").expect("in-memory database")
-    });
+    let (store, warning) = history_state::open(&dir);
 
-    // Existing users have real transcripts in the file this replaces. Shipping
-    // without importing them would reset their word count and streak to zero,
-    // which from their side is indistinguishable from losing the data.
-    match ov_store::import_jsonl(&store, dir.join("history.jsonl")) {
-        Ok(0) => {}
-        Ok(n) => tracing::info!(imported = n, "migrated history from the previous format"),
-        Err(e) => tracing::warn!(error = %e, "could not import the old history file"),
-    }
-
-    // Apply the retention setting once at startup rather than on a timer: history
-    // only grows while the app is running, so a daily check on launch is enough.
-    let privacy = settings.get().config.privacy;
+    // Startup cleanup complements the bounded running maintenance loop.
+    let authentic = settings.get();
+    let Some(privacy) = authentic.retention_policy() else {
+        return (store, warning);
+    };
     if let Err(e) = store.purge_older_than(privacy.history_days) {
         tracing::warn!(error = %e, "retention purge failed");
     }
@@ -345,14 +343,88 @@ fn open_history(settings: &settings::Store) -> Arc<ov_store::SqliteStore> {
         tracing::warn!(error = %e, "recording purge failed");
     }
 
-    Arc::new(store)
+    (store, warning)
 }
 
 /* -- settings commands ------------------------------------------------------ */
 
 #[tauri::command]
 fn get_settings(state: tauri::State<'_, AppState>) -> settings::Settings {
-    state.settings.get()
+    let mut current = state.settings.get();
+    if current.load_warning.is_none()
+        && state
+            .booted
+            .lock()
+            .expect("booted")
+            .as_ref()
+            .is_some_and(|s| s.load_warning.is_some())
+    {
+        current.load_warning = Some("Your original settings have been recovered. Restart OpenVoice to apply them to the running engine.".into());
+    }
+    current
+}
+
+#[tauri::command]
+fn get_recovery(state: tauri::State<'_, AppState>) -> Option<engine::RecoveryInfo> {
+    state
+        .engine
+        .lock()
+        .expect("engine")
+        .as_ref()
+        .and_then(|e| e.recovery_info())
+}
+
+#[tauri::command]
+async fn retry_audio(app: AppHandle, session: u64) -> Result<(), String> {
+    let engine = app
+        .state::<AppState>()
+        .engine
+        .lock()
+        .expect("engine")
+        .clone()
+        .ok_or("Engine is not ready")?;
+    tauri::async_runtime::spawn_blocking(move || engine.retry_audio(session))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn discard_recovery(state: tauri::State<'_, AppState>) {
+    if let Some(engine) = state.engine.lock().expect("engine").as_ref() {
+        engine.discard_recovery();
+    }
+}
+
+#[tauri::command]
+fn get_storage_status(state: tauri::State<'_, AppState>) -> bool {
+    state.store.is_persistent()
+}
+
+#[tauri::command]
+fn get_storage_warning(state: tauri::State<'_, AppState>) -> Option<String> {
+    state.storage_warning.clone()
+}
+
+#[tauri::command]
+fn get_last_text(state: tauri::State<'_, AppState>) -> String {
+    state
+        .engine
+        .lock()
+        .expect("engine")
+        .as_ref()
+        .map(|e| e.last_text())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_last_transcript(state: tauri::State<'_, AppState>) -> engine::MemoryTranscript {
+    state
+        .engine
+        .lock()
+        .expect("engine")
+        .as_ref()
+        .map(|e| e.last_transcript())
+        .unwrap_or_default()
 }
 
 /// Persist a whole settings document.
@@ -366,8 +438,7 @@ fn save_settings(
     state: tauri::State<'_, AppState>,
     settings: settings::Settings,
 ) -> Result<settings::Settings, String> {
-    let before = state.settings.get();
-    let saved = state.settings.update(|s| *s = settings)?;
+    let saved = state.settings.replace_and_apply(settings, |before, saved| {
 
     // Push the edited dictionary into the running engine so corrections take effect
     // on the very next utterance. Without this the Dictionary screen would quietly
@@ -378,26 +449,32 @@ fn save_settings(
     // was handed at launch, so a rebind took effect only on the next start while
     // the Settings screen showed it as already in force.
     if let Some(e) = state.engine.lock().expect("engine").as_ref() {
-        e.reload_rules(&saved);
-        e.reload_language(&saved);
+        e.reload_rules(saved);
+        e.reload_language(saved);
+        e.reload_redactor(saved);
 
         if before.config.chord != saved.config.chord
             || before.config.activation != saved.config.activation
         {
-            if let Err(err) = e.reload_hotkey(&saved) {
+            if let Err(err) = e.reload_hotkey(saved) {
                 // Not fatal to the save -- the setting is on disk and will hold
                 // from the next launch -- but the user must be told, because the
                 // failure is invisible: they would press the new key and get
                 // nothing, with the screen insisting it is bound.
                 tracing::error!(error = %err, "shortcut could not be applied live");
-                return Err(format!(
+                *state.live_apply_error.lock().expect("live apply") = Some(format!(
                     "Saved, but the new shortcut could not be applied while it is running ({err}). Restart OpenVoice to start using it."
                 ));
+            } else {
+                *state.live_apply_error.lock().expect("live apply") = None;
+                publish_shortcut(&app, &state, saved);
             }
-            publish_shortcut(&app, &state, &saved);
         }
     }
 
+    });
+    let saved = saved?;
+    let _ = app.emit("settings-saved", &saved);
     Ok(saved)
 }
 
@@ -438,7 +515,16 @@ fn restart_reasons(app: AppHandle, state: tauri::State<'_, AppState>) -> Vec<Str
     // differ permanently, and reading the store here would pin the banner open on
     // a model change that restarting could never deliver.
     let now = effective_settings(&app);
-    let mut reasons = Vec::new();
+    let mut reasons: Vec<String> = state
+        .live_apply_error
+        .lock()
+        .expect("live apply")
+        .clone()
+        .into_iter()
+        .collect();
+    if booted.load_warning.is_some() {
+        reasons.push("settings recovered after a startup read failure".into());
+    }
 
     // Weights are loaded once, at warm-up, so choosing a different model on the
     // Models screen takes effect at the next start and not before.
@@ -866,6 +952,13 @@ fn init_logging() {
 }
 
 fn main() {
+    if let Some(result) = ov_asr::worker::run_from_args() {
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     init_logging();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "OpenVoice starting");
 
@@ -954,6 +1047,13 @@ fn main() {
             restart_reasons,
             list_microphones,
             retry_engine,
+            get_recovery,
+            retry_audio,
+            discard_recovery,
+            get_storage_status,
+            get_storage_warning,
+            get_last_text,
+            get_last_transcript,
             preview_format,
             check_for_update,
             install_update,
@@ -996,6 +1096,41 @@ fn main() {
             // UI thread. The window paints immediately and reports progress rather
             // than showing a frozen frame for several seconds.
             spawn_engine(handle.clone());
+            let maintenance = handle.clone();
+            std::thread::spawn(move || loop {
+                let state = maintenance.state::<AppState>();
+                let authentic = state.settings.get();
+                let Some(privacy) = authentic.retention_policy() else {
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                    continue;
+                };
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                if let Err(error) = state.store.maintenance_at(privacy.history_days, now) {
+                    let _ = maintenance.emit(
+                        EVENT,
+                        Event::Notice {
+                            level: ov_core::event::NoticeLevel::Warn,
+                            message: format!("History retention could not run: {error}"),
+                        },
+                    );
+                }
+                if let Err(error) = ov_asr::recordings::purge_recordings(
+                    &history::data_dir().join("audio"),
+                    privacy.audio_days,
+                ) {
+                    let _ = maintenance.emit(
+                        EVENT,
+                        Event::Notice {
+                            level: ov_core::event::NoticeLevel::Warn,
+                            message: format!("Recording retention could not run: {error}"),
+                        },
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            });
 
             // A Hub created hidden must never stay hidden: if its page has not
             // reported a finished load in 4 s (a stalled dev server, a WebView2

@@ -1,3 +1,4 @@
+import { cleanup } from "@testing-library/react";
 /** A stand-in for the Tauri IPC bridge in component tests.
  *
  * `@tauri-apps/api` talks to `window.__TAURI_INTERNALS__`; installing a fake one
@@ -50,6 +51,7 @@ export function installTauri(handlers: Record<string, (args: any) => unknown> = 
       for (const id of subscriptions.get(event) ?? []) callbacks.get(id)?.({ event, id, payload });
     },
     uninstall: () => {
+      cleanup();
       callbacks.clear();
       subscriptions.clear();
       delete (window as any).__TAURI_INTERNALS__;

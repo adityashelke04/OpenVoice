@@ -36,6 +36,13 @@ use std::collections::VecDeque;
 /// Something that happened, fed into the machine by the composition root.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
+    /// The device has opened successfully for this session.
+    CaptureStarted {
+        /// Session acknowledged.
+        session: SessionId,
+        /// When microphone readiness was confirmed.
+        at: Millis,
+    },
     /// The dictation chord went down.
     HotkeyPressed {
         /// When it happened.
@@ -144,7 +151,8 @@ impl Input {
     #[must_use]
     pub fn at(&self) -> Millis {
         match self {
-            Self::HotkeyPressed { at, .. }
+            Self::CaptureStarted { at, .. }
+            | Self::HotkeyPressed { at, .. }
             | Self::HotkeyReleased { at }
             | Self::Cancelled { at }
             | Self::AudioCaptured { at, .. }
@@ -224,7 +232,7 @@ pub enum Effect {
         /// knowing on its own whether focus moved in that window — carrying this
         /// through lets the caller notice a mismatch and log it, rather than
         /// silently sending a paste to whatever now happens to be foreground.
-        target_exe: String,
+        target: ForegroundApp,
     },
     /// Write the session to history. Emitted exactly once per session.
     Persist {
@@ -355,6 +363,12 @@ impl SessionMachine {
         self.pipeline.len()
     }
 
+    /// Identity whose microphone capture is still active, if any.
+    #[must_use]
+    pub fn capturing_session(&self) -> Option<SessionId> {
+        self.capturing.as_ref().map(|s| s.id)
+    }
+
     /// Feed one input and receive the effects to perform.
     ///
     /// Unknown or out-of-order inputs — a `Transcribed` for a session that was
@@ -364,6 +378,18 @@ impl SessionMachine {
     pub fn handle(&mut self, input: Input) -> Vec<Effect> {
         let mut fx = Vec::new();
         match input {
+            Input::CaptureStarted { session, .. } => {
+                if let Some(active) = self
+                    .capturing
+                    .as_ref()
+                    .filter(|a| a.id == session && a.released_at.is_none())
+                {
+                    fx.push(Effect::Emit(Event::Listening {
+                        session,
+                        profile: active.profile.clone(),
+                    }));
+                }
+            }
             Input::HotkeyPressed { at, app, profile } => self.on_pressed(at, app, profile, &mut fx),
             Input::HotkeyReleased { at } => self.on_released(at, &mut fx),
             Input::Cancelled { at } => self.on_cancelled(at, &mut fx),
@@ -390,6 +416,13 @@ impl SessionMachine {
                 self.on_transcribed(session, transcript, at, &mut fx);
             }
             Input::TranscriptionFailed { session, error, at } => {
+                if !self
+                    .pipeline
+                    .front()
+                    .is_some_and(|s| s.id == session && s.phase == Phase::Transcribing)
+                {
+                    return fx;
+                }
                 self.finish_pipeline(
                     session,
                     at,
@@ -400,6 +433,13 @@ impl SessionMachine {
             }
             Input::Formatted { session, text, at } => self.on_formatted(session, text, at, &mut fx),
             Input::Injected { session, at } => {
+                if !self
+                    .pipeline
+                    .front()
+                    .is_some_and(|s| s.id == session && s.phase == Phase::Injecting)
+                {
+                    return fx;
+                }
                 let text = self.front_final_text(session);
                 self.finish_pipeline(session, at, Outcome::Delivered, text, &mut fx);
             }
@@ -408,8 +448,15 @@ impl SessionMachine {
                 error: _,
                 at,
             } => {
-                // Not a failure from the user's point of view: the text is on the
-                // clipboard, so nothing was lost. Say what to do, not what broke.
+                if !self
+                    .pipeline
+                    .front()
+                    .is_some_and(|s| s.id == session && s.phase == Phase::Injecting)
+                {
+                    return fx;
+                }
+                // The complete text is retained for explicit Copy without taking
+                // ownership of an intervening user clipboard update.
                 //
                 // This notice is the only *proactive* signal the user gets. Without
                 // it, the only way to discover an injection failed is to notice a
@@ -417,7 +464,7 @@ impl SessionMachine {
                 // of a clipboard fallback that exists to be used in the moment.
                 fx.push(Effect::Emit(Event::Notice {
                     level: NoticeLevel::Warn,
-                    message: "Couldn't type that in — copied to your clipboard. Press Ctrl+V."
+                    message: "Couldn't type that in. Your complete transcript is kept in OpenVoice; use Copy, then Ctrl+V."
                         .into(),
                 }));
                 // Must be the *formatted* text: that's what was actually handed to
@@ -429,7 +476,7 @@ impl SessionMachine {
                 self.finish_pipeline(
                     session,
                     at,
-                    Outcome::ClipboardFallback(text.clone()),
+                    Outcome::DeliveryHeld(text.clone()),
                     text,
                     &mut fx,
                 );
@@ -501,6 +548,10 @@ impl SessionMachine {
         profile: String,
         fx: &mut Vec<Effect>,
     ) {
+        if self.pipeline.len() >= 4 {
+            fx.push(Effect::Emit(Event::Notice { level: NoticeLevel::Warn, message: "Four dictations are still processing. Wait for them to finish before recording again.".into() }));
+            return;
+        }
         let id = SessionId(self.next_id);
         self.next_id += 1;
         self.capturing = Some(Active {
@@ -515,10 +566,6 @@ impl SessionMachine {
             phase: Phase::Capturing,
         });
         fx.push(Effect::StartCapture { session: id });
-        fx.push(Effect::Emit(Event::Listening {
-            session: id,
-            profile,
-        }));
     }
 
     /// Start a press that was held back while the previous capture finished.
@@ -611,7 +658,8 @@ impl SessionMachine {
             return;
         }
 
-        if rms < self.limits.silence_rms {
+        // Low amplitude alone cannot distinguish quiet speech from room noise.
+        if rms == 0.0 {
             self.persist(&active, Outcome::Silent, String::new(), at, fx);
             fx.push(Effect::Emit(Event::Notice {
                 level: NoticeLevel::Warn,
@@ -722,7 +770,7 @@ impl SessionMachine {
         fx.push(Effect::Inject {
             session,
             text,
-            target_exe: front.app.exe.clone(),
+            target: front.app.clone(),
         });
     }
 
@@ -842,23 +890,133 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    #[test]
+    fn stale_delivery_failure_after_cancel_produces_no_notice() {
+        let mut m = machine();
+        press(&mut m, 0);
+        m.handle(Input::Cancelled { at: Millis(1000) });
+        assert!(m
+            .handle(Input::InjectionFailed {
+                session: SessionId(1),
+                error: "cancelled".into(),
+                at: Millis(1001)
+            })
+            .is_empty());
+    }
+
+    #[test]
+    fn delivery_ack_cannot_finish_a_session_still_transcribing() {
+        let mut m = machine();
+        press(&mut m, 0);
+        m.handle(Input::HotkeyReleased { at: Millis(1000) });
+        m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 1000,
+            rms: 0.1,
+            at: Millis(1001),
+        });
+        assert!(m
+            .handle(Input::Injected {
+                session: SessionId(1),
+                at: Millis(1002)
+            })
+            .is_empty());
+        assert_eq!(m.queue_depth(), 1);
+    }
+
+    #[test]
+    fn decoder_backlog_cannot_start_unbounded_audio_captures() {
+        let mut m = machine();
+        for n in 0..4 {
+            let t = n * 2000;
+            press(&mut m, t);
+            m.handle(Input::HotkeyReleased {
+                at: Millis(t + 1000),
+            });
+            m.handle(Input::AudioCaptured {
+                session: SessionId(n + 1),
+                duration_ms: 1000,
+                rms: 0.1,
+                at: Millis(t + 1001),
+            });
+        }
+        assert_eq!(m.queue_depth(), 4);
+        let fx = press(&mut m, 9000);
+        assert!(!fx.iter().any(|f| matches!(f, Effect::StartCapture { .. })));
+        assert!(fx
+            .iter()
+            .any(|f| matches!(f, Effect::Emit(Event::Notice { .. }))));
+    }
+
+    #[test]
+    fn listening_is_not_announced_before_microphone_acknowledges_start() {
+        let mut m = machine();
+        let fx = m.handle(Input::HotkeyPressed {
+            at: Millis(0),
+            app: app(),
+            profile: "editor".into(),
+        });
+        assert!(fx.iter().any(|e| matches!(e, Effect::StartCapture { .. })));
+        assert!(!fx
+            .iter()
+            .any(|e| matches!(e, Effect::Emit(Event::Listening { .. }))));
+        let failed = m.handle(Input::AudioFailed {
+            session: SessionId(1),
+            error: "device unavailable".into(),
+            at: Millis(1),
+        });
+        assert!(matches!(
+            persists(&failed)[0].outcome,
+            Outcome::CaptureFailed(_)
+        ));
+        assert!(m.is_idle());
+    }
+
+    #[test]
+    fn quiet_nonzero_audio_reaches_recognition() {
+        let mut m = machine();
+        press(&mut m, 0);
+        m.handle(Input::HotkeyReleased { at: Millis(1000) });
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 1000,
+            rms: 0.0001,
+            at: Millis(1005),
+        });
+        assert!(fx.iter().any(|e| matches!(e, Effect::Transcribe { .. })));
+    }
+
     fn machine() -> SessionMachine {
         SessionMachine::new(SessionLimits::default())
     }
 
     fn app() -> ForegroundApp {
         ForegroundApp {
+            window: Some(crate::types::WindowIdentity {
+                handle: 11,
+                process_id: 5,
+            }),
             exe: "Code.exe".into(),
             title: "main.rs".into(),
         }
     }
 
     fn press(m: &mut SessionMachine, t: u64) -> Vec<Effect> {
-        m.handle(Input::HotkeyPressed {
+        let mut fx = m.handle(Input::HotkeyPressed {
             at: Millis(t),
             app: app(),
             profile: "editor".into(),
-        })
+        });
+        if let Some(id) = fx.iter().find_map(|f| match f {
+            Effect::StartCapture { session } => Some(*session),
+            _ => None,
+        }) {
+            fx.extend(m.handle(Input::CaptureStarted {
+                session: id,
+                at: Millis(t),
+            }));
+        }
+        fx
     }
 
     fn transcript(s: &str) -> Transcript {
@@ -1199,9 +1357,8 @@ mod tests {
             "the first utterance must still be transcribed"
         );
         assert!(
-            fx.iter().any(
-                |e| matches!(e, Effect::Emit(Event::Listening { session, .. }) if *session == SessionId(2))
-            ),
+            fx.iter()
+                .any(|e| matches!(e, Effect::StartCapture { session } if *session == SessionId(2))),
             "the held press must open a second capture"
         );
         // Never idle: the microphone is open.
@@ -1265,7 +1422,7 @@ mod tests {
         let fx = m.handle(Input::AudioCaptured {
             session: SessionId(1),
             duration_ms: 3_000,
-            rms: 0.0001,
+            rms: 0.0,
             at: Millis(3_005),
         });
 
@@ -1380,6 +1537,11 @@ mod tests {
 
         let record = persists(&fx)[0];
         assert!(record.outcome.is_success(), "user still has their words");
+        assert_eq!(
+            record.outcome.code(),
+            "delivery_held",
+            "failed delivery cannot promise ownership of the user's clipboard"
+        );
         assert!(
             !record.final_text.is_empty(),
             "text must survive to history"
@@ -1390,8 +1552,8 @@ mod tests {
         // ("use effect"), which would silently disagree with the clipboard.
         assert_eq!(record.final_text, "useEffect");
         match &record.outcome {
-            Outcome::ClipboardFallback(text) => assert_eq!(text, "useEffect"),
-            other => panic!("expected ClipboardFallback, got {other:?}"),
+            Outcome::DeliveryHeld(text) => assert_eq!(text, "useEffect"),
+            other => panic!("expected DeliveryHeld, got {other:?}"),
         }
         // The only proactive signal the user gets that something needs a manual
         // Ctrl+V. Without it, discovering a failed injection means noticing a
@@ -1464,7 +1626,7 @@ mod tests {
         let fx = m.handle(Input::AudioCaptured {
             session: SessionId(3),
             duration_ms: 1_000,
-            rms: 0.0001, // below silence_rms
+            rms: 0.0, // exact digital silence
             at: Millis(2_205),
         });
         assert_eq!(persists(&fx)[0].outcome, Outcome::Silent);

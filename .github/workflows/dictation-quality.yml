@@ -1,0 +1,38 @@
+name: Dictation quality (real assets required)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: target/sherpa-onnx-prebuilt
+      - name: Require approved real fixtures before expensive downloads
+        shell: pwsh
+        run: |
+          $manifest = Get-Content tests/dictation/public.json -Raw | ConvertFrom-Json
+          if (-not $manifest.approved -or $manifest.personal -or $manifest.clips.Count -eq 0) {
+            throw 'BLOCKED: approved redistributable real dictation fixtures are missing. Empty quality data cannot pass.'
+          }
+      - uses: actions/cache@v4
+        with:
+          path: models/parakeet-tdt-0.6b-v2
+          key: parakeet-v2-157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad
+      - name: Verify checksum-pinned model and installed files
+        shell: pwsh
+        run: ./scripts/fetch-model.ps1
+      - name: Compare whole and paced incremental on identical approved fixtures
+        shell: pwsh
+        run: |
+          cargo run --release -p ov-cli -- quality --manifest tests/dictation/public.json --model-dir models/parakeet-tdt-0.6b-v2 --max-wer 10
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Gate C needs a deliberately collected live app run. Never substitute
+      # worker benchmarks or synthetic fixture logs for release-to-delivery data.

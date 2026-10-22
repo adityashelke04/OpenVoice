@@ -23,8 +23,10 @@ export function DictionaryScreen({
   patch,
 }: {
   settings: S;
-  patch: (fn: (s: S) => void) => void;
+  patch: (fn: (s: S) => void) => void | Promise<boolean>;
 }) {
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [heard, setHeard] = useState("");
   const [written, setWritten] = useState("");
   const [query, setQuery] = useState("");
@@ -70,15 +72,24 @@ export function DictionaryScreen({
     [trial, result],
   );
 
-  const add = () => {
+  const add = async () => {
+    if (saving) return;
     // Add is never disabled (a half-transparent primary reads as broken); an
     // incomplete pair sends focus to the half that is missing instead.
     if (!heard.trim()) return heardRef.current?.focus();
     if (!written.trim()) return writtenRef.current?.focus();
-    patch((s) => { addDictionaryTerm(s, heard, written); });
-    setHeard("");
-    setWritten("");
-    heardRef.current?.focus();
+    setSaving(true);
+    setError("");
+    try {
+      if (await patch((s) => { addDictionaryTerm(s, heard, written); }) === false) {
+        setError("Could not save correction. Check disk space and folder permissions, then retry.");
+        return;
+      }
+      setHeard("");
+      setWritten("");
+      heardRef.current?.focus();
+    } catch (e) { setError(`Could not save correction. Retry. ${String(e)}`); }
+    finally { setSaving(false); }
   };
   const onEnter = (e: KeyboardEvent) => {
     if (e.key === "Enter") { e.preventDefault(); add(); }
@@ -157,10 +168,11 @@ export function DictionaryScreen({
         <div className="addrow">
           <Field ref={heardRef} placeholder="You said, e.g. use effect" aria-label="You said" value={heard} onChange={(e) => setHeard(e.target.value)} onKeyDown={onEnter} />
           <Field ref={writtenRef} placeholder="Write it as, e.g. useEffect" aria-label="Write it as" value={written} onChange={(e) => setWritten(e.target.value)} onKeyDown={onEnter} />
-          <Button variant="primary" icon={<Plus weight="bold" aria-hidden />} onClick={add}>Add</Button>
+          <Button disabled={saving} variant="primary" icon={<Plus weight="bold" aria-hidden />} onClick={add}>Add</Button>
         </div>
       </Card>
 
+      {error && <p role="alert">{error}</p>}
       <p className="cap">OpenVoice also knows 30 built-in terms like useEffect and kubectl. Yours always win. Changes apply to your next dictation.</p>
     </section>
   );

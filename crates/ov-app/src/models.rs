@@ -101,12 +101,16 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
             *state.download.lock().expect("download") = p;
         };
 
-        set(Some(DownloadProgress {
-            model: spec.id.to_string(),
-            done: 0,
-            total: u64::from(spec.download_mb) * 1_000_000,
-        }));
+        claim_download(
+            &state.download,
+            DownloadProgress {
+                model: spec.id.to_string(),
+                done: 0,
+                total: u64::from(spec.download_mb) * 1_000_000,
+            },
+        )?;
 
+        let _reset = DownloadReset(&state.download);
         let result = ov_fetch::download_and_extract(
             &spec.url(),
             spec.sha256,
@@ -128,9 +132,7 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
             },
         );
 
-        // Cleared on both paths. A failed download that left the bar up would
-        // strand the screen on a transfer that is not happening.
-        set(None);
+        // The guard clears progress on success, error, and unwinding.
         result.map_err(|e| format!("Could not download {}: {e}", spec.id))
     })
     .await
@@ -157,6 +159,11 @@ pub fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<(),
         );
     }
 
+    // Hold the same mutex through deletion so a download cannot start in between.
+    let download = state.download.lock().expect("download");
+    if download.is_some() {
+        return Err("Wait for the active model download to finish before deleting a model.".into());
+    }
     let dir = user_models_dir().join(spec.id);
     if dir.exists() {
         std::fs::remove_dir_all(&dir)
@@ -175,4 +182,62 @@ pub fn models_on_disk() -> u64 {
         .filter(|s| !s.bundled && ov_asr::locate::is_installed(s, &dir))
         .map(|s| u64::from(s.disk_mb) * 1_000_000)
         .sum()
+}
+
+fn claim_download(
+    download: &std::sync::Mutex<Option<DownloadProgress>>,
+    progress: DownloadProgress,
+) -> Result<(), String> {
+    let mut active = download.lock().expect("download");
+    if active.is_some() {
+        return Err("A model download is already in progress.".into());
+    }
+    *active = Some(progress);
+    Ok(())
+}
+
+struct DownloadReset<'a>(&'a std::sync::Mutex<Option<DownloadProgress>>);
+impl Drop for DownloadReset<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Barrier, Mutex};
+
+    #[test]
+    fn concurrent_requests_only_claim_one_download() {
+        let download = Arc::new(Mutex::new(None));
+        let barrier = Arc::new(Barrier::new(3));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let download = download.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    claim_download(
+                        &download,
+                        DownloadProgress {
+                            model: "test".into(),
+                            done: 0,
+                            total: 10,
+                        },
+                    )
+                    .is_ok()
+                })
+            })
+            .collect();
+        barrier.wait();
+        assert_eq!(
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().ok())
+                .filter(|claimed| *claimed)
+                .count(),
+            1
+        );
+    }
 }

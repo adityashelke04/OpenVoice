@@ -62,6 +62,8 @@ enum Cmd {
 pub struct CpalAudioSource {
     tx: Sender<Cmd>,
     device_names: Vec<String>,
+    partial: Arc<Mutex<Option<Pcm16k>>>,
+    errors: ErrorListener,
 }
 
 impl CpalAudioSource {
@@ -79,16 +81,31 @@ impl CpalAudioSource {
             .collect();
 
         let (tx, rx) = channel::<Cmd>();
+        let partial = Arc::new(Mutex::new(None));
+        let errors = Arc::new(Mutex::new(None));
+        let thread_partial = partial.clone();
+        let thread_errors = errors.clone();
         std::thread::Builder::new()
             .name("ov-audio".into())
-            .spawn(move || audio_thread(&rx, preferred))
+            .spawn(move || audio_thread(&rx, preferred, thread_partial, thread_errors))
             .map_err(|e| Error::Audio(format!("audio thread: {e}")))?;
 
-        Ok(Self { tx, device_names })
+        Ok(Self {
+            tx,
+            device_names,
+            partial,
+            errors,
+        })
     }
 }
 
 impl AudioSource for CpalAudioSource {
+    fn take_partial(&self) -> Option<Pcm16k> {
+        self.partial.lock().unwrap().take()
+    }
+    fn set_error_sink(&self, sink: Arc<dyn Fn(String) + Send + Sync>) {
+        *self.errors.lock().unwrap() = Some(sink);
+    }
     fn start(&self, levels: Arc<dyn Fn(LevelFrame) + Send + Sync>) -> Result<()> {
         self.start_streaming(levels, Arc::new(|_: &[f32]| {}))
     }
@@ -116,6 +133,7 @@ impl AudioSource for CpalAudioSource {
     }
 
     fn abort(&self) -> Result<()> {
+        *self.partial.lock().unwrap() = None;
         self.tx
             .send(Cmd::Abort)
             .map_err(|_| Error::Audio("audio thread is gone".into()))
@@ -134,6 +152,7 @@ impl AudioSource for CpalAudioSource {
 /// push-to-talk recorder needs, and this mutex is uncontended except at stop time.
 /// If audio glitches ever appear, this is the first thing to replace.
 type Capture = Arc<Mutex<Vec<f32>>>;
+type ErrorListener = Arc<Mutex<Option<Arc<dyn Fn(String) + Send + Sync>>>>;
 
 /// How often the capture thread converts what the callback has gathered.
 ///
@@ -189,9 +208,16 @@ impl Pipeline {
 struct Active {
     stream: cpal::Stream,
     pipeline: Pipeline,
+    failure: Arc<Mutex<Option<String>>>,
+    reported: bool,
 }
 
-fn audio_thread(rx: &std::sync::mpsc::Receiver<Cmd>, preferred: Option<String>) {
+fn audio_thread(
+    rx: &std::sync::mpsc::Receiver<Cmd>,
+    preferred: Option<String>,
+    partial: Arc<Mutex<Option<Pcm16k>>>,
+    errors: ErrorListener,
+) {
     let mut active: Option<Active> = None;
 
     loop {
@@ -208,7 +234,17 @@ fn audio_thread(rx: &std::sync::mpsc::Receiver<Cmd>, preferred: Option<String>) 
             Err(RecvTimeoutError::Timeout) => {
                 if let Some(a) = active.as_mut() {
                     if let Err(e) = a.pipeline.drain() {
-                        tracing::error!(error = %e, "converting captured audio");
+                        latch_failure(&a.failure, e);
+                    }
+                    if !a.reported {
+                        let failure = a.failure.lock().unwrap().clone();
+                        if let Some(message) = failure {
+                            a.reported = true;
+                            let sink = errors.lock().unwrap().clone();
+                            if let Some(sink) = sink {
+                                sink(message);
+                            }
+                        }
                     }
                 }
                 continue;
@@ -222,6 +258,7 @@ fn audio_thread(rx: &std::sync::mpsc::Receiver<Cmd>, preferred: Option<String>) 
                     let _ = reply.send(Ok(())); // already capturing; idempotent
                     continue;
                 }
+                *partial.lock().unwrap() = None;
                 match open_stream(preferred.as_deref(), levels, pcm) {
                     Ok(a) => {
                         let started = a.stream.play().map_err(|e| Error::Audio(format!("{e}")));
@@ -237,15 +274,20 @@ fn audio_thread(rx: &std::sync::mpsc::Receiver<Cmd>, preferred: Option<String>) 
             }
 
             Cmd::Stop { reply } => {
-                let Some(Active { stream, pipeline }) = active.take() else {
+                let Some(Active {
+                    stream,
+                    pipeline,
+                    failure,
+                    ..
+                }) = active.take()
+                else {
                     let _ = reply.send(Err(Error::Audio("not capturing".into())));
                     continue;
                 };
-                let _ = stream.pause();
-                let out = pipeline
-                    .finish()
-                    .map(|samples| Pcm16k { samples })
-                    .map_err(|e| Error::Audio(format!("resample: {e}")));
+                let pause = stream
+                    .pause()
+                    .map_err(|error| format!("pausing microphone: {error}"));
+                let out = finish_capture(pipeline, pause, &failure, &partial);
                 let _ = reply.send(out);
                 // Dropped after the reply, not before. Closing a WASAPI stream joins
                 // its event thread and can take tens of milliseconds, and the user's
@@ -297,7 +339,11 @@ fn open_stream(
         src_rate as usize * usize::from(channels) / 10,
     )));
 
-    let err_fn = |e| tracing::error!(error = %e, "audio stream error");
+    let failure = Arc::new(Mutex::new(None));
+    let callback_failure = failure.clone();
+    let err_fn = move |e: cpal::StreamError| {
+        latch_failure(&callback_failure, format!("microphone stream failed: {e}"))
+    };
     let sink = buffer.clone();
     let meter = levels.clone();
 
@@ -340,7 +386,47 @@ fn open_stream(
     Ok(Active {
         stream,
         pipeline: Pipeline::new(buffer, converter),
+        failure,
+        reported: false,
     })
+}
+
+fn finish_capture(
+    pipeline: Pipeline,
+    pause: std::result::Result<(), String>,
+    failure: &Mutex<Option<String>>,
+    partial: &Mutex<Option<Pcm16k>>,
+) -> Result<Pcm16k> {
+    if let Err(error) = pause {
+        latch_failure(failure, error);
+    }
+    let out = pipeline
+        .finish()
+        .map(|samples| Pcm16k { samples })
+        .map_err(|error| Error::Audio(format!("resample: {error}")));
+    complete_capture(out, failure.lock().unwrap().take(), partial)
+}
+
+fn complete_capture(
+    out: Result<Pcm16k>,
+    failure: Option<String>,
+    partial: &Mutex<Option<Pcm16k>>,
+) -> Result<Pcm16k> {
+    match (out, failure) {
+        (Ok(audio), Some(message)) => {
+            *partial.lock().unwrap() = Some(audio);
+            Err(Error::Audio(message))
+        }
+        (out, _) => out,
+    }
+}
+
+fn latch_failure(failure: &Mutex<Option<String>>, message: String) {
+    if let Ok(mut slot) = failure.lock() {
+        if slot.is_none() {
+            *slot = Some(message);
+        }
+    }
 }
 
 /// The realtime callback. Appends samples and reports a level.
@@ -373,6 +459,57 @@ fn on_data(
 mod tests {
     use super::*;
 
+    #[test]
+    fn pause_failure_returns_error_and_preserves_samples_including_undrained_tail() {
+        let buffer: Capture = Arc::new(Mutex::new(vec![0.1, 0.2, 0.3]));
+        let pipeline = Pipeline::new(
+            buffer,
+            stream::Converter::new(16000, 1, Arc::new(|_| {})).unwrap(),
+        );
+        let failure = Mutex::new(None);
+        let partial = Mutex::new(None);
+        assert!(finish_capture(pipeline, Err("pause failed".into()), &failure, &partial).is_err());
+        assert_eq!(
+            partial.lock().unwrap().take().unwrap().samples,
+            vec![0.1, 0.2, 0.3]
+        );
+    }
+    #[test]
+    fn callback_failure_at_stop_is_not_lost_between_poll_intervals() {
+        let buffer: Capture = Arc::new(Mutex::new(vec![0.1, 0.2]));
+        let pipeline = Pipeline::new(
+            buffer,
+            stream::Converter::new(16000, 1, Arc::new(|_| {})).unwrap(),
+        );
+        let failure = Mutex::new(None);
+        let partial = Mutex::new(None);
+        latch_failure(&failure, "unplugged".into());
+        assert!(finish_capture(pipeline, Ok(()), &failure, &partial).is_err());
+        assert_eq!(
+            partial.lock().unwrap().take().unwrap().samples,
+            vec![0.1, 0.2]
+        );
+    }
+    #[test]
+    fn failed_capture_preserves_partial_without_reporting_complete_audio() {
+        let partial = Mutex::new(None);
+        let audio = Pcm16k {
+            samples: vec![0.1, 0.2],
+        };
+        assert!(
+            complete_capture(Ok(audio.clone()), Some("device unplugged".into()), &partial).is_err()
+        );
+        assert_eq!(partial.lock().unwrap().take(), Some(audio));
+        assert!(partial.lock().unwrap().is_none());
+        assert!(complete_capture(Ok(Pcm16k { samples: vec![0.3] }), None, &partial).is_ok());
+    }
+    #[test]
+    fn first_callback_error_is_latched() {
+        let failure = Mutex::new(None);
+        latch_failure(&failure, "unplugged".into());
+        latch_failure(&failure, "later error".into());
+        assert_eq!(failure.lock().unwrap().as_deref(), Some("unplugged"));
+    }
     #[test]
     fn draining_hands_over_everything_the_callback_appended() {
         let seen = Arc::new(Mutex::new(Vec::new()));

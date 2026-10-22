@@ -81,3 +81,9 @@ describe("useLiveEngine", () => {
     expect(hook.result.current.view).toBe(before);
   });
 });
+
+it("retains held-delivery detail when the finished event has no text", async () => {
+  const hook = await listening();
+  await act(async () => tauri.emit("ov://event", { type: "Finished", session: 1, outcome: { kind: "delivery_held", detail: "Full held transcript" }, text: "", latencyMs: 1 }));
+  expect(hook.result.current.view.lastText).toBe("Full held transcript");
+});

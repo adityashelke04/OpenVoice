@@ -22,6 +22,25 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-22
+
+### Fixed
+
+- Automatic paste no longer rejects its own clipboard write after Windows finalizes text formats.
+- Preserve meaningful dictated words and quiet speech; match saved corrections through the formatter's token rules.
+- Guard delivery with the original window and cancellation, preserve intervening clipboard copies, and retain complete text for explicit Copy when delivery is held.
+- Synchronize settings revisions and save errors; harden downloads, transactional history migration, local-day streaks and running retention.
+
+### Added
+
+- Restartable local decoding and bounded, memory-only failed-audio retry.
+- Strict real-asset accuracy and end-to-end latency gates that reject missing or unapproved inputs.
+
+### Validation
+
+- Native unit tests, real v2 model smoke tests, controlled decoder recovery and bundled installer payload checks pass.
+- Broader speech accuracy, thirty-dictation application latency, alternate model/GPU comparisons and live hardware acceptance remain unverified.
+
 ## [1.3.0] - 2026-10-05
 
 Coding-tool names and git commands are spelled correctly far more often.

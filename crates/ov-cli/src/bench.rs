@@ -32,6 +32,8 @@ pub struct Measured {
     pub hypothesis: String,
     /// Nothing was left to decode at release.
     pub reused: bool,
+    /// Whole-utterance fallback was required.
+    pub fallback: bool,
 }
 
 /// A run's totals.
@@ -47,10 +49,14 @@ pub struct Summary {
     pub p50: Option<u64>,
     /// 90th-percentile release latency.
     pub p90: Option<u64>,
+    /// 95th-percentile decoder release latency.
+    pub p95: Option<u64>,
     /// Worst release latency.
     pub max: Option<u64>,
     /// Clips with nothing left to decode at release.
     pub reused: usize,
+    /// Whole-utterance fallbacks.
+    pub fallback: usize,
 }
 
 /// Decode `clip`, followed by `pause_ms` of silence, in one call: what the app
@@ -73,6 +79,7 @@ pub fn run_full<T: Transcriber>(t: &T, clip: &Clip, pause_ms: u64) -> Result<Mea
         reference: clip.reference.clone(),
         hypothesis: out.text,
         reused: false,
+        fallback: false,
     })
 }
 
@@ -115,6 +122,7 @@ pub fn run_incremental<T: Transcriber + 'static>(
         reference: clip.reference.clone(),
         hypothesis: out.text,
         reused: facts.reused,
+        fallback: facts.fallback,
     })
 }
 
@@ -132,8 +140,10 @@ pub fn summarize(runs: &[Measured]) -> Summary {
         wer: crate::wer::wer(&pairs),
         p50: percentile(&latencies, 50.0),
         p90: percentile(&latencies, 90.0),
+        p95: percentile(&latencies, 95.0),
         max: percentile(&latencies, 100.0),
         reused: runs.iter().filter(|m| m.reused).count(),
+        fallback: runs.iter().filter(|m| m.fallback).count(),
     }
 }
 
@@ -142,8 +152,8 @@ pub fn summarize(runs: &[Measured]) -> Summary {
 pub fn render(label: &str, threads: i32, s: &Summary) -> String {
     let f = |v: Option<u64>| v.map_or_else(|| "-".to_owned(), |v| v.to_string());
     format!(
-        "mode={label} threads={threads} clips={} audio={:.0}s wer={:.2}% release_ms p50={} p90={} max={} reused={}/{}",
-        s.clips, s.audio_s, s.wer, f(s.p50), f(s.p90), f(s.max), s.reused, s.clips
+        "mode={label} threads={threads} clips={} audio={:.0}s wer={:.2}% release_ms p50={} p90={} p95={} max={} reused={}/{} fallback={}/{}",
+        s.clips, s.audio_s, s.wer, f(s.p50), f(s.p90), f(s.p95), f(s.max), s.reused, s.clips, s.fallback, s.clips
     )
 }
 
@@ -234,6 +244,7 @@ mod tests {
             reference: "HELLO THERE".into(),
             hypothesis: hyp.into(),
             reused: ms < 50,
+            fallback: false,
         };
         let s = summarize(&[
             m(10, "hello there"),

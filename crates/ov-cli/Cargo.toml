@@ -26,6 +26,7 @@ hound = "3.5"
 # Benchmark only: decodes the LibriSpeech FLAC files `ov bench` reads. A pure
 # decoder with no dependencies of its own, so no network path.
 claxon = "0.4"
+sha2 = "0.10"
 
 [lints.rust]
 unsafe_code = "forbid"

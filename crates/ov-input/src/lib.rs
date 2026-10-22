@@ -18,12 +18,16 @@
 // platform so the Linux CI job still exercises it without a dead-code warning.
 #[cfg(any(windows, test))]
 mod chunk;
+#[cfg(any(windows, test))]
+mod delivery;
 #[cfg(windows)]
 mod foreground;
 #[cfg(windows)]
 mod hook;
 #[cfg(windows)]
 mod inject;
+#[cfg(any(windows, test))]
+mod ownership;
 
 #[cfg(windows)]
 pub use foreground::WinForeground;

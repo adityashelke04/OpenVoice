@@ -132,27 +132,6 @@ fn same_text(a: &Tok, b: &Tok) -> bool {
 /// Unambiguous disfluencies. Removing these is always safe.
 const FILLERS_LIGHT: &[&str] = &["um", "uh", "erm", "uhm", "mhm", "hmm", "ah", "er"];
 
-/// Discourse markers removed at [`FillerLevel::Aggressive`].
-///
-/// Deliberately short, and it used to be longer. "I mean", "sort of" and "kind
-/// of" were here, and each one is grammatically load-bearing often enough that
-/// deleting it changes what the user said rather than tidying it: "I mean it"
-/// became "it", and "kind of blue" became "blue" — the opposite of the claim.
-/// The `prose` profile is aggressive by default and matches browsers, chat and
-/// mail, so this fired nearly everywhere, silently, with the evidence gone by
-/// the time anyone could notice.
-///
-/// The bar for this list is that removing the phrase must not be able to change
-/// meaning, only tone. Anything that fails that test belongs in the transcript.
-const FILLERS_PHRASES: &[&[&str]] = &[&["you", "know"]];
-
-/// Single-word discourse markers removed at the aggressive level.
-///
-/// "actually" and "literally" were removed from this list for the reason above:
-/// both are used to contrast or intensify, and dropping them inverts sentences
-/// like "it actually works".
-const FILLERS_AGGRESSIVE: &[&str] = &["like", "basically"];
-
 /// Removes disfluencies according to the profile's [`FillerLevel`].
 pub struct StripFillers;
 
@@ -166,25 +145,13 @@ impl Rule for StripFillers {
         if level == FillerLevel::Off {
             return doc;
         }
-        let aggressive = level == FillerLevel::Aggressive;
         let mut out = Vec::with_capacity(doc.len());
         let mut i = 0;
 
         while i < doc.len() {
-            if aggressive {
-                if let Some(skip) = FILLERS_PHRASES
-                    .iter()
-                    .find(|p| doc.window(i, p.len()).is_some_and(|w| w == **p))
-                    .map(|p| p.len())
-                {
-                    i += skip;
-                    continue;
-                }
-            }
-            let drop = doc.toks[i].as_word_lower().is_some_and(|w| {
-                FILLERS_LIGHT.contains(&w.as_str())
-                    || (aggressive && FILLERS_AGGRESSIVE.contains(&w.as_str()))
-            });
+            let drop = doc.toks[i]
+                .as_word_lower()
+                .is_some_and(|w| FILLERS_LIGHT.contains(&w.as_str()));
             if !drop {
                 out.push(doc.toks[i].clone());
             }
@@ -853,16 +820,19 @@ mod tests {
 
     /// The other side of the same rule: what it is still for.
     #[test]
-    fn aggressive_fillers_still_remove_tone_words() {
+    fn aggressive_fillers_only_remove_unambiguous_disfluencies() {
         let p = Profile {
             fillers: FillerLevel::Aggressive,
             ..Profile::default()
         };
         assert_eq!(
             run(&StripFillers, &p, "you know we should go"),
-            "we should go"
+            "you know we should go"
         );
-        assert_eq!(run(&StripFillers, &p, "um basically it works"), "it works");
+        assert_eq!(
+            run(&StripFillers, &p, "um basically it works"),
+            "basically it works"
+        );
     }
 
     #[test]
@@ -927,14 +897,14 @@ mod tests {
     }
 
     #[test]
-    fn aggressive_fillers_remove_phrases_too() {
+    fn aggressive_fillers_preserve_ambiguous_phrases() {
         let p = Profile {
             fillers: FillerLevel::Aggressive,
             ..Profile::default()
         };
         assert_eq!(
             run(&StripFillers, &p, "so you know like the thing"),
-            "so the thing"
+            "so you know like the thing"
         );
     }
 

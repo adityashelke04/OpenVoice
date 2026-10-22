@@ -79,14 +79,14 @@ describe("Speech model screen", () => {
     ]);
   });
 
-  it("marks the model in use, and offers it no action", async () => {
+  it("marks the saved selection without claiming the engine has restarted", async () => {
     mount();
     const standard = await card("Standard");
     expect(standard.className).toContain("active");
     expect(standard.querySelector(".nm")?.firstChild?.textContent).toBe("Standard");
     const badges = [...standard.querySelectorAll(".badge")].map((b) => b.textContent);
-    expect(badges).toEqual(["In use", "Included", "English only"]);
-    expect(standard.querySelector(".badge.ok")?.textContent).toBe("In use");
+    expect(badges).toEqual(["Selected", "Included", "English only"]);
+    expect(standard.querySelector(".badge.ok")?.textContent).toBe("Selected");
     expect(within(standard).getByText("On disk")).toBeTruthy();
     expect(within(standard).getByText("631 MB")).toBeTruthy();
     expect(standard.querySelector(".act")?.querySelector("button")).toBeNull();
@@ -113,9 +113,10 @@ describe("Speech model screen", () => {
 
   it("counts the transfer up as a percentage while it runs", async () => {
     let finish = () => {};
+    let started = false;
     const t = mount(MODELS, {
-      download_model: () => new Promise<void>((resolve) => { finish = resolve; }),
-      get_download: () => ({ model: "parakeet-tdt-0.6b-v3", done: 93, total: 465 }),
+      download_model: () => { started = true; return new Promise<void>((resolve) => { finish = resolve; }); },
+      get_download: () => started ? ({ model: "parakeet-tdt-0.6b-v3", done: 93, total: 465 }) : null,
     });
     const multi = await card("Multilingual");
     fireEvent.click(within(multi).getByRole("button", { name: "Download" }));
@@ -181,4 +182,23 @@ describe("Speech model screen", () => {
     );
     expect(cap.className).toContain("cap");
   });
+});
+
+it("restores a running download when the model screen mounts again", async () => {
+  mount(MODELS, { get_download: () => ({ model: "parakeet-tdt-0.6b-v3", done: 20, total: 100 }) });
+  const multi = await card("Multilingual");
+  await waitFor(() => expect(within(multi).getByRole("button", { name: "20%" })).toBeTruthy());
+});
+it("lists the verified European languages and says Hindi is unsupported", async () => {
+  mount();
+  const multi = await card("Multilingual");
+  expect(within(multi).getByText(/Bulgarian, Croatian, Czech/)).toBeTruthy();
+  expect(within(multi).getAllByText(/Hindi is not supported/).length).toBeGreaterThan(0);
+});
+
+it("does not offer restart for a model choice that failed to save", async () => {
+  mount(WITH_LIGHT_INSTALLED, { save_settings: () => { throw "disk full"; } });
+  fireEvent.click((await card("Light")).querySelector(".model-select") as HTMLElement);
+  await waitFor(() => expect(tauri!.calls.some(c => c.cmd === "save_settings")).toBe(true));
+  expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
 });

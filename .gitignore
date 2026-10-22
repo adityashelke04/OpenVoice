@@ -1,5 +1,7 @@
 # ---------------------------------------------------------------------- Rust
 /target
+/.build/
+/.superpowers/
 **/target
 Cargo.lock.bak
 

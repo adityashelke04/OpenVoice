@@ -205,6 +205,7 @@ export function Hub() {
         />
         <main className={STILL ? "main" : "main anim"} id="main" tabIndex={-1}>
           <TopBar screen={screen} userName={userName} now={now} onSearch={() => setPalette(true)} />
+          {settingsError && screen !== "settings" && <p role="alert">{settingsError}</p>}
           <Suspense fallback={screenFallback}>{body}</Suspense>
         </main>
       </div>

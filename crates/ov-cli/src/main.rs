@@ -9,7 +9,9 @@
 //! reached through the GUI, it cannot be tested headlessly, and the pure core stops
 //! being pure by degrees.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -21,7 +23,7 @@ use ov_core::ports::{
     AppContext, AudioSource, DecodeHint, HotkeyListener, Pcm16k, TextSink, Transcriber,
 };
 use ov_core::session::{Effect, Input, SessionMachine};
-use ov_core::types::{InjectMode, Millis, Outcome};
+use ov_core::types::{InjectMode, Millis, Outcome, SessionId};
 use ov_format::profile::{self, Profile};
 use ov_format::Formatter;
 
@@ -113,12 +115,41 @@ enum Command {
     },
     /// Summarise where dictation time went, from the app's log.
     Latency {
+        /// Require all capture-stop/queue/decode/format/inject stages.
+        #[arg(long)]
+        end_to_end: bool,
+        /// Enforce 30-session Gate C (requires explicitly supplied log).
+        #[arg(long)]
+        gate: bool,
         /// Log to read. Defaults to the app's own `openvoice.log`.
         #[arg(long)]
         log: Option<PathBuf>,
     },
     /// Decode LibriSpeech through the real model: release latency and accuracy.
     Bench(BenchArgs),
+    /// Compare whole and incremental decoding on an approved checksum manifest.
+    Quality(QualityArgs),
+}
+
+#[derive(clap::Args)]
+struct QualityArgs {
+    #[arg(long)]
+    manifest: PathBuf,
+    #[arg(long)]
+    model_dir: PathBuf,
+    #[arg(long, default_value = "parakeet-tdt-0.6b-v2")]
+    model: String,
+    #[arg(long, default_value_t = ov_asr::sherpa::DEFAULT_DECODE_THREADS)]
+    threads: i32,
+    /// Explicit accuracy limit; no unmeasured default is advertised.
+    #[arg(long)]
+    max_wer: f64,
+    /// Explicit consent to read an opted-in local personal manifest.
+    #[arg(long)]
+    allow_personal: bool,
+    /// Print references/hypotheses locally for manual meaning review.
+    #[arg(long)]
+    show_text: bool,
 }
 
 #[derive(clap::Args)]
@@ -203,7 +234,12 @@ fn run(cli: &Cli) -> Result<(), String> {
         Command::Mictest { seconds } => cmd_mictest(cli, *seconds),
         Command::Type { text, delay, paste } => cmd_type(text, *delay, *paste),
         Command::Dictate => cmd_dictate(cli),
-        Command::Latency { log } => cmd_latency(log.as_ref()),
+        Command::Latency {
+            log,
+            end_to_end,
+            gate,
+        } => cmd_latency(log.as_ref(), *end_to_end, *gate),
+        Command::Quality(args) => cmd_quality(args),
         Command::Bench(args) => cmd_bench(args),
     }
 }
@@ -284,9 +320,94 @@ fn cmd_bench(args: &BenchArgs) -> Result<(), String> {
     Ok(())
 }
 
+fn cmd_quality(args: &QualityArgs) -> Result<(), String> {
+    if args.threads <= 0 || !args.max_wer.is_finite() || !(0.0..=100.0).contains(&args.max_wer) {
+        return Err("threads must be positive and max-wer must be in 0..100".into());
+    }
+    let spec = ov_asr::catalog::resolve(&args.model).map_err(|e| e.to_string())?;
+    corpus::require_weights(&args.model_dir, spec.files)?;
+    let (manifest, clips) = corpus::load_manifest(&args.manifest, args.allow_personal)?;
+    let cold = Instant::now();
+    let transcriber = Arc::new(
+        ov_asr::sherpa::SherpaTranscriber::with_threads(spec, args.model_dir.clone(), args.threads)
+            .map_err(|e| e.to_string())?,
+    );
+    transcriber.warm().map_err(|e| e.to_string())?;
+    println!("model={} provider=cpu threads={} model_load_warm_ms={} peak_memory=unmeasured delivery_failures=unmeasured meaning_changes=manual-review-required", spec.id, args.threads, cold.elapsed().as_millis());
+    let mut summaries = Vec::new();
+    for incremental in [false, true] {
+        let decoder = if incremental {
+            Some(
+                ov_asr::incremental::IncrementalDecoder::new(
+                    Arc::clone(&transcriber),
+                    ov_asr::segment::SegmentPolicy::default(),
+                )
+                .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
+        let mut measured = Vec::new();
+        let (mut names, mut numbers, mut punctuation, mut formatted_changes) = (0, 0, 0, 0);
+        let formatter = Formatter::with_builtins(Profile::prose());
+        for (i, (clip, fixture)) in clips.iter().zip(&manifest.clips).enumerate() {
+            let pause = if fixture.categories.iter().any(|c| c == "no-pause-release") {
+                0
+            } else {
+                400
+            };
+            let run = if let Some(decoder) = &decoder {
+                bench::run_incremental(decoder, SessionId(i as u64 + 1), clip, pause, true)?
+            } else {
+                bench::run_full(&*transcriber, clip, pause)?
+            };
+            names += wer::protected_errors(&fixture.names, &run.hypothesis);
+            numbers += wer::protected_errors(&fixture.numbers, &run.hypothesis);
+            let punct = |text: &str| {
+                text.chars()
+                    .filter(|c| c.is_ascii_punctuation())
+                    .collect::<String>()
+            };
+            punctuation += usize::from(punct(&run.reference) != punct(&run.hypothesis));
+            let formatted = formatter.format(&run.hypothesis);
+            if args.show_text {
+                println!(
+                    "ref: {}\nhyp: {}\nformatted: {}",
+                    clip.reference, run.hypothesis, formatted
+                );
+            }
+            formatted_changes +=
+                usize::from(wer::normalize(&formatted) != wer::normalize(&run.hypothesis));
+            println!(
+                "clip={} names_missing={} numbers_missing={} transcript_review=required",
+                clip.id,
+                wer::protected_errors(&fixture.names, &run.hypothesis),
+                wer::protected_errors(&fixture.numbers, &run.hypothesis)
+            );
+            measured.push(run);
+        }
+        let summary = bench::summarize(&measured);
+        println!("{} names_missing={names} numbers_missing={numbers} punctuation_mismatch_clips={punctuation} formatter_word_change_clips={formatted_changes} scope=decoder-only-not-end-to-end", bench::render(if incremental { "incremental" } else { "full" }, args.threads, &summary));
+        summaries.push((summary.wer, names + numbers, formatted_changes));
+    }
+    if summaries
+        .iter()
+        .any(|(wer, sensitive, changes)| *wer > args.max_wer || *sensitive > 0 || *changes > 0)
+        || summaries[1].0 > summaries[0].0
+    {
+        return Err("quality gate failed: accuracy limit, sensitive-term/formatter changes, or incremental regression; review full transcripts locally".into());
+    }
+    Ok(())
+}
+
 /* -- latency ------------------------------------------------------------------ */
 
-fn cmd_latency(log: Option<&PathBuf>) -> Result<(), String> {
+fn cmd_latency(log: Option<&PathBuf>, end_to_end: bool, gate: bool) -> Result<(), String> {
+    if gate && log.is_none() {
+        return Err(
+            "Gate C requires explicit --log; never reads private app logs by default".into(),
+        );
+    }
     let path = log.cloned().unwrap_or_else(|| {
         user_models()
             .parent()
@@ -298,6 +419,13 @@ fn cmd_latency(log: Option<&PathBuf>) -> Result<(), String> {
         .lines()
         .filter_map(ov_core::latency::StageTimes::parse)
         .collect();
+    if end_to_end || gate {
+        latency_report::validate_end_to_end(&times)?;
+    }
+    if gate {
+        latency_report::gate_log(&text)?;
+        println!("delivery_failures=0/{}", times.len());
+    }
     if times.is_empty() {
         println!(
             "no latency lines in {} yet: dictate something first",
@@ -645,7 +773,7 @@ fn cmd_type(text: &str, delay: u64, paste: bool) -> Result<(), String> {
             Ok(())
         }
         Err(e) => Err(format!(
-            "{e}\n  the text is on your clipboard - press Ctrl+V"
+            "{e}\n  delivery held; recover the original text from this command"
         )),
     }
 }
@@ -689,6 +817,7 @@ struct Runtime {
     profiles: Vec<Profile>,
     formatters: Vec<(String, Formatter)>,
     captured: Mutex<Option<Pcm16k>>,
+    cancelled: Mutex<HashMap<SessionId, Arc<AtomicBool>>>,
     paste_threshold: usize,
     no_hotwords: bool,
     language: Option<String>,
@@ -735,6 +864,7 @@ fn cmd_dictate(cli: &Cli) -> Result<(), String> {
         profiles,
         formatters,
         captured: Mutex::new(None),
+        cancelled: Mutex::new(HashMap::new()),
         paste_threshold: config.paste_threshold_chars,
         no_hotwords: cli.no_hotwords,
         language: language_hint(&cli.language),
@@ -761,7 +891,12 @@ fn cmd_dictate(cli: &Cli) -> Result<(), String> {
                         Input::HotkeyPressed { at, app, profile }
                     }
                     ov_core::ports::HotkeyEvent::Released => Input::HotkeyReleased { at },
-                    ov_core::ports::HotkeyEvent::Cancelled => Input::Cancelled { at },
+                    ov_core::ports::HotkeyEvent::Cancelled => {
+                        for flag in rt.cancelled.lock().expect("cancel registry").values() {
+                            flag.store(true, Ordering::Release);
+                        }
+                        Input::Cancelled { at }
+                    }
                 };
                 let _ = tx.send(input);
             }))
@@ -809,7 +944,11 @@ fn flush() {
 /// for the half-second that matters most.
 fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
     match effect {
-        Effect::StartCapture { .. } => {
+        Effect::StartCapture { session } => {
+            rt.cancelled
+                .lock()
+                .expect("cancel registry")
+                .insert(session, Arc::new(AtomicBool::new(false)));
             if let Err(e) = rt.audio.start(Arc::new(|_frame| {})) {
                 // Printed, not just logged: a capture that never starts is the
                 // difference between "the app is broken" and "pick another input
@@ -817,6 +956,16 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                 println!("\n   MICROPHONE ERROR: {e}");
                 println!("   run `ov devices` to see what is available");
                 flush();
+                let _ = tx.send(Input::AudioFailed {
+                    session,
+                    error: e.to_string(),
+                    at: rt.now(),
+                });
+            } else {
+                let _ = tx.send(Input::CaptureStarted {
+                    session,
+                    at: rt.now(),
+                });
             }
         }
 
@@ -913,22 +1062,20 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
         Effect::Inject {
             session,
             text,
-            target_exe,
+            target,
         } => {
             let rt = rt.clone();
             let tx = tx.clone();
             std::thread::spawn(move || {
-                let now_exe = rt.apps.foreground().unwrap_or_default().exe;
-                if !target_exe.is_empty() && now_exe != target_exe {
-                    tracing::warn!(
-                        pressed_in = %target_exe,
-                        injecting_into = %now_exe,
-                        "foreground app changed between press and injection"
-                    );
-                }
-
+                let cancelled = rt
+                    .cancelled
+                    .lock()
+                    .expect("cancel registry")
+                    .get(&session)
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
                 let mode = ov_input::mode_for(&text, rt.paste_threshold);
-                match rt.sink.inject(&text, mode) {
+                match rt.sink.inject_guarded(&text, mode, &target, &cancelled) {
                     Ok(_) => {
                         let _ = tx.send(Input::Injected {
                             session,
@@ -938,8 +1085,8 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
-                            target = %now_exe,
-                            "injection failed; text left on the clipboard"
+                            target = %target.exe,
+                            "injection held; transcript remains in terminal recovery"
                         );
                         let _ = tx.send(Input::InjectionFailed {
                             session,
@@ -963,6 +1110,12 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
                     println!(
                         "   delivered to {} in {} ms",
                         record.app.exe, record.latency_ms
+                    );
+                }
+                Outcome::DeliveryHeld(text) => {
+                    println!("-> {text}");
+                    println!(
+                        "   delivery held; copy the complete transcript above for manual paste"
                     );
                 }
                 Outcome::ClipboardFallback(text) => {
@@ -993,7 +1146,16 @@ fn execute(rt: &Arc<Runtime>, tx: &Sender<Input>, effect: Effect) {
 
         // The CLI keeps one buffer and replaces it on every capture, so there is
         // no per-session state to forget.
-        Effect::Discard { .. } => {}
+        Effect::Discard { session } => {
+            if let Some(cancelled) = rt
+                .cancelled
+                .lock()
+                .expect("cancel registry")
+                .remove(&session)
+            {
+                cancelled.store(true, Ordering::Release);
+            }
+        }
         Effect::Emit(event) => match event {
             Event::Listening { profile, .. } => {
                 print!("listening [{profile}] ... ");

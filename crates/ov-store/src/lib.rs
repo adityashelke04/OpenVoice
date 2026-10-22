@@ -42,6 +42,7 @@ pub use migrate::import_jsonl;
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     path: PathBuf,
+    maintenance: Mutex<Option<(u32, u64)>>,
 }
 
 impl SqliteStore {
@@ -63,6 +64,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             path,
+            maintenance: Mutex::new(None),
         })
     }
 
@@ -70,6 +72,39 @@ impl SqliteStore {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Whether rows survive process exit.
+    pub fn is_persistent(&self) -> bool {
+        self.path != Path::new(":memory:")
+    }
+
+    /// Apply retention at most daily, immediately when the setting changes.
+    /// Pass a Unix millisecond clock; unsuccessful sweeps are retried.
+    pub fn maintenance_at(&self, days: u32, now: u64) -> Result<u64> {
+        let mut last = self.maintenance.lock().expect("maintenance mutex");
+        if last.is_some_and(|(old_days, time)| {
+            old_days == days && now.saturating_sub(time) < 86_400_000
+        }) {
+            return Ok(0);
+        }
+        let removed = self.purge_at(days, now)?;
+        *last = Some((days, now));
+        Ok(removed)
+    }
+
+    fn purge_at(&self, days: u32, now: u64) -> Result<u64> {
+        if days == 0 {
+            return Ok(0);
+        }
+        let cutoff = now.saturating_sub(u64::from(days) * 86_400_000);
+        let conn = self.conn.lock().expect("store mutex");
+        conn.execute(
+            "DELETE FROM utterance WHERE created_at < ?1",
+            params![cutoff as i64],
+        )
+        .map(|n| n as u64)
+        .map_err(|e| Error::Storage(format!("purge: {e}")))
     }
 
     /// Total sessions and words, computed in SQL rather than by loading every row.
@@ -105,9 +140,10 @@ impl SqliteStore {
         let conn = self.conn.lock().expect("store mutex");
         let mut stmt = conn
             .prepare(
-                "SELECT DISTINCT created_at FROM utterance
+                "SELECT MAX(created_at) FROM utterance
                  WHERE status IN ('delivered', 'clipboard_fallback')
-                 ORDER BY created_at DESC LIMIT ?1",
+                 GROUP BY date(created_at / 1000.0, 'unixepoch', 'localtime')
+                 ORDER BY MAX(created_at) DESC LIMIT ?1",
             )
             .map_err(|e| Error::Storage(format!("active days: {e}")))?;
 
@@ -237,33 +273,7 @@ pub struct Totals {
 impl HistoryStore for SqliteStore {
     fn append(&self, entry: &Utterance) -> Result<i64> {
         let conn = self.conn.lock().expect("store mutex");
-        // Word count is stored rather than computed on read: it never changes, and
-        // computing it in SQL across the whole table for every stats refresh is
-        // work done thousands of times to save it once.
-        let words = entry.final_text.split_whitespace().count() as i64;
-
-        conn.execute(
-            "INSERT INTO utterance
-               (created_at, duration_ms, raw_text, final_text, profile,
-                target_app, window_title, model, status, latency_ms, word_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                entry.created_at as i64,
-                entry.duration_ms as i64,
-                entry.raw_text,
-                entry.final_text,
-                entry.profile,
-                entry.target_app.clone().unwrap_or_default(),
-                "",
-                entry.model,
-                entry.status,
-                entry.latency_ms as i64,
-                words,
-            ],
-        )
-        .map_err(|e| Error::Storage(format!("append: {e}")))?;
-
-        Ok(conn.last_insert_rowid())
+        append_on(&conn, entry)
     }
 
     fn search(&self, query: &str, limit: usize) -> Result<Vec<Utterance>> {
@@ -271,26 +281,38 @@ impl HistoryStore for SqliteStore {
     }
 
     fn purge_older_than(&self, days: u32) -> Result<u64> {
-        // Zero means keep forever. Deleting everything would be a catastrophic
-        // reading of "retention: 0".
-        if days == 0 {
-            return Ok(0);
-        }
-        let cutoff = now_ms().saturating_sub(u64::from(days) * 86_400_000);
-
-        let conn = self.conn.lock().expect("store mutex");
-        let n = conn
-            .execute(
-                "DELETE FROM utterance WHERE created_at < ?1",
-                params![cutoff as i64],
-            )
-            .map_err(|e| Error::Storage(format!("purge: {e}")))?;
-
-        if n > 0 {
-            tracing::info!(removed = n, days, "purged old history");
-        }
-        Ok(n as u64)
+        self.purge_at(days, now_ms())
     }
+}
+
+fn append_on(conn: &Connection, entry: &Utterance) -> Result<i64> {
+    // Word count is stored rather than computed on read: it never changes, and
+    // computing it in SQL across the whole table for every stats refresh is
+    // work done thousands of times to save it once.
+    let words = entry.final_text.split_whitespace().count() as i64;
+
+    conn.execute(
+        "INSERT INTO utterance
+               (created_at, duration_ms, raw_text, final_text, profile,
+                target_app, window_title, model, status, latency_ms, word_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            entry.created_at as i64,
+            entry.duration_ms as i64,
+            entry.raw_text,
+            entry.final_text,
+            entry.profile,
+            entry.target_app.clone().unwrap_or_default(),
+            "",
+            entry.model,
+            entry.status,
+            entry.latency_ms as i64,
+            words,
+        ],
+    )
+    .map_err(|e| Error::Storage(format!("append: {e}")))?;
+
+    Ok(conn.last_insert_rowid())
 }
 
 /// Turn user input into an FTS5 query that cannot be a syntax error.
@@ -355,6 +377,62 @@ mod tests {
             status: status.into(),
             latency_ms: 500,
         }
+    }
+
+    #[test]
+    fn active_days_limits_days_instead_of_sessions() {
+        let s = store();
+        for day in 0..3 {
+            for session in 0..450 {
+                let mut u = utt("hello", "Code.exe", "delivered");
+                u.created_at = 1_750_032_000_000 + day * 86_400_000 + session;
+                s.append(&u).unwrap();
+            }
+        }
+        assert_eq!(s.active_days(3).unwrap().len(), 3);
+        let days = s.active_days(3).unwrap();
+        assert!(
+            days[0] - days[1] > 80_000_000,
+            "must return different calendar days"
+        );
+    }
+
+    #[test]
+    fn active_days_keeps_both_sides_of_local_midnight() {
+        let s = store();
+        let midnight: i64 = s
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT CAST(strftime('%s', '2026-06-15 00:00:00', 'utc') AS INTEGER) * 1000",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        for timestamp in [midnight - 1, midnight, midnight + 1] {
+            let mut u = utt("hello", "Code.exe", "delivered");
+            u.created_at = timestamp as u64;
+            s.append(&u).unwrap();
+        }
+        let days = s.active_days(2).unwrap();
+        assert_eq!(days, vec![midnight + 1, midnight - 1]);
+    }
+
+    #[test]
+    fn running_retention_checks_new_days_and_changed_settings() {
+        let s = store();
+        let day = 86_400_000;
+        let mut u = utt("old", "Code.exe", "delivered");
+        u.created_at = day;
+        s.append(&u).unwrap();
+        assert_eq!(s.maintenance_at(0, 3 * day).unwrap(), 0);
+        assert_eq!(s.maintenance_at(3, 3 * day).unwrap(), 0);
+        assert_eq!(s.maintenance_at(3, 5 * day).unwrap(), 1);
+        u.created_at = 2 * day;
+        s.append(&u).unwrap();
+        assert_eq!(s.maintenance_at(3, 5 * day + 1).unwrap(), 0);
+        assert_eq!(s.maintenance_at(1, 5 * day + 2).unwrap(), 1);
     }
 
     #[test]

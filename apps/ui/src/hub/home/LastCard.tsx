@@ -100,6 +100,7 @@ function DictationCard({ row, failed, now, patch }: { row: Row; failed: boolean;
       <div className="last-head">
         <span className="tag"><Tag weight="bold" aria-hidden />Last dictation</span>
         <span className="meta"><AppChip exe={row.target_app} profile={row.profile} />{relativeTime(row.created_at, now)}</span>
+        {kind === "held" && <span className="warn-chip">Held in OpenVoice</span>}
         {kind === "delivered" && <span className="status-ok"><CheckCircle weight="bold" aria-hidden />Pasted</span>}
       </div>
       <p ref={text} className={full ? "last-text full" : "last-text"}>{row.final_text}</p>
@@ -107,7 +108,7 @@ function DictationCard({ row, failed, now, patch }: { row: Row; failed: boolean;
       {failed && (
         <div className="fail-note">
           <ClipboardText weight="fill" aria-hidden />
-          {kind === "clipboard"
+          {kind === "held" ? "The complete transcript is kept in OpenVoice. Use Copy, then Ctrl+V where you want it." : kind === "clipboard"
             ? `This didn’t paste into ${app}, so it’s on your clipboard.`
             : `This didn’t reach ${app}. Copy it to get it back.`}
         </div>

@@ -43,6 +43,10 @@ impl AppContext for WinForeground {
         let title = String::from_utf16_lossy(&title[..len.max(0) as usize]);
 
         Ok(ForegroundApp {
+            window: Some(ov_core::types::WindowIdentity {
+                handle: hwnd.0 as usize as u64,
+                process_id: pid,
+            }),
             exe: exe_name(pid).unwrap_or_default(),
             title,
         })

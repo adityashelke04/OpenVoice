@@ -129,7 +129,12 @@ pub struct Engine {
     /// one backend, and a trait object that is only ever one type is indirection
     /// pretending to be flexibility. The decoder owns the model and one decode
     /// thread; see ADR 0012 for why decoding starts before the key comes up.
-    decoder: IncrementalDecoder<ov_asr::sherpa::SherpaTranscriber>,
+    decoder: IncrementalDecoder<ov_asr::worker::WorkerTranscriber>,
+    cancelled: Mutex<HashMap<SessionId, Arc<std::sync::atomic::AtomicBool>>>,
+    recovery: Mutex<crate::recovery::Recovery<RetryAudio>>,
+    retry: Mutex<Option<(SessionId, Arc<std::sync::atomic::AtomicBool>)>>,
+    retry_counter: std::sync::atomic::AtomicU64,
+    hints: Mutex<HashMap<SessionId, DecodeHint>>,
     /// Where to keep recordings, when the user asked for them to be kept.
     ///
     /// Fixed when the engine is built from the user's setting, for the reason
@@ -167,7 +172,7 @@ pub struct Engine {
     /// Deliberately the *unredacted* text: this is what gets pasted when the user
     /// asks for it again, and handing them `[redacted]` instead of their own words
     /// would be a bug. It is in memory only and dies with the process.
-    last_text: Mutex<String>,
+    last_text: Mutex<crate::recovery::LatestText>,
     /// Patterns stripped from transcripts before they are written to history.
     ///
     /// Behind a lock and rebuilt on save, like the formatter rules, so editing the
@@ -217,6 +222,26 @@ pub struct Engine {
     /// able to close a latched session when the user clicks the Flow Bar. See
     /// [`crate::taplatch`].
     latch: Mutex<crate::taplatch::TapLatch>,
+}
+
+#[derive(Clone)]
+struct RetryAudio {
+    audio: Pcm16k,
+    hint: DecodeHint,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryInfo {
+    session: u64,
+    duration_ms: u64,
+    partial: bool,
+}
+
+#[derive(Default, serde::Serialize)]
+pub struct MemoryTranscript {
+    text: String,
+    partial: bool,
 }
 
 impl Engine {
@@ -270,12 +295,15 @@ impl Engine {
     /// [`StageClock::worth_logging`]. A tap, a silent capture or a cancelled
     /// session has no release-to-delivery story to tell, and its line would sit
     /// in the shortest bucket looking like a slow dictation.
-    fn finish_trace(&self, session: SessionId, audio_ms: u64, latency_ms: u64) {
+    fn finish_trace(&self, session: SessionId, audio_ms: u64, latency_ms: u64, outcome: &str) {
         let Some(clock) = self.traces.lock().expect("traces mutex").remove(&session) else {
             return;
         };
         if clock.worth_logging() {
-            tracing::info!("{}", clock.times(session, audio_ms, latency_ms).to_line());
+            tracing::info!(
+                "{} outcome={outcome}",
+                clock.times(session, audio_ms, latency_ms).to_line()
+            );
         }
     }
 
@@ -385,6 +413,7 @@ impl Engine {
     /// kept in step. Harmless when nothing is running: `Input::Cancelled` from
     /// idle is a no-op in `session.rs`.
     pub fn cancel(&self) {
+        self.cancel_workers();
         // Escape ends a latched session as surely as a tap does, and the latch
         // has to be told or it would keep believing the microphone was open --
         // making the next tap "stop" a session that had already gone.
@@ -393,6 +422,133 @@ impl Engine {
         if let Some(tx) = self.inputs.get() {
             let _ = tx.send(Input::Cancelled { at: self.now() });
         }
+    }
+
+    fn cancel_workers(&self) {
+        self.cancel_retry();
+        for (session, flag) in self.cancelled.lock().expect("cancellation mutex").iter() {
+            flag.store(true, std::sync::atomic::Ordering::Release);
+            self.decoder.transcriber().cancel_session(*session);
+        }
+    }
+
+    fn cancel_retry(&self) {
+        if let Some((session, flag)) = self.retry.lock().expect("retry").clone() {
+            flag.store(true, std::sync::atomic::Ordering::Release);
+            self.decoder.transcriber().cancel_session(session);
+        }
+    }
+
+    fn keep_recovery(&self, session: SessionId, audio: Pcm16k, partial: bool) {
+        let count = audio.samples.len();
+        let hint = self
+            .hints
+            .lock()
+            .expect("hints")
+            .get(&session)
+            .cloned()
+            .unwrap_or_default();
+        self.recovery.lock().expect("recovery").keep(
+            session.0,
+            RetryAudio { audio, hint },
+            count,
+            partial,
+            self.now().0,
+        );
+        self.notice(ov_core::event::NoticeLevel::Warn, "Audio is kept in memory for 10 minutes. Use Retry transcription in Home to recover it.");
+    }
+
+    pub fn recovery_info(&self) -> Option<RecoveryInfo> {
+        self.recovery
+            .lock()
+            .expect("recovery")
+            .get(self.now().0)
+            .map(|r| RecoveryInfo {
+                session: r.session,
+                duration_ms: r.samples as u64 / 16,
+                partial: r.partial,
+            })
+    }
+
+    pub fn discard_recovery(&self) {
+        self.cancel_retry();
+        self.recovery.lock().expect("recovery").clear();
+    }
+
+    pub fn retry_audio(&self, session: u64) -> Result<(), String> {
+        let request = SessionId(
+            (1 << 63)
+                | self
+                    .retry_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let mut retry = self.retry.lock().expect("retry");
+            if retry.is_some() {
+                return Err("A retry is already running".into());
+            }
+            *retry = Some((request, cancelled.clone()));
+        }
+        struct Reset<'a>(&'a Mutex<Option<(SessionId, Arc<std::sync::atomic::AtomicBool>)>>);
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) {
+                self.0.lock().expect("retry").take();
+            }
+        }
+        let _reset = Reset(&self.retry);
+        if !self
+            .cancelled
+            .lock()
+            .expect("cancellation mutex")
+            .is_empty()
+        {
+            return Err("Finish the current dictation before retrying".into());
+        }
+        let (generation, audio) = self
+            .recovery
+            .lock()
+            .expect("recovery")
+            .get(self.now().0)
+            .filter(|r| r.session == session)
+            .map(|r| (r.generation, r.value.clone()))
+            .ok_or("Recovery audio expired or was discarded")?;
+        // A new retry identity cannot revive a cancelled original request.
+        let transcript = self
+            .decoder
+            .transcriber()
+            .transcribe_session(request, &audio.audio, &audio.hint)
+            .map_err(|e| e.to_string())?;
+        if transcript.text.trim().is_empty() {
+            return Err("No speech was recognized. Audio is still available.".into());
+        }
+        let text = self.format("prose", &transcript.text);
+        let mut recovery = self.recovery.lock().expect("recovery");
+        if cancelled.load(std::sync::atomic::Ordering::Acquire)
+            || !recovery.is_current(session, generation, self.now().0)
+        {
+            return Err(
+                "Retry was cancelled or a newer recording is waiting. Nothing was copied.".into(),
+            );
+        }
+        self.last_text
+            .lock()
+            .expect("last text mutex")
+            .remember(session, text.clone());
+        self.sink
+            .inject_guarded(
+                &text,
+                ov_core::types::InjectMode::ClipboardOnly,
+                &Default::default(),
+                &cancelled,
+            )
+            .map_err(|e| e.to_string())?;
+        recovery.clear_if_current(session, generation, self.now().0);
+        self.notice(
+            ov_core::event::NoticeLevel::Info,
+            "Recovered transcript copied. Press Ctrl+V to paste it.",
+        );
+        Ok(())
     }
 
     /// Start or stop a dictation from a click rather than the chord.
@@ -463,7 +619,20 @@ impl Engine {
 
     /// Text of the most recent successful dictation.
     pub fn last_text(&self) -> String {
-        self.last_text.lock().map(|t| t.clone()).unwrap_or_default()
+        self.last_text
+            .lock()
+            .map(|t| t.text.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn last_transcript(&self) -> MemoryTranscript {
+        self.last_text
+            .lock()
+            .map(|t| MemoryTranscript {
+                text: t.text.clone(),
+                partial: t.partial,
+            })
+            .unwrap_or_default()
     }
 
     /// Inject `text` into whatever currently has focus, through the normal
@@ -567,9 +736,33 @@ pub fn start(
         tracing::warn!(dir = %d.display(), "keeping recordings on disk; this is off by default");
     }
 
-    let transcriber =
-        Arc::new(ov_asr::sherpa::SherpaTranscriber::new(spec, dir).map_err(|e| e.to_string())?);
-    transcriber.warm().map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let make = |spec: &'static ov_asr::catalog::ModelSpec, dir| {
+        let worker = Arc::new(ov_asr::worker::WorkerTranscriber::new(
+            exe.clone(),
+            spec.id.into(),
+            dir,
+            ov_asr::sherpa::DEFAULT_DECODE_THREADS as usize,
+        ));
+        worker.warm().map(|()| worker).map_err(|e| e.to_string())
+    };
+    let transcriber = match make(spec, dir) {
+        Ok(worker) => worker,
+        Err(error) if spec.id != bundled.id => {
+            shell.emit(&Event::Notice {
+                level: ov_core::event::NoticeLevel::Warn,
+                message: format!(
+                    "Selected model failed to load ({error}). Using bundled {}.",
+                    bundled.id
+                ),
+            });
+            make(
+                bundled,
+                ov_asr::locate::model_dir(bundled, &user_models).map_err(|e| e.to_string())?,
+            )?
+        }
+        Err(error) => return Err(error),
+    };
     let decoder = IncrementalDecoder::new(transcriber, SegmentPolicy::default())
         .map_err(|e| e.to_string())?;
 
@@ -613,9 +806,14 @@ pub fn start(
         apps: ov_input::WinForeground,
         rules: Mutex::new(rules),
         captured: Mutex::new(HashMap::new()),
+        cancelled: Mutex::new(HashMap::new()),
+        hints: Mutex::new(HashMap::new()),
+        recovery: Mutex::new(crate::recovery::Recovery::default()),
+        retry: Mutex::new(None),
+        retry_counter: std::sync::atomic::AtomicU64::new(1),
         traces: Mutex::new(HashMap::new()),
         history,
-        last_text: Mutex::new(String::new()),
+        last_text: Mutex::new(crate::recovery::LatestText::default()),
         redactor: Mutex::new(redactor),
         paste_threshold: config.paste_threshold_chars,
         language: Mutex::new(config.language.clone()),
@@ -700,6 +898,7 @@ pub fn start(
                         let _ = tx.send(Input::HotkeyReleased { at });
                     }
                     HotkeyEvent::Cancelled => {
+                        e.cancel_workers();
                         // Before the session work, and unconditional: Escape
                         // means "back out of whatever this is", and when nothing
                         // is recording the thing to back out of is the open menu.
@@ -719,6 +918,7 @@ pub fn start(
         let e = engine.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
+            let _ = e.recovery.lock().expect("recovery").get(e.now().0);
             if tx.send(Input::Tick { at: e.now() }).is_err() {
                 break;
             }
@@ -739,7 +939,12 @@ pub fn start(
             // still cut the recording off at 2.
             let mut machine = SessionMachine::with_activation(limits, activation);
             for input in rx {
-                for effect in machine.handle(input) {
+                let (effects, partial) =
+                    crate::audio_effects::handle_input(&mut machine, &e.audio, input);
+                if let Some((session, pcm)) = partial {
+                    e.keep_recovery(session, pcm, true);
+                }
+                for effect in effects {
                     execute(&e, &tx2, effect);
                 }
             }
@@ -755,6 +960,10 @@ pub fn start(
 fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
     match effect {
         Effect::StartCapture { session } => {
+            e.cancelled
+                .lock()
+                .expect("cancellation mutex")
+                .insert(session, Arc::new(std::sync::atomic::AtomicBool::new(false)));
             let e2 = e.clone();
 
             // Throttle to ~30 Hz.
@@ -782,17 +991,26 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                 });
             });
             // Before the stream opens, so the first chunk has somewhere to go.
-            e.decoder.begin(session, e.decode_hint());
+            let hint = e.decode_hint();
+            e.hints.lock().expect("hints").insert(session, hint.clone());
+            e.decoder.begin(session, hint);
+            let errors = tx.clone();
+            let source = e.clone();
+            e.audio.set_error_sink(Arc::new(move |error| {
+                let _ = errors.send(Input::AudioFailed {
+                    session,
+                    error,
+                    at: source.now(),
+                });
+            }));
             let feed = e.clone();
             let pcm: PcmSink = Arc::new(move |chunk: &[f32]| feed.decoder.push(session, chunk));
-            if let Err(err) = e.audio.start_streaming(levels, pcm) {
+            let input = crate::audio_effects::start(&e.audio, session, levels, pcm, e.now());
+            if let Input::AudioFailed { ref error, .. } = input {
                 e.decoder.discard(session);
-                tracing::error!(error = %err, "capture failed to start");
-                e.shell.emit(&Event::Notice {
-                    level: ov_core::event::NoticeLevel::Error,
-                    message: format!("Microphone unavailable: {err}"),
-                });
+                tracing::error!(%error, "capture failed to start");
             }
+            let _ = tx.send(input);
         }
 
         Effect::StopCapture { session } => {
@@ -819,6 +1037,9 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                         });
                     }
                     Err(err) => {
+                        if let Some(partial) = e.audio.take_partial() {
+                            e.keep_recovery(session, partial, true);
+                        }
                         let _ = tx.send(Input::AudioFailed {
                             session,
                             error: err.to_string(),
@@ -877,6 +1098,21 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                         });
                     }
                     Err(err) => {
+                        let active = e
+                            .cancelled
+                            .lock()
+                            .expect("cancellation mutex")
+                            .get(&session)
+                            .is_some_and(|flag| !flag.load(std::sync::atomic::Ordering::Acquire));
+                        if active {
+                            e.keep_recovery(session, audio, false);
+                            if let Some(partial) = e.decoder.take_partial_transcript(session) {
+                                e.last_text
+                                    .lock()
+                                    .expect("last text mutex")
+                                    .remember_partial(session.0, partial.text);
+                            }
+                        }
                         let _ = tx.send(Input::TranscriptionFailed {
                             session,
                             error: err.to_string(),
@@ -893,6 +1129,10 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             profile,
         } => {
             let text = e.format(&profile, &raw);
+            e.last_text
+                .lock()
+                .expect("last text mutex")
+                .remember(session.0, text.clone());
             e.stamp(session, |c, now| c.formatted = Some(now));
             let _ = tx.send(Input::Formatted {
                 session,
@@ -904,7 +1144,7 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
         Effect::Inject {
             session,
             text,
-            target_exe,
+            target,
         } => {
             let e = e.clone();
             let tx = tx.clone();
@@ -916,21 +1156,21 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                 // logging the mismatch is the difference between "injection sometimes
                 // silently fails in one app" being a mystery and being a two-minute
                 // diagnosis next time it happens.
-                let now_exe = e.apps.foreground().unwrap_or_default().exe;
-                if !target_exe.is_empty() && now_exe != target_exe {
-                    tracing::warn!(
-                        pressed_in = %target_exe,
-                        injecting_into = %now_exe,
-                        "foreground app changed between press and injection"
-                    );
+                let flag = e
+                    .cancelled
+                    .lock()
+                    .expect("cancellation mutex")
+                    .get(&session)
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicBool::new(true)));
+                if flag.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
                 }
-
                 let mode = ov_input::mode_for(&text, e.paste_threshold);
-                let delivered = e.sink.inject(&text, mode);
+                let delivered = e.sink.inject_guarded(&text, mode, &target, &flag);
                 e.stamp(session, |c, now| c.injected = Some(now));
                 match delivered {
                     Ok(_) => {
-                        *e.last_text.lock().expect("last text mutex") = text;
                         let _ = tx.send(Input::Injected {
                             session,
                             at: e.now(),
@@ -943,10 +1183,9 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                         // helps once the moment has passed.
                         tracing::warn!(
                             error = %err,
-                            target = %now_exe,
-                            "injection failed; text left on the clipboard"
+                            target = %target.exe,
+                            "injection stopped; complete text retained in OpenVoice"
                         );
-                        *e.last_text.lock().expect("last text mutex") = text;
                         let _ = tx.send(Input::InjectionFailed {
                             session,
                             error: err.to_string(),
@@ -958,7 +1197,12 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
         }
 
         Effect::Persist { record } => {
-            e.finish_trace(record.id, record.audio_ms, record.latency_ms);
+            e.finish_trace(
+                record.id,
+                record.audio_ms,
+                record.latency_ms,
+                record.outcome.code(),
+            );
             // Redaction happens here, on the way to storage, and nowhere else.
             //
             // The transcript reached the user's application several steps ago —
@@ -996,16 +1240,29 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             // already in the target application by this point.
             if let Err(err) = e.history.append(&entry) {
                 tracing::warn!(error = %err, "history write failed");
+                e.notice(ov_core::event::NoticeLevel::Warn, "History could not be saved. Your transcript is still available with Copy. Check disk space and folder permissions.");
             }
             if matches!(
                 record.outcome,
-                Outcome::Delivered | Outcome::ClipboardFallback(_)
+                Outcome::Delivered | Outcome::ClipboardFallback(_) | Outcome::DeliveryHeld(_)
             ) {
-                *e.last_text.lock().expect("last text mutex") = record.final_text.clone();
+                e.last_text
+                    .lock()
+                    .expect("last text mutex")
+                    .remember(record.id.0, record.final_text.clone());
             }
         }
 
         Effect::Discard { session } => {
+            if let Some(flag) = e
+                .cancelled
+                .lock()
+                .expect("cancellation mutex")
+                .remove(&session)
+            {
+                flag.store(true, std::sync::atomic::Ordering::Release);
+            }
+            e.hints.lock().expect("hints").remove(&session);
             e.captured.lock().expect("capture mutex").remove(&session);
             e.decoder.discard(session);
         }

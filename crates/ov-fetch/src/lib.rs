@@ -30,6 +30,8 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+mod gate;
+
 /// How many bytes to read from the socket at a time.
 ///
 /// A megabyte: large enough that progress callbacks are not the bottleneck on a
@@ -67,6 +69,7 @@ pub fn download_and_extract(
     dest: &Path,
     on_progress: &mut dyn FnMut(u64, u64),
 ) -> Result<(), String> {
+    let _claim = gate::Claim::acquire(dest)?;
     tracing::info!(url, "downloading model");
 
     let resp = ureq::get(url)
@@ -108,16 +111,36 @@ pub fn download_and_extract(
         return Err(e);
     }
 
-    // Only now does anything appear where the app will look for it.
-    let _ = std::fs::remove_dir_all(dest);
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
-    }
-    std::fs::rename(&staging, dest)
-        .map_err(|e| format!("could not install to {}: {e}", dest.display()))?;
+    install_stage(&staging, dest)?;
 
     tracing::info!(dest = %dest.display(), "model installed");
+    Ok(())
+}
+
+fn install_stage(staging: &Path, dest: &Path) -> Result<(), String> {
+    let backup = dest.with_extension("previous");
+    if backup.exists() {
+        return Err(format!(
+            "{} contains a previous model recovery copy; installation stopped to preserve it",
+            backup.display()
+        ));
+    }
+    let had_previous = dest.exists();
+    if had_previous {
+        std::fs::rename(dest, &backup)
+            .map_err(|e| format!("could not preserve previous model: {e}"))?;
+    }
+    if let Err(e) = std::fs::rename(staging, dest) {
+        if had_previous {
+            std::fs::rename(&backup, dest).map_err(|restore| format!("install failed: {e}; previous model remains at {} because restore failed: {restore}", backup.display()))?;
+        }
+        return Err(format!("could not install to {}: {e}", dest.display()));
+    }
+    if had_previous {
+        if let Err(e) = std::fs::remove_dir_all(&backup) {
+            tracing::warn!(error = %e, "installed model; previous model backup could not be removed");
+        }
+    }
     Ok(())
 }
 
@@ -165,6 +188,20 @@ fn extract(archive: &[u8], files: &[&str], staging: &Path) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_install_preserves_previous_model() {
+        let dest = std::env::temp_dir().join(format!("ov-fetch-previous-{}", std::process::id()));
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("model.onnx"), b"valid old model").unwrap();
+        assert!(install_stage(&dest.with_extension("missing"), &dest).is_err());
+        assert_eq!(
+            std::fs::read(dest.join("model.onnx")).unwrap(),
+            b"valid old model"
+        );
+        std::fs::remove_file(dest.join("model.onnx")).unwrap();
+        std::fs::remove_dir(dest).unwrap();
+    }
 
     #[test]
     fn a_matching_checksum_is_accepted() {

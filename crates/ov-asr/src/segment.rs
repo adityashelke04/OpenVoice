@@ -115,6 +115,7 @@ pub struct SegmentPlanner {
     seg_start: usize,
     /// Speech seen since `seg_start`.
     heard: bool,
+    uncertain: bool,
     /// Consecutive pause frames.
     pause_frames: u64,
     /// End of the checkpoint in the current segment, if one was made.
@@ -148,6 +149,7 @@ impl SegmentPlanner {
             pos: 0,
             seg_start: 0,
             heard: false,
+            uncertain: false,
             pause_frames: 0,
             checkpoint: None,
             speech_after_checkpoint: false,
@@ -180,8 +182,9 @@ impl SegmentPlanner {
                 self.speech_after_checkpoint = true;
             }
         }
+        self.uncertain |= self.carry.iter().any(|&s| s != 0.0);
         match self.checkpoint {
-            Some(end) if !self.speech_after_checkpoint => Tail {
+            Some(end) if !self.speech_after_checkpoint && !self.uncertain => Tail {
                 start: self.seg_start,
                 end,
                 reuse: true,
@@ -191,7 +194,7 @@ impl SegmentPlanner {
                 start: self.seg_start,
                 end: total,
                 reuse: false,
-                silent: !self.heard,
+                silent: !self.heard && !self.uncertain,
             },
         }
     }
@@ -213,6 +216,8 @@ impl SegmentPlanner {
             self.recent.pop_front();
         }
         let speech = level >= self.threshold();
+        // Energy thresholds can propose cuts, but cannot prove nonzero audio is silence.
+        self.uncertain |= level > 0.0;
         self.frames.push((level, speech));
         self.pos += FRAME;
 
@@ -227,6 +232,7 @@ impl SegmentPlanner {
             if self.heard && self.pause_frames == self.policy.checkpoint_pause_ms / 20 {
                 self.checkpoint = Some(self.pos);
                 self.speech_after_checkpoint = false;
+                self.uncertain = false;
                 decisions.push(Decision::Checkpoint {
                     start: self.seg_start,
                     end: self.pos,
@@ -272,6 +278,7 @@ impl SegmentPlanner {
         self.checkpoint = None;
         self.speech_after_checkpoint = false;
         self.heard = self.frames.iter().any(|&(_, speech)| speech);
+        self.uncertain = self.frames.iter().any(|&(level, _)| level > 0.0);
     }
 }
 
@@ -313,13 +320,23 @@ mod tests {
     }
 
     fn quiet(ms: u64) -> Vec<f32> {
-        level(ms, 0.001)
+        level(ms, 0.0)
     }
 
     fn plan(audio: &[f32], chunk: usize) -> (SegmentPlanner, Vec<Decision>) {
         let mut p = SegmentPlanner::new(policy());
         let decisions: Vec<Decision> = audio.chunks(chunk).flat_map(|c| p.push(c)).collect();
         (p, decisions)
+    }
+
+    #[test]
+    fn steady_nonzero_onset_is_not_declared_silent() {
+        let mut p = SegmentPlanner::new(SegmentPolicy::default());
+        let audio: Vec<f32> = (0..16_000)
+            .map(|i| if i % 2 == 0 { 0.1 } else { -0.1 })
+            .collect();
+        p.push(&audio);
+        assert!(!p.finish(audio.len()).silent);
     }
 
     #[test]

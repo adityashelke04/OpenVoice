@@ -172,10 +172,12 @@ impl Dictionary {
     }
 }
 
-/// Lowercase and collapse whitespace.
+/// Use the same word boundaries as matching; sentence punctuation is not spoken.
 fn normalize(s: &str) -> String {
-    s.split_whitespace()
-        .map(str::to_lowercase)
+    crate::doc::Doc::parse(s)
+        .toks
+        .iter()
+        .filter_map(crate::doc::Tok::as_word_lower)
         .collect::<Vec<_>>()
         .join(" ")
 }

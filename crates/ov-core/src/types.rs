@@ -48,6 +48,8 @@ pub enum Outcome {
     ///
     /// This is a degraded success, not a failure: the user has not lost their words.
     ClipboardFallback(String),
+    /// Complete text retained for explicit Copy when automatic input was unsafe.
+    DeliveryHeld(String),
     /// The user cancelled before delivery.
     Cancelled,
     /// The press was shorter than the configured minimum: a fat-finger tap.
@@ -68,7 +70,10 @@ impl Outcome {
     /// Whether the user ended up with their text somewhere usable.
     #[must_use]
     pub fn is_success(&self) -> bool {
-        matches!(self, Self::Delivered | Self::ClipboardFallback(_))
+        matches!(
+            self,
+            Self::Delivered | Self::ClipboardFallback(_) | Self::DeliveryHeld(_)
+        )
     }
 
     /// Stable identifier for persistence and metrics.
@@ -77,6 +82,7 @@ impl Outcome {
         match self {
             Self::Delivered => "delivered",
             Self::ClipboardFallback(_) => "clipboard_fallback",
+            Self::DeliveryHeld(_) => "delivery_held",
             Self::Cancelled => "cancelled",
             Self::TooShort => "too_short",
             Self::Silent => "silent",
@@ -106,10 +112,22 @@ pub struct Transcript {
 /// speaking, not where they landed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForegroundApp {
+    /// Opaque native window identity; absent means automatic delivery is unsafe.
+    #[serde(default)]
+    pub window: Option<WindowIdentity>,
     /// Executable file name, e.g. `Code.exe`.
     pub exe: String,
     /// Window title. Useful as a decode hint (filenames, repo names).
     pub title: String,
+}
+
+/// Identity of one native window, never an executable-name approximation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowIdentity {
+    /// Native handle represented without importing platform types.
+    pub handle: u64,
+    /// Process that owned the window when captured.
+    pub process_id: u32,
 }
 
 /// How text should be delivered to the target application.

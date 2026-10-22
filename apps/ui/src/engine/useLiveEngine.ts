@@ -263,7 +263,7 @@ function reduce(
       return {
         ...v,
         state: current && failed ? "fault" : v.state,
-        lastText: e.text || v.lastText,
+        lastText: e.text || (e.outcome.kind === "delivery_held" ? e.outcome.detail : "") || v.lastText,
         lastLatencyMs: e.latencyMs,
         // Only the current session's outcome decides whether the bar
         // congratulates you; a late one from a previous session would otherwise

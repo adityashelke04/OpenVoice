@@ -9,6 +9,7 @@
 export type Outcome =
   | { kind: "delivered" }
   | { kind: "clipboard_fallback"; detail: string }
+  | { kind: "delivery_held"; detail: string }
   | { kind: "cancelled" }
   | { kind: "too_short" }
   | { kind: "silent" }

@@ -87,6 +87,7 @@ struct State {
     queue: VecDeque<Job>,
     sessions: HashMap<SessionId, Session>,
     next_slot: u64,
+    partials: VecDeque<(SessionId, Instant, Transcript)>,
     last_decode: Option<Instant>,
     shutdown: bool,
     /// The decode thread is gone and nothing will ever signal `settled` again.
@@ -277,6 +278,15 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
 
     /// The key came up and `audio` is the whole recording. Wait for the transcript.
     pub fn finish(&self, session: SessionId, audio: &Pcm16k) -> Result<(Transcript, DecodeFacts)> {
+        self.finish_with_timeout(session, audio, Duration::from_secs(60))
+    }
+
+    fn finish_with_timeout(
+        &self,
+        session: SessionId,
+        audio: &Pcm16k,
+        timeout: Duration,
+    ) -> Result<(Transcript, DecodeFacts)> {
         let mut st = self.lock();
         let streamed = st
             .sessions
@@ -293,14 +303,14 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
             st.queue
                 .retain(|j| j.session != session || j.kind == Kind::Prime);
             drop(st);
-            return self.whole(audio, &hint);
+            return self.whole(session, audio, &hint);
         }
 
         let reused = self.schedule_tail(&mut st, session);
-        let mut st = self
+        let (mut st, timed) = self
             .shared
             .settled
-            .wait_while(st, |st| {
+            .wait_timeout_while(st, timeout, |st| {
                 !st.worker_gone
                     && st.sessions.get(&session).is_some_and(|s| {
                         s.committed
@@ -314,7 +324,21 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
                 "the dictation was cancelled while it was being decoded".into(),
             ));
         };
+        let deadline_exceeded = timed.timed_out()
+            && s.committed
+                .iter()
+                .any(|slot| matches!(slot.decoded, Decoded::Pending));
+        if deadline_exceeded {
+            st.queue.retain(|job| job.session != session);
+        }
         drop(st);
+        if deadline_exceeded {
+            self.shared.transcriber.cancel_session(session);
+            self.remember_partial(session, &s);
+            return Err(Error::Transcription(
+                "speech decoding exceeded its deadline; audio is available to retry".into(),
+            ));
+        }
 
         let mut texts = Vec::with_capacity(s.committed.len());
         let mut language = None;
@@ -331,9 +355,9 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
                 }
                 Decoded::Done(Err(e)) => {
                     tracing::warn!(%session, error = %e, "a segment failed; decoding the whole dictation instead");
-                    return self.whole(audio, &s.hint);
+                    return self.fallback_segments(session, audio, &s);
                 }
-                Decoded::Pending => return self.whole(audio, &s.hint),
+                Decoded::Pending => return self.fallback_segments(session, audio, &s),
             }
         }
         Ok((
@@ -398,10 +422,62 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
         false
     }
 
+    /// Take text from completed segments after a failed final decode. It is incomplete.
+    pub fn take_partial_transcript(&self, session: SessionId) -> Option<Transcript> {
+        let mut st = self.lock();
+        st.partials
+            .retain(|(_, created, _)| created.elapsed() < Duration::from_secs(120));
+        let index = st.partials.iter().position(|(id, _, _)| *id == session)?;
+        st.partials.remove(index).map(|(_, _, t)| t)
+    }
+
+    fn fallback_segments(
+        &self,
+        session: SessionId,
+        audio: &Pcm16k,
+        s: &Session,
+    ) -> Result<(Transcript, DecodeFacts)> {
+        let result = self.whole(session, audio, &s.hint);
+        if result.is_err() {
+            self.remember_partial(session, s);
+        }
+        result
+    }
+
+    fn remember_partial(&self, session: SessionId, s: &Session) {
+        let text = s
+            .committed
+            .iter()
+            .filter_map(|slot| match &slot.decoded {
+                Decoded::Done(Ok(t)) => Some(t.text.trim()),
+                _ => None,
+            })
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !text.is_empty() {
+            let mut st = self.lock();
+            if st.partials.len() >= 2 {
+                st.partials.pop_front();
+            }
+            st.partials.push_back((
+                session,
+                Instant::now(),
+                Transcript {
+                    text,
+                    language: None,
+                    confidence: None,
+                },
+            ));
+        }
+    }
+
     /// Forget a session: its audio, its queued decodes, and anyone waiting on it.
     pub fn discard(&self, session: SessionId) {
+        self.shared.transcriber.cancel_session(session);
         let mut st = self.lock();
         st.sessions.remove(&session);
+        st.partials.retain(|(id, _, _)| *id != session);
         st.queue
             .retain(|j| j.session != session || j.kind == Kind::Prime);
         drop(st);
@@ -410,8 +486,16 @@ impl<T: Transcriber + 'static> IncrementalDecoder<T> {
 
     /// Decode the whole recording in one call, with the dictation's own hints:
     /// exactly what the app did before incremental decoding existed.
-    fn whole(&self, audio: &Pcm16k, hint: &DecodeHint) -> Result<(Transcript, DecodeFacts)> {
-        let transcript = self.shared.transcriber.transcribe(audio, hint)?;
+    fn whole(
+        &self,
+        session: SessionId,
+        audio: &Pcm16k,
+        hint: &DecodeHint,
+    ) -> Result<(Transcript, DecodeFacts)> {
+        let transcript = self
+            .shared
+            .transcriber
+            .transcribe_session(session, audio, hint)?;
         self.lock().last_decode = Some(Instant::now());
         Ok((
             transcript,
@@ -482,7 +566,7 @@ fn run<T: Transcriber>(shared: &Shared<T>) {
         } = job;
         let decoded = shared
             .transcriber
-            .transcribe(&Pcm16k { samples }, &hint)
+            .transcribe_session(session, &Pcm16k { samples }, &hint)
             .map_err(|e| e.to_string());
 
         let mut st = shared.state.lock().expect("decoder state");
@@ -516,6 +600,8 @@ mod tests {
         /// The vocabulary each decode was given, in call order.
         hints: Mutex<Vec<Vec<String>>>,
         fail_next: AtomicBool,
+        fail_all: AtomicBool,
+        cancelled: Mutex<Vec<SessionId>>,
         /// Panic inside the next decode, as a model that segfaults its way into an
         /// unwind would, to prove the release still answers.
         panic_next: AtomicBool,
@@ -561,7 +647,8 @@ mod tests {
             }
             self.calls.lock().unwrap().push(audio.samples.len());
             self.hints.lock().unwrap().push(hint.vocabulary.clone());
-            if self.fail_next.swap(false, Ordering::SeqCst) {
+            if self.fail_all.load(Ordering::SeqCst) || self.fail_next.swap(false, Ordering::SeqCst)
+            {
                 return Err(Error::Transcription("boom".into()));
             }
             Ok(Transcript {
@@ -569,6 +656,9 @@ mod tests {
                 language: Some("en".into()),
                 confidence: None,
             })
+        }
+        fn cancel_session(&self, session: SessionId) {
+            self.cancelled.lock().unwrap().push(session);
         }
         fn model_id(&self) -> String {
             "fake".into()
@@ -607,7 +697,7 @@ mod tests {
 
     fn quiet(ms: u64) -> Vec<f32> {
         (0..(ms / 20) as usize * FRAME)
-            .map(|i| if i % 2 == 0 { 0.001 } else { -0.001 })
+            .map(|i| if i % 2 == 0 { 0.0 } else { -0.0 })
             .collect()
     }
 
@@ -631,6 +721,95 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn final_decode_has_one_overall_deadline_even_when_segments_never_complete() {
+        let (fake, d) = decoder();
+        let d = Arc::new(d);
+        fake.block();
+        let audio = speech(1000);
+        stream(&d, S, &audio);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let finishing = d.clone();
+        let worker = std::thread::spawn(move || {
+            let _ =
+                tx.send(finishing.finish_with_timeout(S, &pcm(&audio), Duration::from_millis(20)));
+        });
+        let result = rx.recv_timeout(Duration::from_millis(200));
+        fake.unblock();
+        worker.join().unwrap();
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "a blocked decode must return a recoverable deadline error"
+        );
+        assert!(!d.lock().sessions.contains_key(&S));
+        assert!(fake.cancelled.lock().unwrap().contains(&S));
+        assert!(
+            fake.decodes().is_empty(),
+            "the expired utterance must not restart a whole decode"
+        );
+    }
+    #[test]
+    fn completed_segments_survive_a_failed_tail_and_failed_fallback() {
+        let (fake, d) = decoder();
+        let first = [speech(4000), quiet(600)].concat();
+        stream(&d, S, &first);
+        wait_for("first committed segment", || {
+            fake.decodes().contains(&67840)
+        });
+        // Calls are recorded just before the result is stored: wait for the actual completed slot.
+        wait_for("committed result", || {
+            d.lock().sessions[&S]
+                .committed
+                .iter()
+                .any(|s| matches!(s.decoded, Decoded::Done(Ok(_))))
+        });
+        fake.fail_all.store(true, Ordering::SeqCst);
+        let tail = speech(1000);
+        d.push(S, &tail);
+        let audio = [first, tail].concat();
+        assert!(d.finish(S, &pcm(&audio)).is_err());
+        assert_eq!(d.take_partial_transcript(S).unwrap().text, "<67840>");
+        assert!(d.take_partial_transcript(S).is_none());
+    }
+    #[test]
+    fn quiet_tail_after_commit_is_not_lost() {
+        let (_fake, d) = decoder();
+        let audio = [speech(4000), quiet(600), vec![0.0001; 16000]].concat();
+        stream(&d, S, &audio);
+        let (t, facts) = d.finish(S, &pcm(&audio)).unwrap();
+        assert_eq!(t.text, "<67840> <21760>");
+        assert_eq!(facts.segments, 2);
+    }
+    #[test]
+    fn digital_silence_is_not_decoded() {
+        let (_fake, d) = decoder();
+        let audio = vec![0.; 16000];
+        stream(&d, S, &audio);
+        let (t, facts) = d.finish(S, &pcm(&audio)).unwrap();
+        assert_eq!(t.text, "");
+        assert_eq!(facts.segments, 0);
+    }
+    #[test]
+    fn low_level_speech_is_recognized_with_its_hint() {
+        let (fake, d) = decoder();
+        d.begin(
+            S,
+            DecodeHint {
+                vocabulary: vec!["secret-name".into()],
+                language: Some("en".into()),
+            },
+        );
+        let audio = vec![0.0001; 16000];
+        d.push(S, &audio);
+        let (t, _) = d.finish(S, &pcm(&audio)).unwrap();
+        assert_eq!(t.text, "<16000>");
+        assert!(fake
+            .hints
+            .lock()
+            .unwrap()
+            .contains(&vec!["secret-name".to_owned()]));
     }
 
     #[test]

@@ -92,6 +92,16 @@ pub type PcmSink = Arc<dyn Fn(&[f32]) + Send + Sync>;
 
 /// Captures microphone audio and normalizes it to 16 kHz mono.
 pub trait AudioSource: Send + Sync {
+    /// Observe device errors; callers attach the current session identity.
+    fn set_error_sink(&self, sink: Arc<dyn Fn(String) + Send + Sync>) {
+        let _ = sink;
+    }
+
+    /// Recover samples from a failed capture without labeling it complete.
+    fn take_partial(&self) -> Option<Pcm16k> {
+        None
+    }
+
     /// Start capturing. `levels` is called roughly every 20 ms for UI metering.
     fn start(&self, levels: Arc<dyn Fn(LevelFrame) + Send + Sync>) -> Result<()>;
 
@@ -154,6 +164,21 @@ pub struct DecodeHint {
 ///
 /// Implementations: `ov_asr::sherpa::SherpaTranscriber`, and mocks in tests.
 pub trait Transcriber: Send + Sync {
+    /// Decode with an identity so cancellation cannot kill a later session.
+    fn transcribe_session(
+        &self,
+        session: crate::types::SessionId,
+        audio: &Pcm16k,
+        hint: &DecodeHint,
+    ) -> Result<Transcript> {
+        let _ = session;
+        self.transcribe(audio, hint)
+    }
+
+    /// Cancel native work for this session, leaving later requests intact.
+    fn cancel_session(&self, session: crate::types::SessionId) {
+        let _ = session;
+    }
     /// Preload weights so the first real utterance is not penalized by a cold start.
     fn warm(&self) -> Result<()>;
 
@@ -170,8 +195,8 @@ pub trait TextSink: Send + Sync {
     /// Insert `text` at the caret using `mode`.
     ///
     /// Implementations may downgrade the mode (reporting what they used in the
-    /// receipt) but must never silently drop text: if delivery is impossible, leave
-    /// the text on the clipboard and return an error so the caller can tell the user.
+    /// receipt) but must never silently drop text. Return an error when delivery
+    /// fails; callers retain the complete text for explicit manual recovery.
     fn inject(&self, text: &str, mode: InjectMode) -> Result<InjectReceipt>;
 }
 

@@ -311,7 +311,7 @@ describe("Home", () => {
     const doc = structuredClone(SETTINGS);
     patch.mock.calls[0][0](doc);
     expect(doc.dictionary.find((d) => d.written === "JSON")!.spoken).toContain("json");
-    expect(within(lastCard()).queryByRole("textbox", { name: "You said" })).toBeNull();
+    await waitFor(() => expect(within(lastCard()).queryByRole("textbox", { name: "You said" })).toBeNull());
   });
 
   it("Ctrl+C copies the card only with no selection and focus outside inputs", async () => {
@@ -544,3 +544,52 @@ describe("Home", () => {
   });
 });
 
+
+it("offers retained audio retry and preserves it after a failed retry", async () => {
+  tauri = bridge(ROWS, {
+    get_recovery: () => ({ session: 42, durationMs: 1200, partial: true }),
+    retry_audio: () => { throw "decoder unavailable"; },
+    discard_recovery: () => null,
+  });
+  renderHome();
+  fireEvent.click(await screen.findByRole("button", { name: "Retry transcription" }));
+  await screen.findByText(/decoder unavailable/);
+  expect(tauri.calls.find(c => c.cmd === "retry_audio")?.args).toEqual({ session: 42 });
+  expect(screen.getByRole("button", { name: "Retry transcription" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Discard audio" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Retry transcription" })).toBeNull());
+});
+
+it("held delivery keeps text in OpenVoice until explicit Copy", async () => {
+  tauri = bridge([{ ...ROWS[0], outcome: "delivery_held" }]);
+  renderHome();
+  await screen.findByText("Held in OpenVoice");
+  expect(screen.queryByText(/so it?s on your clipboard/)).toBeNull();
+  expect(writeText()).not.toHaveBeenCalled();
+  fireEvent.click(within(lastCard()).getByRole("button", { name: /^Copy/ }));
+  await waitFor(() => expect(writeText()).toHaveBeenCalledWith(ROWS[0].final_text));
+});
+
+it("keeps the full in-memory transcript copyable when history cannot be saved", async () => {
+  tauri = bridge([], { get_storage_status: () => false, get_last_text: () => "Complete private transcript" });
+  renderHome({ lastOutcome: "delivery_held" });
+  await screen.findByText(/History is not being saved to disk/);
+  await screen.findByText("Complete private transcript");
+  expect(tauri.calls.some(c => c.cmd === "save_settings")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Copy recovered text" }));
+  await waitFor(() => expect(writeText()).toHaveBeenCalledWith("Complete private transcript"));
+});
+
+it("labels incomplete memory transcripts and retains manual Copy", async () => {
+  tauri = bridge([], { get_last_transcript: () => ({ text: "First segment only", partial: true }) });
+  renderHome();
+  await screen.findByText("Incomplete transcript: later speech could not be transcribed. Retry audio for the full recording.");
+  expect(screen.getByText("First segment only")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Copy recovered text" }));
+  await waitFor(() => expect(writeText()).toHaveBeenCalledWith("First segment only"));
+});
+it("shows failed legacy migration even with a persistent database", async () => {
+  tauri = bridge([], { get_storage_status: () => true, get_storage_warning: () => "Legacy history migration failed: source preserved." });
+  renderHome();
+  await screen.findByText(/Legacy history migration failed: source preserved/);
+});

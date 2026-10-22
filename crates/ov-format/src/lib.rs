@@ -170,6 +170,42 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
+    fn prose_preserves_meaningful_like_and_you_know() {
+        let f = Formatter::with_builtins(Profile::prose());
+        assert_eq!(f.format("I like this"), "I like this.");
+        assert_eq!(f.format("Do you know her?"), "Do you know her?");
+    }
+
+    #[test]
+    fn saved_aggressive_profiles_preserve_meaning() {
+        let mut p = Profile::prose();
+        p.fillers = crate::profile::FillerLevel::Aggressive;
+        let f = Formatter::with_builtins(p);
+        for (raw, expected) in [
+            ("um I like this", "I like this."),
+            ("basically identical", "Basically identical."),
+            ("Zyma likes twenty two", "Zyma likes twenty two."),
+            ("no no no very very good", "No no no very very good."),
+            ("hello comma world", "Hello, world."),
+        ] {
+            assert_eq!(f.format(raw), expected);
+        }
+    }
+
+    #[test]
+    fn selected_correction_uses_formatter_tokenization() {
+        let f = Formatter::new(
+            Profile::prose(),
+            &[
+                Entry::new("Zyma", &["zima."], "code"),
+                Entry::new("user.name", &["user.name"], "code"),
+            ],
+        );
+        assert_eq!(f.format("zima."), "Zyma.");
+        assert_eq!(f.format("user.name"), "user.name.");
+    }
+
+    #[test]
     fn editor_profile_end_to_end() {
         let f = Formatter::with_builtins(Profile::editor());
         assert_eq!(
@@ -197,7 +233,7 @@ mod tests {
         let f = Formatter::with_builtins(Profile::prose());
         assert_eq!(
             f.format("um so basically you know the deploy is done"),
-            "So the deploy is done."
+            "So basically you know the deploy is done."
         );
     }
 

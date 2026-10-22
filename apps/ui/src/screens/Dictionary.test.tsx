@@ -123,3 +123,17 @@ describe("Dictionary screen", () => {
     expect((await screen.findByText("OpenVoice also knows 30 built-in terms like useEffect and kubectl. Yours always win. Changes apply to your next dictation.")).className).toContain("cap");
   });
 });
+
+it("retains correction fields and explains a rejected save", async () => {
+  tauri = installTauri({
+    get_settings: () => ({ config: {}, model: "", dictionary: [], profiles: [] }),
+    save_settings: () => { throw "disk full"; },
+  });
+  render(<Harness />);
+  fireEvent.change(await screen.findByLabelText("You said"), { target: { value: "zima." } });
+  fireEvent.change(screen.getByLabelText("Write it as"), { target: { value: "Zyma" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Could not save correction"));
+  expect((screen.getByLabelText("You said") as HTMLInputElement).value).toBe("zima.");
+  expect((screen.getByLabelText("Write it as") as HTMLInputElement).value).toBe("Zyma");
+});

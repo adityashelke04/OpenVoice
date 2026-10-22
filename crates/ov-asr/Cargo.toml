@@ -1,6 +1,6 @@
 [package]
 name = "ov-asr"
-description = "OpenVoice speech recognition: NVIDIA Parakeet TDT, decoded in-process via sherpa-onnx."
+description = "OpenVoice speech recognition: NVIDIA Parakeet TDT, decoded in a restartable local worker via sherpa-onnx."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

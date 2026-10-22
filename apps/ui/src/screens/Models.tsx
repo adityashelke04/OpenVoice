@@ -50,7 +50,7 @@ export function ModelsScreen({
   patch,
 }: {
   settings: S;
-  patch: (fn: (s: S) => void) => void;
+  patch: (fn: (s: S) => void) => void | Promise<boolean>;
 }) {
   const [models, setModels] = useState<ModelSpec[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -64,17 +64,28 @@ export function ModelsScreen({
 
   useEffect(refresh, []);
 
-  // Poll while a transfer is in flight. A 465 MB download can take minutes on a
-  // slow link, and a button that says only "Downloading…" for that long is
-  // indistinguishable from one that has hung — which is the state in which
-  // people kill the app and leave a part-fetched model behind.
+  // The backend owns downloads across screen unmounts. Restore and poll that
+  // shared state instead of depending on a click in this particular mount.
   useEffect(() => {
-    if (!busy) return;
-    const id = setInterval(() => {
-      getDownload().then((p) => setProgress(p && p.model === busy ? p : null));
-    }, 400);
-    return () => clearInterval(id);
-  }, [busy]);
+    let live = true;
+    let observed: string | null = null;
+    const read = () => void getDownload().then(p => {
+      if (!live) return;
+      if (p) {
+        observed = p.model;
+        setBusy(p.model);
+        setProgress(p);
+      } else if (observed) {
+        observed = null;
+        setBusy(null);
+        setProgress(null);
+        refresh();
+      }
+    }, e => { if (live) setError(`Could not check download progress. ${String(e)}`); });
+    read();
+    const timer = window.setInterval(read, 400);
+    return () => { live = false; clearInterval(timer); };
+  }, []);
 
   const download = async (id: string) => {
     setBusy(id);
@@ -158,17 +169,15 @@ export function ModelsScreen({
                 // Selecting a model you do not have would leave the app running
                 // something other than what the screen says is chosen.
                 disabled={!ready}
-                onClick={() => {
+                onClick={async () => {
                   if (active || !ready) return;
-                  patch((s) => (s.model = m.id));
-                  setPending(name);
+                  if (await patch((s) => (s.model = m.id)) !== false) setPending(name);
                 }}
               >
                 <div className="nm">
                   {name}
-                  {/* "In use" only when it is both chosen *and* present. Claiming
-                      otherwise beside a Download button was simply contradictory. */}
-                  {active && ready && <Badge tone="ok">In use</Badge>}
+                  {/* Saved selection can differ from the running engine until restart. */}
+                  {active && ready && <Badge tone="ok">Selected</Badge>}
                   {active && !ready && <Badge>Selected, not downloaded</Badge>}
                   {m.bundled && <Badge>Included</Badge>}
                   {!m.bundled && ready && !active && <Badge>On this computer</Badge>}
@@ -176,6 +185,8 @@ export function ModelsScreen({
                 </div>
                 <div className="dt">{detail}</div>
                 <div className="id">{m.id}</div>
+                {/* NVIDIA model card: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3 (verified 2026-10-22). */}
+                {m.id === "parakeet-tdt-0.6b-v3" && <div className="dt">Supported languages: Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, Ukrainian. Hindi is not supported.</div>}
               </button>
 
               <div className="nums">

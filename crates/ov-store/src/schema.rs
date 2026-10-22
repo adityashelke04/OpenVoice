@@ -9,7 +9,7 @@ use ov_core::ports::Utterance;
 use rusqlite::{Connection, Row};
 
 /// Schema version this build expects.
-const VERSION: i64 = 1;
+const VERSION: i64 = 2;
 
 /// Column list, in the order [`row_to_utterance`] reads them.
 ///
@@ -52,6 +52,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V1)
             .map_err(|e| Error::Storage(format!("applying schema v1: {e}")))?;
         tracing::info!("history schema created");
+    }
+
+    if current < 2 {
+        conn.execute_batch("BEGIN; CREATE TABLE IF NOT EXISTS history_import (source TEXT PRIMARY KEY); PRAGMA user_version = 2; COMMIT;")
+            .map_err(|e| Error::Storage(format!("applying schema v2: {e}")))?;
     }
 
     // Future versions add `if current < N { … }` arms here. Each must be

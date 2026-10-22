@@ -82,6 +82,87 @@ pub fn summarize(all: &[StageTimes]) -> Vec<Row> {
         .collect()
 }
 
+/// Reject partial/invalid timings rather than labeling decoder-only data end-to-end.
+pub fn validate_end_to_end(all: &[StageTimes]) -> Result<(), String> {
+    if all.is_empty() {
+        return Err("no end-to-end sessions measured".into());
+    }
+    let mut sessions = std::collections::HashSet::new();
+    for t in all {
+        if !sessions.insert(t.session.0) {
+            return Err("duplicate session IDs; use one app run per gate".into());
+        }
+        let stages = [t.stop_ms, t.queue_ms, t.decode_ms, t.format_ms, t.inject_ms];
+        let Some(sum) = stages
+            .into_iter()
+            .try_fold(0u64, |sum, stage| sum.checked_add(stage?))
+        else {
+            return Err(format!(
+                "session {} lacks capture-stop/queue/decode/format/inject timings",
+                t.session.0
+            ));
+        };
+        if t.total_ms != Some(sum) || t.latency_ms < sum || t.audio_ms == 0 {
+            return Err(format!(
+                "session {} has inconsistent end-to-end timings",
+                t.session.0
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate live app log rows including successful delivery evidence.
+pub fn gate_log(text: &str) -> Result<Vec<StageTimes>, String> {
+    let mut all = Vec::new();
+    let mut failed = 0;
+    for line in text
+        .lines()
+        .filter(|line| line.contains(ov_core::latency::LINE_MARKER))
+    {
+        let times = StageTimes::parse(line).ok_or("malformed app latency record")?;
+        let outcome = line
+            .split_whitespace()
+            .find_map(|part| part.strip_prefix("outcome="));
+        if outcome != Some("delivered") {
+            failed += 1;
+        }
+        all.push(times);
+    }
+    if failed > 0 {
+        return Err(format!(
+            "Gate C has {failed}/{} delivery failures or missing outcomes",
+            all.len()
+        ));
+    }
+    gate_c(&all)?;
+    Ok(all)
+}
+
+/// Gate C: thirty real app sessions, every length bucket represented, bounded p50/p90.
+pub fn gate_c(all: &[StageTimes]) -> Result<(), String> {
+    validate_end_to_end(all)?;
+    if all.len() < 30 {
+        return Err(format!("Gate C needs 30 sessions, found {}", all.len()));
+    }
+    for row in summarize(all) {
+        if row.n < 5 {
+            return Err(format!(
+                "Gate C bucket {} needs at least 5 sessions, found {}",
+                row.label, row.n
+            ));
+        }
+        let latency = &row.cells[0];
+        if latency.p50.unwrap_or(u64::MAX) > 250 || latency.p90.unwrap_or(u64::MAX) > 600 {
+            return Err(format!(
+                "Gate C bucket {} misses p50<=250/p90<=600 ms",
+                row.label
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A fixed-width table: `p50/p90` in milliseconds per stage.
 #[must_use]
 pub fn render(rows: &[Row]) -> String {
@@ -137,6 +218,51 @@ mod tests {
             .iter()
             .find(|c| c.stage == stage)
             .expect("stage column")
+    }
+
+    #[test]
+    fn end_to_end_report_rejects_missing_pipeline_stages() {
+        let mut t = times(1_000, 100, Some(20), false);
+        t.stop_ms = None;
+        assert!(validate_end_to_end(&[t]).is_err());
+    }
+
+    #[test]
+    fn gate_c_requires_thirty_sessions_and_every_bucket() {
+        assert!(gate_c(&[]).is_err());
+        let all = vec![times(1_000, 100, Some(20), false); 30];
+        assert!(gate_c(&all).is_err());
+    }
+
+    #[test]
+    fn complete_gate_accepts_all_buckets_and_rejects_slow_or_partial_runs() {
+        let mut all: Vec<_> = (0..32)
+            .map(|i| {
+                let mut t = times([1_000, 4_000, 10_000, 20_000][i % 4], 100, Some(20), false);
+                t.session = SessionId(i as u64 + 1);
+                t.total_ms = Some(61);
+                t
+            })
+            .collect();
+        assert!(gate_c(&all).is_ok());
+        all[0].format_ms = None;
+        assert!(gate_c(&all).is_err());
+        all[0].format_ms = Some(1);
+        for t in &mut all {
+            t.latency_ms = 601;
+        }
+        assert!(gate_c(&all).unwrap_err().contains("misses"));
+    }
+
+    #[test]
+    fn gate_log_rejects_missing_delivery_evidence_and_malformed_records() {
+        let t = times(1_000, 100, Some(20), false);
+        assert!(gate_log(&t.to_line())
+            .unwrap_err()
+            .contains("missing outcomes"));
+        assert!(gate_log("latency session=invalid outcome=delivered")
+            .unwrap_err()
+            .contains("malformed"));
     }
 
     #[test]

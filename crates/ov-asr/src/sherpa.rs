@@ -63,6 +63,7 @@ use sherpa_onnx::{
 };
 
 use crate::catalog::{ModelKind, ModelSpec};
+use crate::decode::{recognizer_text, retry_without_hotwords};
 
 /// Decode threads, unless a caller measured a better number for its machine.
 ///
@@ -117,23 +118,6 @@ fn hotwords_arg(terms: &[String]) -> Option<String> {
         }
     }
     (!kept.is_empty()).then(|| kept.join("/"))
-}
-
-/// Whether `text` says one word three times running.
-///
-/// Nobody dictates that on purpose, and it is what a decoder biased toward a
-/// word produces from noise. Used to throw a boosted decode away.
-fn repeats_a_word(text: &str) -> bool {
-    let words: Vec<String> = text
-        .split_whitespace()
-        .map(|w| {
-            w.trim_matches(|c: char| !c.is_alphanumeric())
-                .to_lowercase()
-        })
-        .collect();
-    words
-        .windows(3)
-        .any(|w| !w[0].is_empty() && w[0] == w[1] && w[1] == w[2])
 }
 
 /// The token list rewritten as the vocabulary file hotwords are encoded with.
@@ -340,14 +324,14 @@ fn path_str(dir: &Path, file: &str) -> Result<String> {
 
 impl SherpaTranscriber {
     /// One decode, optionally leaning toward `hotwords`.
-    fn decode(&self, samples: &[f32], hotwords: Option<&str>) -> String {
+    fn decode(&self, samples: &[f32], hotwords: Option<&str>) -> Result<String> {
         let stream = match hotwords {
             Some(h) => self.recognizer.create_stream_with_hotwords(h),
             None => self.recognizer.create_stream(),
         };
         stream.accept_waveform(Pcm16k::RATE as i32, samples);
         self.recognizer.decode(&stream);
-        stream.get_result().map(|r| r.text).unwrap_or_default()
+        recognizer_text(stream.get_result().map(|r| r.text))
     }
 }
 
@@ -368,10 +352,9 @@ impl Transcriber for SherpaTranscriber {
         let boost = (self.hotwords && has_speech_energy(&audio.samples))
             .then(|| hotwords_arg(&hint.vocabulary))
             .flatten();
-        let mut text = self.decode(&audio.samples, boost.as_deref());
-        if boost.is_some() && repeats_a_word(&text) {
-            tracing::warn!(%text, "boosted decode repeated a word; decoding without hotwords");
-            text = self.decode(&audio.samples, None);
+        let mut text = self.decode(&audio.samples, boost.as_deref())?;
+        if retry_without_hotwords(boost.is_some(), &text) {
+            text = self.decode(&audio.samples, None)?;
         }
 
         tracing::debug!(
@@ -478,15 +461,6 @@ mod tests {
         let v: Vec<String> = (0..MAX_HOTWORDS + 20).map(|i| format!("term{i}")).collect();
         let arg = hotwords_arg(&v).expect("some terms");
         assert_eq!(arg.split('/').count(), MAX_HOTWORDS);
-    }
-
-    #[test]
-    fn a_word_said_three_times_running_is_a_hallucination() {
-        assert!(repeats_a_word("Claude Claude Claude"));
-        assert!(repeats_a_word("so Claude, Claude, claude."));
-        assert!(!repeats_a_word("Claude Claude"));
-        assert!(!repeats_a_word("that that is odd"));
-        assert!(!repeats_a_word(""));
     }
 
     #[test]
