@@ -150,6 +150,14 @@ ignore = [
     "RUSTSEC-2025-0081", # unic-char-property
     "RUSTSEC-2025-0098", # unic-ucd-version
     "RUSTSEC-2025-0100", # unic-ucd-ident
+
+    # Linux/BSD-only Tauri opener/single-instance dependencies. These standalone
+    # crates moved into zbus 6; published Tauri plugins still require zbus 5.
+    # They do not ship in the Windows app. Remove when the plugins adopt zbus 6.
+    # These are maintenance notices, not vulnerability exceptions.
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0372", # zvariant_derive
 ]
 
 [sources]

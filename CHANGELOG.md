@@ -22,6 +22,18 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-23
+
+### Fixed
+
+- Update TLS and certificate-store dependencies to address current security advisories.
+- Preserve signed executable updates while removing unused ZIP update extraction.
+- Upgrade the native build script's ZIP dependency without changing the speech runtime or models.
+
+### Validation
+
+- Broader speech accuracy, application latency, model/GPU comparisons and live hardware acceptance remain unverified.
+
 ## [1.3.1] - 2026-10-22
 
 ### Fixed

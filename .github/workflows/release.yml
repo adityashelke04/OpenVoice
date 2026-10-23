@@ -148,7 +148,7 @@ jobs:
       # an NSIS hook rather than as a `bundle.resources` entry, so that it sits
       # outside the Tauri resource walker. That distinction turns out not to help.
       # The hook embeds the weights in the installer executable with `File`, and
-      # the updater artifact is a zip of that same executable -- so an update
+      # the updater downloads that same executable -- so an update
       # carries the model either way, and moving it between the two mechanisms
       # changes only where it lands on disk.
       #
@@ -160,10 +160,10 @@ jobs:
       - name: Report the update download size
         shell: pwsh
         run: |
-          $art = Get-ChildItem -Recurse -Filter '*.nsis.zip' -Path target |
+          $art = Get-ChildItem -Recurse -Filter '*-setup.exe' -Path target |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $art) {
-            Write-Host "no updater artifact (unsigned build)"
+            Write-Host "no NSIS installer found for size reporting"
           } else {
             $mb = [math]::Round($art.Length / 1MB, 1)
             Write-Host "::notice::Existing installs will download $mb MB for this update."

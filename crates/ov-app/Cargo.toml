@@ -35,7 +35,8 @@ tauri-plugin-single-instance = "2"
 # ADR 0005 -- see `UpdateConfig` in ov-core and the allowance in
 # scripts/check-no-network.sh, which names this dependency explicitly so it can
 # never be mistaken for an accident.
-tauri-plugin-updater = "2"
+# Releases serve signed NSIS executables directly; ZIP extraction is unused.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

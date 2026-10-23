@@ -284,8 +284,10 @@ fn read_request(r: &mut impl Read) -> io::Result<(u64, SessionId, Vec<f32>, Deco
     let mut bytes = vec![0; n as usize * 4];
     r.read_exact(&mut bytes)?;
     let audio = bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&b| f32::from_le_bytes(b))
         .collect();
     let language = string(r)?;
     let n = number(r)?;
