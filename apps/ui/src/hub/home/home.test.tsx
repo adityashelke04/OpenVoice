@@ -570,6 +570,21 @@ it("held delivery keeps text in OpenVoice until explicit Copy", async () => {
   await waitFor(() => expect(writeText()).toHaveBeenCalledWith(ROWS[0].final_text));
 });
 
+it("shows a retried transcript immediately and copies only on explicit Copy", async () => {
+  let recovered = "";
+  tauri = bridge(ROWS, {
+    get_recovery: () => recovered ? null : ({ session: 42, durationMs: 1200, partial: false }),
+    get_last_transcript: () => ({ text: recovered, partial: false }),
+    retry_audio: () => { recovered = "Recovered speech for manual copy"; },
+  });
+  renderHome();
+  fireEvent.click(await screen.findByRole("button", { name: "Retry transcription" }));
+  await screen.findByText("Recovered speech for manual copy");
+  expect(writeText()).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Copy recovered text" }));
+  await waitFor(() => expect(writeText()).toHaveBeenCalledWith(recovered));
+});
+
 it("keeps the full in-memory transcript copyable when history cannot be saved", async () => {
   tauri = bridge([], { get_storage_status: () => false, get_last_text: () => "Complete private transcript" });
   renderHome({ lastOutcome: "delivery_held" });

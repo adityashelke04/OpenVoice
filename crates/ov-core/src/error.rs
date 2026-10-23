@@ -67,7 +67,9 @@ impl Error {
                     Error::Transcription(_) => {
                         f.write_str("Transcription failed — audio kept, try again")
                     }
-                    Error::Injection(_) => f.write_str("Copied to clipboard — press Ctrl+V"),
+                    Error::Injection(_) => {
+                        f.write_str("Text is kept in OpenVoice — open Home and use Copy")
+                    }
                     Error::Hotkey(_) => f.write_str("Hotkey stopped working — reactivating"),
                     Error::Storage(_) => f.write_str("Could not save to history"),
                     Error::Config(_) => {

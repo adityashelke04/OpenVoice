@@ -44,6 +44,7 @@ export function HomeScreen({ view, settings, patch, now, onOpenHistory }: {
 }) {
   const [memoryText, setMemoryText] = useState("");
   const [partialText, setPartialText] = useState(false);
+  const [recoveryVersion, setRecoveryVersion] = useState(0);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
   const [persistent, setPersistent] = useState<boolean | null>(null);
   const [all, setAll] = useState<Row[] | null>(null);
@@ -68,7 +69,7 @@ export function HomeScreen({ view, settings, patch, now, onOpenHistory }: {
     read();
     const timer = window.setInterval(read, 5000);
     return () => { live = false; clearInterval(timer); };
-  }, [view.sessions, view.lastText]);
+  }, [view.sessions, view.lastText, recoveryVersion]);
 
   useEffect(() => {
     let live = true;
@@ -120,7 +121,7 @@ export function HomeScreen({ view, settings, patch, now, onOpenHistory }: {
       {persistent === false && <p role="alert">History is not being saved to disk. This session's history will be lost when OpenVoice closes. Copy any text you need, free disk space or fix data-folder permissions, then restart OpenVoice.</p>}
       {storageWarning && <p role="alert">{storageWarning} Legacy history has been preserved. Check disk space and data-folder permissions, then restart to retry the import.</p>}
       {memoryText && (memoryText !== last?.final_text || partialText) && <MemoryTranscript text={memoryText} partial={partialText} />}
-      <Recovery sessions={view.sessions} notice={view.notice} />
+      <Recovery sessions={view.sessions} notice={view.notice} onRecovered={() => setRecoveryVersion(v => v + 1)} />
       <LastCard
         variant={state === "error" ? "error" : state === "first" ? "first" : state}
         row={last}

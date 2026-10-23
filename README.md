@@ -184,8 +184,9 @@ until v0.2.0; each now does what it says.</sub>
 
    The CI job names every permitted network dependency in an allow-list, so a new
    one cannot appear quietly — telemetry or a crash uploader still fails the build.
-2. **Never lose a word.** If injection fails, the text is still on your clipboard and
-   in your history. A failure is recoverable, never a silent drop.
+2. **Never lose a word.** If delivery fails, the text stays in OpenVoice for you to
+   copy from Home. Recovery never copies automatically. Normal paste briefly borrows
+   the clipboard, then restores its previous contents unless you copied something new.
 3. **Invisible when idle.** ~60 MB RAM, ~0% CPU. You should never notice it running.
 4. **Deterministic where it can be.** Formatting is rule-based and unit-tested.
    Probabilistic parts are isolated behind seams.

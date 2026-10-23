@@ -22,11 +22,6 @@ pub(crate) fn paste(text: &str, target: &ForegroundApp, io: &mut impl PasteIo) -
         io.check()?;
         io.paste()?;
     }
-    if chunks.len() > 1 {
-        io.wait();
-        io.check()?;
-        io.write(text)?;
-    }
     Ok(())
 }
 
@@ -169,27 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn image_copied_after_final_piece_survives_full_text_recovery() {
-        let mut io = Fake {
-            copy_at_wait: Some(2),
-            ..Default::default()
-        };
-        assert!(paste(&"a".repeat(701), &claude(), &mut io).is_err());
-        assert_eq!(io.clipboard, "user image");
-        assert_eq!(io.pasted.len(), 2);
-    }
-
-    #[test]
-    fn escape_during_final_wait_stops_full_text_write() {
-        let mut io = Fake {
-            cancel_at_wait: Some(2),
-            ..Default::default()
-        };
-        assert!(paste(&"a".repeat(701), &claude(), &mut io).is_err());
-        assert_eq!(io.clipboard, "a");
-    }
-
-    #[test]
     fn unicode_chunks_never_leave_half_a_surrogate_pair() {
         assert_eq!(
             unicode_pieces("abc😀"),
@@ -255,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_or_silently_rejected_ordinary_paste_keeps_complete_text() {
+    fn ordinary_paste_writes_text_once_even_if_input_is_rejected() {
         for fails in [true, false] {
             let mut io = Fake {
                 paste_fails: fails,
@@ -269,13 +243,13 @@ mod tests {
     }
 
     #[test]
-    fn final_chunk_consumed_before_complete_text_is_restored() {
+    fn chunks_do_not_write_a_recovery_copy_after_pasting() {
         let mut io = Fake::default();
         let text = "😀 line\n".repeat(200);
         paste(&text, &claude(), &mut io).unwrap();
         assert_eq!(io.pasted.concat(), text);
-        assert_eq!(io.clipboard, text);
-        assert_eq!(io.waits, io.pasted.len());
+        assert_eq!(io.clipboard, *io.pasted.last().unwrap());
+        assert_eq!(io.waits, io.pasted.len() - 1);
     }
 
     #[test]

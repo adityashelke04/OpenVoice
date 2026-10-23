@@ -67,6 +67,16 @@ pub struct CpalAudioSource {
 }
 
 impl CpalAudioSource {
+    /// Queue stopping now; a worker may wait for the result later without letting
+    /// an intervening abort/start overtake this stop request.
+    pub fn request_stop(&self) -> Result<std::sync::mpsc::Receiver<Result<Pcm16k>>> {
+        let (reply, wait) = channel();
+        self.tx
+            .send(Cmd::Stop { reply })
+            .map_err(|_| Error::Audio("audio thread is gone".into()))?;
+        Ok(wait)
+    }
+
     /// Open the audio subsystem and spawn the stream-owning thread.
     ///
     /// `preferred` names an input device; `None` uses the system default. An
@@ -124,10 +134,7 @@ impl AudioSource for CpalAudioSource {
     }
 
     fn stop(&self) -> Result<Pcm16k> {
-        let (reply, wait) = channel();
-        self.tx
-            .send(Cmd::Stop { reply })
-            .map_err(|_| Error::Audio("audio thread is gone".into()))?;
+        let wait = self.request_stop()?;
         wait.recv()
             .map_err(|_| Error::Audio("audio thread died while stopping".into()))?
     }
@@ -458,6 +465,35 @@ fn on_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_is_queued_before_abort_and_restart_even_when_waiting_is_delayed() {
+        let (tx, rx) = channel();
+        let audio = CpalAudioSource {
+            tx,
+            device_names: vec![],
+            partial: Arc::new(Mutex::new(None)),
+            errors: Arc::new(Mutex::new(None)),
+        };
+        let pending_stop = audio.request_stop().unwrap();
+        audio.abort().unwrap();
+        let (reply, _wait) = channel();
+        audio
+            .tx
+            .send(Cmd::Start {
+                levels: Arc::new(|_| {}),
+                pcm: Arc::new(|_| {}),
+                reply,
+            })
+            .unwrap();
+        let Cmd::Stop { reply } = rx.recv().unwrap() else {
+            panic!("old stop must precede abort/start")
+        };
+        reply.send(Ok(Pcm16k { samples: vec![0.1] })).unwrap();
+        assert!(matches!(rx.recv().unwrap(), Cmd::Abort));
+        assert!(matches!(rx.recv().unwrap(), Cmd::Start { .. }));
+        assert_eq!(pending_stop.recv().unwrap().unwrap().samples, vec![0.1]);
+    }
 
     #[test]
     fn pause_failure_returns_error_and_preserves_samples_including_undrained_tail() {

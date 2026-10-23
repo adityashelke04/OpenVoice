@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { discardRecovery, getRecovery, retryAudio, type RecoveryAudio } from "../../engine/settings";
 import { Button } from "../ui";
 
-export function Recovery({ sessions, notice }: { sessions: number; notice: unknown }) {
+export function Recovery({ sessions, notice, onRecovered }: { sessions: number; notice: unknown; onRecovered: () => void }) {
   const [audio, setAudio] = useState<RecoveryAudio | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -18,7 +18,10 @@ export function Recovery({ sessions, notice }: { sessions: number; notice: unkno
     setBusy(true);
     setError("");
     try {
-      if (discard) await discardRecovery(); else await retryAudio(audio.session);
+      if (discard) await discardRecovery(); else {
+        await retryAudio(audio.session);
+        onRecovered();
+      }
       setAudio(null);
     } catch (e) { setError(`Could not ${discard ? "discard audio" : "retry transcription"}. ${String(e)}`); }
     finally { setBusy(false); }

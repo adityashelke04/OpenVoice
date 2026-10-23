@@ -22,6 +22,12 @@ pub struct LatestText {
 }
 
 impl LatestText {
+    /// An explicit retry may replace newer text, but must not let stale
+    /// background completions lower the session watermark afterwards.
+    pub fn remember_recovered(&mut self, session: u64, text: String) {
+        self.remember(self.session.max(session), text);
+    }
+
     pub fn remember(&mut self, session: u64, text: String) {
         if session < self.session || text.is_empty() {
             return;
@@ -93,6 +99,19 @@ impl<T> Recovery<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_retry_is_copyable_even_after_a_newer_dictation() {
+        let mut latest = LatestText::default();
+        latest.remember(2, "newer dictation".into());
+        latest.remember_recovered(1, "recovered earlier speech".into());
+        assert_eq!(latest.text, "recovered earlier speech");
+        // Old background completions must still be ignored after the retry.
+        latest.remember(1, "stale completion".into());
+        assert_eq!(latest.text, "recovered earlier speech");
+        latest.remember(3, "next dictation".into());
+        assert_eq!(latest.text, "next dictation");
+    }
 
     #[test]
     fn late_retry_cannot_clear_new_or_discarded_recovery() {

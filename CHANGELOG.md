@@ -22,6 +22,18 @@ least context, at the moment they have the least time.
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-10-23
+
+### Fixed
+
+- Dictation works after copying a screenshot: preserve the image when borrowing the clipboard, instead of refusing to paste.
+- Use paced typing when clipboard formats cannot be safely preserved, while respecting cancellation and the original target window.
+- Return the borrowed clipboard after both successful and failed delivery, without replacing anything copied in the meantime.
+- Recovered transcriptions appear immediately in Home and wait for an explicit Copy. Dictation no longer leaves a 15-second clipboard backup or copies retry results automatically.
+- Cancelling hands-free dictation no longer consumes the next hotkey press. Recording limits, microphone failures and shortcut changes also reset hands-free and click-to-talk controls.
+- Starting hands-free dictation preserves earlier speech still processing. Rapid cancel/restart no longer lets an old stop request close the new recording.
+- Retrying older audio after a newer successful dictation keeps the recovered text available for Copy.
+
 ## [1.3.2] - 2026-10-23
 
 ### Fixed

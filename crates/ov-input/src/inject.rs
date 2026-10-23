@@ -44,6 +44,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 const CF_UNICODETEXT: u32 = 13;
+const CF_BITMAP: u32 = 2;
+const CF_DIB: u32 = 8;
+const CF_DIBV5: u32 = 17;
 const VK_CONTROL: u16 = 0x11;
 const VK_LCONTROL: u16 = 0xA2;
 const VK_RCONTROL: u16 = 0xA3;
@@ -143,11 +146,8 @@ impl WinTextSink {
             }
             _ => {
                 // Long text, or the caller explicitly asked to paste.
-                paste_with_restore(text, target, cancelled, &self.clipboard)?;
-                Ok(InjectReceipt {
-                    mode: InjectMode::ClipboardPaste,
-                    chars,
-                })
+                let mode = paste_with_restore(text, target, cancelled, &self.clipboard)?;
+                Ok(InjectReceipt { mode, chars })
             }
         }
     }
@@ -281,23 +281,9 @@ fn send_inputs(inputs: &[INPUT]) -> Result<()> {
     Ok(())
 }
 
-/// How long to leave our text on the clipboard before handing it back.
-///
-/// This is not the same race it looks like at first. The *target* reading the
-/// clipboard after a synthetic `Ctrl+V` happens within milliseconds — that race
-/// was already fixed by raising this from 140 ms to what used to be 1 second.
-/// The race that mattered was a different one, reported directly: if the paste
-/// silently fails to land (wrong window focus, an app that swallows synthetic
-/// input, anything we cannot detect from here), the *user* is the one who has to
-/// notice and press `Ctrl+V` themselves — and a human noticing a paste didn't
-/// happen and reacting to it takes far longer than a second. At 1 second, the
-/// clipboard was already wiped back to whatever it held before by the time
-/// anyone could react, which made the documented "nothing is lost" guarantee
-/// false in exactly the case it exists for.
-///
-/// Fifteen seconds is long enough to notice and react, short enough that the
-/// user's previous clipboard isn't gone for the rest of their session.
-const CLIPBOARD_HOLD: std::time::Duration = std::time::Duration::from_secs(15);
+/// Allow asynchronous targets to read Ctrl+V, then return the borrowed clipboard.
+/// Recovery is held in OpenVoice, never deliberately left on the clipboard.
+const CLIPBOARD_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Largest piece pasted in one `Ctrl+V`, in characters.
 ///
@@ -316,12 +302,20 @@ fn paste_with_restore(
     target: &ForegroundApp,
     cancelled: &AtomicBool,
     ownership: &Arc<Mutex<crate::ownership::Lease<ClipboardSnapshot>>>,
-) -> Result<()> {
+) -> Result<InjectMode> {
     let mut owner = ownership.lock().expect("clipboard ownership");
     {
-        let _guard = ClipboardGuard::open()?;
+        let guard = ClipboardGuard::open()?;
         let snapshot = ClipboardSnapshot::capture_locked()?;
-        snapshot.require_complete()?;
+        if snapshot.require_complete().is_err() {
+            // Unsupported clipboard objects must not disable dictation. Type
+            // without borrowing the clipboard; never retry after partial input.
+            drop(guard);
+            drop(owner);
+            tracing::info!("using paced typing to preserve unsupported clipboard formats");
+            send_unicode(text, target, cancelled)?;
+            return Ok(InjectMode::Keystrokes);
+        }
         owner.begin(unsafe { GetClipboardSequenceNumber() }, snapshot);
     }
     let generation = owner.generation;
@@ -335,42 +329,47 @@ fn paste_with_restore(
             owner: &mut owner,
         },
     );
-    // The engine keeps full text in memory for Copy. Never replace a user's
-    // intervening clipboard copy in an attempt to recover automatically.
-    result?;
     tracing::info!(
         chars = text.chars().count(),
         elapsed_ms = started.elapsed().as_millis() as u64,
-        "pasted transcript"
+        sent = result.is_ok(),
+        "paste attempt finished"
     );
     drop(owner);
-    let ownership = ownership.clone();
-    let ours = text.to_owned();
-    std::thread::Builder::new()
+    // Restore even when SendInput fails or only part of the text was sent.
+    // The sequence check protects any newer copy, including identical text.
+    let pending = ownership.clone();
+    if let Err(error) = std::thread::Builder::new()
         .name("ov-clipboard-restore".into())
         .spawn(move || {
-            std::thread::sleep(CLIPBOARD_HOLD);
-            let mut owner = ownership.lock().expect("clipboard ownership");
-            if generation != owner.generation {
-                return;
-            }
-            let Ok(_guard) = ClipboardGuard::open() else {
-                return;
-            };
-            let current = read_clipboard_text_locked();
-            if should_restore(true, current.as_deref(), &ours) {
-                if let Some(snapshot) =
-                    owner.take_for_restore(generation, unsafe { GetClipboardSequenceNumber() })
-                {
-                    snapshot.restore_locked();
-                }
-            } else {
-                owner.snapshot = None;
-            }
+            std::thread::sleep(CLIPBOARD_SETTLE);
+            restore_owned_clipboard(&pending, generation);
         })
-        .map_err(|e| Error::Injection(format!("clipboard restore thread: {e}")))?;
+    {
+        tracing::warn!(%error, "restoring clipboard on delivery thread");
+        std::thread::sleep(CLIPBOARD_SETTLE);
+        restore_owned_clipboard(ownership, generation);
+    }
+    result.map(|()| InjectMode::ClipboardPaste)
+}
 
-    Ok(())
+fn restore_owned_clipboard(
+    ownership: &Mutex<crate::ownership::Lease<ClipboardSnapshot>>,
+    generation: u64,
+) {
+    let mut owner = ownership.lock().expect("clipboard ownership");
+    if generation != owner.generation {
+        return;
+    }
+    let Ok(_guard) = ClipboardGuard::open() else {
+        tracing::warn!("could not reopen clipboard to restore previous contents");
+        return;
+    };
+    if let Some(snapshot) =
+        owner.take_for_restore(generation, unsafe { GetClipboardSequenceNumber() })
+    {
+        snapshot.restore_locked();
+    }
 }
 
 struct NativePaste<'a> {
@@ -412,27 +411,6 @@ impl crate::delivery::PasteIo for NativePaste<'_> {
 
     fn wait(&mut self) {
         std::thread::sleep(PASTE_CHUNK_GAP);
-    }
-}
-
-/// Whether the background thread should hand the clipboard back to whatever
-/// held it before the paste.
-///
-/// A failed paste must not schedule a restore over recovery text. Text equality
-/// is only an extra check: the caller also checks the clipboard sequence and
-/// lease generation while holding the clipboard open.
-#[must_use]
-fn should_restore(paste_sent: bool, current: Option<&str>, ours: &str) -> bool {
-    if !paste_sent {
-        return false;
-    }
-    // Only take the clipboard back if it is still ours. If the user copied
-    // something in the meantime, restoring would silently destroy it — and
-    // quietly eating someone's clipboard is far worse than leaving a
-    // transcript on it.
-    match current {
-        Some(c) => c == ours,
-        None => false,
     }
 }
 
@@ -584,6 +562,7 @@ impl ClipboardSnapshot {
     fn capture_locked() -> Result<Self> {
         let mut items = Vec::new();
         let mut partial = false;
+        let mut bitmap = false;
         let mut format = 0u32;
 
         loop {
@@ -592,6 +571,12 @@ impl ClipboardSnapshot {
             format = unsafe { EnumClipboardFormats(format) };
             if format == 0 {
                 break;
+            }
+            // Windows advertises CF_BITMAP alongside DIB/DIBV5 and recreates
+            // its GDI handle from those bytes on restore. Never copy that handle.
+            if format == CF_BITMAP {
+                bitmap = true;
+                continue;
             }
             if NON_GLOBAL_FORMATS.contains(&format) || (0x200..=0x2ff).contains(&format) {
                 partial = true;
@@ -614,6 +599,7 @@ impl ClipboardSnapshot {
             }
         }
 
+        partial |= bitmap && !items.iter().any(|(f, _)| *f == CF_DIB || *f == CF_DIBV5);
         if partial {
             tracing::debug!("clipboard snapshot is partial; some formats cannot be preserved");
         }
@@ -621,19 +607,39 @@ impl ClipboardSnapshot {
     }
 
     fn restore_locked(self) {
+        // Allocate everything before emptying the clipboard so a memory failure
+        // cannot replace a recoverable transcript with a partial snapshot.
+        let mut prepared = Vec::with_capacity(self.items.len());
+        for (format, bytes) in self.items {
+            let Some(handle) = alloc_global(&bytes) else {
+                for (_, handle) in prepared {
+                    unsafe {
+                        let _ = GlobalFree(handle);
+                    }
+                }
+                tracing::warn!("could not allocate memory to restore clipboard");
+                return;
+            };
+            prepared.push((format, handle));
+        }
         // SAFETY: the clipboard is open and owned by this task.
         unsafe {
-            let _ = EmptyClipboard();
+            if EmptyClipboard().is_err() {
+                for (_, handle) in prepared {
+                    let _ = GlobalFree(handle);
+                }
+                tracing::warn!("could not empty clipboard for restoration");
+                return;
+            }
         }
-        for (format, bytes) in self.items {
-            if let Some(handle) = alloc_global(&bytes) {
-                // SAFETY: `handle` is a fresh GMEM_MOVEABLE allocation of the right
-                // size. On success the system takes ownership, so it is not freed
-                // here.
-                unsafe {
-                    if SetClipboardData(format, HANDLE(handle.0)).is_err() {
-                        tracing::debug!(format, "could not restore clipboard format");
-                    }
+        for (format, handle) in prepared {
+            // SAFETY: `handle` is a fresh GMEM_MOVEABLE allocation of the right
+            // size. On success the system takes ownership, so it is not freed
+            // here.
+            unsafe {
+                if SetClipboardData(format, HANDLE(handle.0)).is_err() {
+                    let _ = GlobalFree(handle);
+                    tracing::warn!(format, "could not restore clipboard format");
                 }
             }
         }
@@ -830,6 +836,110 @@ mod tests {
     }
 
     #[test]
+    fn image_clipboard_can_be_borrowed_and_restored() {
+        isolated_clipboard(
+            "inject::tests::image_clipboard_can_be_borrowed_and_restored",
+            || {
+                // A tiny 32-bit DIB, like a screenshot. Windows also advertises
+                // CF_BITMAP, which must not make this lossless snapshot fail.
+                let mut dib = vec![0u8; 44];
+                dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+                dib[4..8].copy_from_slice(&1i32.to_le_bytes());
+                dib[8..12].copy_from_slice(&1i32.to_le_bytes());
+                dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+                dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+                dib[20..24].copy_from_slice(&4u32.to_le_bytes());
+                dib[40..44].copy_from_slice(&[23, 67, 123, 255]);
+                let guard = ClipboardGuard::open().unwrap();
+                unsafe {
+                    EmptyClipboard().unwrap();
+                    SetClipboardData(8, HANDLE(alloc_global(&dib).unwrap().0)).unwrap();
+                }
+                drop(guard);
+                let mut guard = ClipboardGuard::open().unwrap();
+                assert!(unsafe { GetClipboardData(2) }.is_ok());
+                let snapshot = ClipboardSnapshot::capture_locked().unwrap();
+                snapshot
+                    .require_complete()
+                    .expect("a screenshot must not block dictation");
+                guard.write_text("dictated words").unwrap();
+                snapshot.restore_locked();
+                drop(guard);
+                let _guard = ClipboardGuard::open().unwrap();
+                let restored = read_global(unsafe { GetClipboardData(8) }.unwrap()).unwrap();
+                assert_eq!(&restored[..dib.len()], dib.as_slice());
+                assert!(unsafe { GetClipboardData(2) }.is_ok());
+                assert_eq!(read_clipboard_text_locked(), None);
+            },
+        );
+    }
+
+    #[test]
+    fn native_bitmap_clipboard_can_be_borrowed_and_restored() {
+        isolated_clipboard(
+            "inject::tests::native_bitmap_clipboard_can_be_borrowed_and_restored",
+            || {
+                let guard = ClipboardGuard::open().unwrap();
+                let pixels = [17u8, 61, 129, 255];
+                unsafe {
+                    let bitmap = windows::Win32::Graphics::Gdi::CreateBitmap(
+                        1,
+                        1,
+                        1,
+                        32,
+                        Some(pixels.as_ptr().cast()),
+                    );
+                    assert!(!bitmap.is_invalid());
+                    EmptyClipboard().unwrap();
+                    SetClipboardData(CF_BITMAP, HANDLE(bitmap.0)).unwrap();
+                }
+                drop(guard);
+                let mut guard = ClipboardGuard::open().unwrap();
+                let original = read_global(unsafe { GetClipboardData(CF_DIB) }.unwrap()).unwrap();
+                let snapshot = ClipboardSnapshot::capture_locked().unwrap();
+                snapshot.require_complete().unwrap();
+                guard.write_text("temporary dictation").unwrap();
+                snapshot.restore_locked();
+                drop(guard);
+                let _guard = ClipboardGuard::open().unwrap();
+                assert_eq!(
+                    read_global(unsafe { GetClipboardData(CF_DIB) }.unwrap()),
+                    Some(original)
+                );
+                assert!(unsafe { GetClipboardData(CF_BITMAP) }.is_ok());
+            },
+        );
+    }
+
+    #[test]
+    fn unsupported_clipboard_uses_typing_with_cancellation_and_leaves_clipboard_alone() {
+        isolated_clipboard(
+            "inject::tests::unsupported_clipboard_uses_typing_with_cancellation_and_leaves_clipboard_alone",
+            || {
+                let guard = ClipboardGuard::open().unwrap();
+                unsafe {
+                    EmptyClipboard().unwrap();
+                    // A private display bitmap has no captured DIB equivalent.
+                    let pixels = [17u8, 61, 129, 255];
+                    let bitmap = windows::Win32::Graphics::Gdi::CreateBitmap(
+                        1, 1, 1, 32, Some(pixels.as_ptr().cast()),
+                    );
+                    assert!(!bitmap.is_invalid());
+                    SetClipboardData(0x82, HANDLE(bitmap.0)).unwrap();
+                }
+                drop(guard);
+                let sequence = unsafe { GetClipboardSequenceNumber() };
+                let sink = WinTextSink::default();
+                let error = paste_with_restore(
+                    "public test text", &ForegroundApp::default(), &AtomicBool::new(true), &sink.clipboard,
+                ).unwrap_err();
+                assert!(error.to_string().contains("delivery cancelled"), "{error}");
+                assert_eq!(unsafe { GetClipboardSequenceNumber() }, sequence);
+            },
+        );
+    }
+
+    #[test]
     fn partial_snapshot_cannot_authorize_replacing_original_image() {
         let snapshot = ClipboardSnapshot {
             items: vec![],
@@ -853,25 +963,64 @@ mod tests {
     }
 
     #[test]
-    fn never_restores_when_the_paste_never_sent() {
-        // A failed paste leaves its text available until an explicit user copy.
-        assert!(!should_restore(false, Some("our text"), "our text"));
-        assert!(!should_restore(false, None, "our text"));
-        assert!(!should_restore(false, Some("something else"), "our text"));
+    fn failed_partial_paste_returns_original_clipboard_without_manual_recovery_copy() {
+        isolated_clipboard(
+            "inject::tests::failed_partial_paste_returns_original_clipboard_without_manual_recovery_copy",
+            || {
+                let mut guard = ClipboardGuard::open().unwrap();
+                guard.write_text("user clipboard").unwrap();
+                let snapshot = ClipboardSnapshot::capture_locked().unwrap();
+                let mut lease = crate::ownership::Lease { snapshot: None, sequence: 0, generation: 0 };
+                lease.begin(unsafe { GetClipboardSequenceNumber() }, snapshot);
+                lease.write(unsafe { GetClipboardSequenceNumber() }, || {
+                    guard.write_text("only the first piece of the dictation")
+                }).unwrap();
+                drop(guard);
+                let generation = lease.generation;
+                let ownership = Mutex::new(lease);
+                restore_owned_clipboard(&ownership, generation);
+                let _guard = ClipboardGuard::open().unwrap();
+                assert_eq!(read_clipboard_text_locked().as_deref(), Some("user clipboard"));
+            },
+        );
     }
 
     #[test]
-    fn restores_after_a_successful_paste_if_the_clipboard_is_still_ours() {
-        assert!(should_restore(true, Some("our text"), "our text"));
-    }
-
-    #[test]
-    fn does_not_restore_after_success_if_the_user_copied_something_else() {
-        assert!(!should_restore(true, Some("something else"), "our text"));
-    }
-
-    #[test]
-    fn non_text_clipboard_is_not_ours_to_restore() {
-        assert!(!should_restore(true, None, "our text"));
+    fn restore_preserves_an_intervening_image_copy() {
+        isolated_clipboard(
+            "inject::tests::restore_preserves_an_intervening_image_copy",
+            || {
+                let mut guard = ClipboardGuard::open().unwrap();
+                guard.write_text("original text").unwrap();
+                let snapshot = ClipboardSnapshot::capture_locked().unwrap();
+                let mut lease = crate::ownership::Lease {
+                    snapshot: None,
+                    sequence: 0,
+                    generation: 0,
+                };
+                lease.begin(unsafe { GetClipboardSequenceNumber() }, snapshot);
+                lease
+                    .write(unsafe { GetClipboardSequenceNumber() }, || {
+                        guard.write_text("dictation")
+                    })
+                    .unwrap();
+                // A different application replaces the clipboard with non-text data.
+                let image = [1, 2, 3, 4];
+                unsafe {
+                    EmptyClipboard().unwrap();
+                    let format = windows::Win32::System::DataExchange::RegisterClipboardFormatW(
+                        windows::core::w!("OpenVoice test image"),
+                    );
+                    SetClipboardData(format, HANDLE(alloc_global(&image).unwrap().0)).unwrap();
+                }
+                drop(guard);
+                let sequence = unsafe { GetClipboardSequenceNumber() };
+                let generation = lease.generation;
+                restore_owned_clipboard(&Mutex::new(lease), generation);
+                let _guard = ClipboardGuard::open().unwrap();
+                assert_eq!(unsafe { GetClipboardSequenceNumber() }, sequence);
+                assert_eq!(read_clipboard_text_locked(), None);
+            },
+        );
     }
 }

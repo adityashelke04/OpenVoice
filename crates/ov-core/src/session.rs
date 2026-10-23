@@ -54,6 +54,17 @@ pub enum Input {
         /// Formatting profile resolved from `app`.
         profile: String,
     },
+    /// Start a hands-free hold, discarding only the first tap of its gesture.
+    HotkeyLatched {
+        /// When the second tap arrived.
+        at: Millis,
+        /// First tap's session, if it actually started a capture.
+        discard: Option<SessionId>,
+        /// Application receiving the new dictation.
+        app: ForegroundApp,
+        /// Formatting profile for the new dictation.
+        profile: String,
+    },
     /// The dictation chord came up.
     HotkeyReleased {
         /// When it happened.
@@ -153,6 +164,7 @@ impl Input {
         match self {
             Self::CaptureStarted { at, .. }
             | Self::HotkeyPressed { at, .. }
+            | Self::HotkeyLatched { at, .. }
             | Self::HotkeyReleased { at }
             | Self::Cancelled { at }
             | Self::AudioCaptured { at, .. }
@@ -391,6 +403,33 @@ impl SessionMachine {
                 }
             }
             Input::HotkeyPressed { at, app, profile } => self.on_pressed(at, app, profile, &mut fx),
+            Input::HotkeyLatched {
+                at,
+                discard,
+                app,
+                profile,
+            } => {
+                if let Some(session) = discard {
+                    if let Some(active) = self.capturing.take_if_id(session) {
+                        fx.push(Effect::AbortCapture { session });
+                        self.persist(&active, Outcome::Cancelled, String::new(), at, &mut fx);
+                    } else if let Some(index) = self.pipeline.iter().position(|s| s.id == session) {
+                        if index == 0 {
+                            self.finish_pipeline(
+                                session,
+                                at,
+                                Outcome::Cancelled,
+                                String::new(),
+                                &mut fx,
+                            );
+                        } else if let Some(stub) = self.pipeline.remove(index) {
+                            self.persist(&stub, Outcome::Cancelled, String::new(), at, &mut fx);
+                        }
+                    }
+                }
+                self.key_down = false;
+                self.on_pressed(at, app, profile, &mut fx);
+            }
             Input::HotkeyReleased { at } => self.on_released(at, &mut fx),
             Input::Cancelled { at } => self.on_cancelled(at, &mut fx),
             Input::AudioCaptured {
@@ -617,6 +656,7 @@ impl SessionMachine {
     }
 
     fn on_cancelled(&mut self, at: Millis, fx: &mut Vec<Effect>) {
+        self.key_down = false;
         // "Stop, all of it" includes the press that has not started yet.
         self.pending = None;
         if let Some(active) = self.capturing.take() {
@@ -889,6 +929,77 @@ impl TakeIfId for Option<Active> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn cancelled_virtual_hold_does_not_drop_the_next_press() {
+        let mut m = machine();
+        press(&mut m, 0);
+        // A hands-free or click hold has no later physical release to rearm it.
+        m.handle(Input::Cancelled { at: Millis(1_000) });
+        assert_eq!(starts(&press(&mut m, 2_000)), 1);
+    }
+
+    #[test]
+    fn latch_gesture_preserves_earlier_queued_dictation() {
+        let mut m = machine();
+        press(&mut m, 0);
+        release(&mut m, 1_000);
+        m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 1_000,
+            rms: 0.1,
+            at: Millis(1_001),
+        });
+        press(&mut m, 1_100);
+        release(&mut m, 1_140);
+        let fx = m.handle(Input::HotkeyLatched {
+            at: Millis(1_200),
+            discard: Some(SessionId(2)),
+            app: app(),
+            profile: "editor".into(),
+        });
+        assert_eq!(m.queue_depth(), 1);
+        assert_eq!(m.capturing_session(), Some(SessionId(3)));
+        assert!(persists(&fx).iter().all(|record| record.id == SessionId(2)));
+        assert!(m
+            .handle(Input::Transcribed {
+                session: SessionId(1),
+                transcript: transcript("keep earlier words"),
+                at: Millis(1_250)
+            })
+            .iter()
+            .any(|e| matches!(
+                e,
+                Effect::Format {
+                    session: SessionId(1),
+                    ..
+                }
+            )));
+    }
+
+    #[test]
+    fn latch_after_pending_tap_does_not_abort_the_previous_capture() {
+        let mut m = machine();
+        press(&mut m, 0);
+        release(&mut m, 1_000);
+        press(&mut m, 1_100);
+        release(&mut m, 1_140);
+        let fx = m.handle(Input::HotkeyLatched {
+            at: Millis(1_200),
+            discard: None,
+            app: app(),
+            profile: "editor".into(),
+        });
+        assert!(!fx.iter().any(|e| matches!(e, Effect::AbortCapture { .. })));
+        let fx = m.handle(Input::AudioCaptured {
+            session: SessionId(1),
+            duration_ms: 1_000,
+            rms: 0.1,
+            at: Millis(1_210),
+        });
+        assert_eq!(m.queue_depth(), 1);
+        assert_eq!(starts(&fx), 1);
+    }
 
     #[test]
     fn stale_delivery_failure_after_cancel_produces_no_notice() {

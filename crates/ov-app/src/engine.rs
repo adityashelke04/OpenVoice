@@ -193,7 +193,7 @@ pub struct Engine {
     /// A `OnceLock` because the channel is created after the engine it feeds —
     /// `start` builds the engine, then the channel, then the threads. Set once,
     /// immediately, and never replaced.
-    inputs: std::sync::OnceLock<std::sync::mpsc::Sender<Input>>,
+    inputs: std::sync::OnceLock<InputSender>,
     /// The live keyboard hook, retained so the bound key can be changed while the
     /// app is running.
     ///
@@ -202,26 +202,18 @@ pub struct Engine {
     /// owner there was nothing to call `rebind` on, and that is exactly why
     /// changing the shortcut did nothing until the next launch.
     hotkey: ov_input::WinHotkeyListener,
-    /// How the user's chord is configured, so `toggle` can reproduce it.
-    ///
-    /// Behind a lock rather than a plain field because the Settings screen can
-    /// change it at any moment, and `toggle` must synthesise the press pattern the
-    /// *current* mode expects, not the one that was set at launch.
-    activation: Mutex<ov_core::config::ActivationMode>,
-    /// Whether `toggle` currently believes it is holding the key down.
-    ///
-    /// The session machine is driven entirely by key transitions, and it
-    /// deliberately does not care where they come from. Clicking the bar
-    /// therefore has to produce the same press/release pattern a real key would,
-    /// which means remembering which half of it we are in.
-    synthetic_down: std::sync::atomic::AtomicBool,
-    /// Turns tap patterns on the shortcut into hands-free dictation.
-    ///
-    /// Lives here rather than in the hook closure because two things need it:
-    /// the hook, which feeds it key transitions, and `toggle`, which has to be
-    /// able to close a latched session when the user clicks the Flow Bar. See
-    /// [`crate::taplatch`].
-    latch: Mutex<crate::taplatch::TapLatch>,
+}
+
+#[derive(Clone)]
+struct InputSender(Sender<crate::taplatch::Command>);
+
+impl InputSender {
+    fn send(
+        &self,
+        input: Input,
+    ) -> Result<(), std::sync::mpsc::SendError<crate::taplatch::Command>> {
+        self.0.send(crate::taplatch::Command::Input(input))
+    }
 }
 
 #[derive(Clone)]
@@ -383,13 +375,6 @@ impl Engine {
         self.hotkey.rebind(&chord).map_err(|e| e.to_string())?;
 
         let activation = settings.config.activation;
-        *self.activation.lock().expect("activation mutex") = activation;
-        // Forget any half-finished click-to-talk. In push-to-talk the Flow Bar's
-        // hold spans two clicks, so a mode change landing between them would leave
-        // this set with no second click coming -- and the next click after that
-        // would be read as the release of a press that never happened.
-        self.synthetic_down
-            .store(false, std::sync::atomic::Ordering::SeqCst);
         if let Some(tx) = self.inputs.get() {
             let _ = tx.send(Input::ActivationChanged {
                 mode: activation,
@@ -414,11 +399,6 @@ impl Engine {
     /// idle is a no-op in `session.rs`.
     pub fn cancel(&self) {
         self.cancel_workers();
-        // Escape ends a latched session as surely as a tap does, and the latch
-        // has to be told or it would keep believing the microphone was open --
-        // making the next tap "stop" a session that had already gone.
-        self.latch.lock().expect("latch").forget();
-        self.shell.set_latched(false);
         if let Some(tx) = self.inputs.get() {
             let _ = tx.send(Input::Cancelled { at: self.now() });
         }
@@ -534,19 +514,11 @@ impl Engine {
         self.last_text
             .lock()
             .expect("last text mutex")
-            .remember(session, text.clone());
-        self.sink
-            .inject_guarded(
-                &text,
-                ov_core::types::InjectMode::ClipboardOnly,
-                &Default::default(),
-                &cancelled,
-            )
-            .map_err(|e| e.to_string())?;
+            .remember_recovered(session, text);
         recovery.clear_if_current(session, generation, self.now().0);
         self.notice(
             ov_core::event::NoticeLevel::Info,
-            "Recovered transcript copied. Press Ctrl+V to paste it.",
+            "Recovered transcript is ready in Home. Use Copy when you need it.",
         );
         Ok(())
     }
@@ -571,50 +543,14 @@ impl Engine {
     /// one. The property that makes this window safe is the property that makes
     /// this method possible.
     pub fn toggle(&self) {
-        use ov_core::config::ActivationMode;
-        use std::sync::atomic::Ordering;
-
         let Some(tx) = self.inputs.get() else { return };
-        let at = self.now();
-
-        // A latched session has no key being held, so there is no press pattern
-        // to reproduce -- only a release to deliver. Handled before the mode
-        // below because `synthetic_down` describes a hold this session never had,
-        // and consulting it here would leave the click doing nothing.
-        {
-            let mut latch = self.latch.lock().expect("latch");
-            if latch.is_latched() {
-                latch.forget();
-                self.shell.set_latched(false);
-                let _ = tx.send(Input::HotkeyReleased { at });
-                return;
-            }
-        }
-
-        let press = |tx: &std::sync::mpsc::Sender<Input>| {
-            let app = self.apps.foreground().unwrap_or_default();
-            let profile = self.profile_for(&app.exe);
-            let _ = tx.send(Input::HotkeyPressed { at, app, profile });
-        };
-
-        let activation = *self.activation.lock().expect("activation mutex");
-        match activation {
-            // One complete tap per click. The machine's own toggle handling then
-            // does the starting and stopping.
-            ActivationMode::Toggle => {
-                press(tx);
-                let _ = tx.send(Input::HotkeyReleased { at });
-            }
-            // Hold-to-talk, with the hold spanning two clicks.
-            ActivationMode::PushToTalk => {
-                if self.synthetic_down.swap(true, Ordering::SeqCst) {
-                    self.synthetic_down.store(false, Ordering::SeqCst);
-                    let _ = tx.send(Input::HotkeyReleased { at });
-                } else {
-                    press(tx);
-                }
-            }
-        }
+        let app = self.apps.foreground().unwrap_or_default();
+        let profile = self.profile_for(&app.exe);
+        let _ = tx.0.send(crate::taplatch::Command::Toggle {
+            at: self.now(),
+            app,
+            profile,
+        });
     }
 
     /// Text of the most recent successful dictation.
@@ -679,7 +615,7 @@ impl Engine {
             Err(_) => {
                 self.notice(
                     ov_core::event::NoticeLevel::Warn,
-                    "Copied to clipboard — press Ctrl+V",
+                    "Text is kept in OpenVoice. Open Home and use Copy.",
                 );
             }
         }
@@ -821,12 +757,10 @@ pub fn start(
         shell,
         inputs: std::sync::OnceLock::new(),
         hotkey,
-        activation: Mutex::new(config.activation),
-        synthetic_down: std::sync::atomic::AtomicBool::new(false),
-        latch: Mutex::new(crate::taplatch::TapLatch::default()),
     });
 
-    let (tx, rx) = channel::<Input>();
+    let (tx, rx) = channel::<crate::taplatch::Command>();
+    let tx = InputSender(tx);
     // Hand the engine its own way in, so commands that are not keystrokes — the
     // Flow Bar's cancel button — reach the same state machine the hook does.
     let _ = engine.inputs.set(tx.clone());
@@ -840,74 +774,18 @@ pub fn start(
         engine
             .hotkey
             .start(Arc::new(move |event| {
-                use crate::taplatch::{OnPress, OnRelease};
-                use ov_core::config::ActivationMode;
-
-                let at = e.now();
-
-                // Tap gestures only mean anything in hold-to-talk. In toggle mode
-                // a tap already starts and a second one already stops, so there is
-                // nothing for a latch to add and every reason not to add it.
-                let push_to_talk = matches!(
-                    *e.activation.lock().expect("activation mutex"),
-                    ActivationMode::PushToTalk
-                );
-
-                let pressed = |e: &Engine| {
-                    let app = e.apps.foreground().unwrap_or_default();
-                    let profile = e.profile_for(&app.exe);
-                    Input::HotkeyPressed { at, app, profile }
-                };
-
-                match event {
-                    HotkeyEvent::Pressed if push_to_talk => {
-                        let decision = e.latch.lock().expect("latch").press(at.0);
-                        match decision {
-                            OnPress::Start => {
-                                let _ = tx.send(pressed(&e));
-                            }
-                            OnPress::LatchOpen => {
-                                e.shell.set_latched(true);
-                                // The first tap of the gesture started a session
-                                // and its release stopped it. That stub is a few
-                                // tens of milliseconds of audio nobody asked for,
-                                // and transcribing it would put a spurious notice
-                                // on the bar at the exact moment the user is
-                                // starting to speak. Discard it, then open the
-                                // session that will outlive the key.
-                                let _ = tx.send(Input::Cancelled { at });
-                                let _ = tx.send(pressed(&e));
-                            }
-                            OnPress::StopLatched => {
-                                e.shell.set_latched(false);
-                                let _ = tx.send(Input::HotkeyReleased { at });
-                            }
-                        }
-                    }
-                    HotkeyEvent::Pressed => {
-                        let _ = tx.send(pressed(&e));
-                    }
-                    HotkeyEvent::Released if push_to_talk => {
-                        // Swallowed when it belongs to the press that latched the
-                        // microphone open, or to the tap that closed one.
-                        if e.latch.lock().expect("latch").release(at.0) == OnRelease::Stop {
-                            let _ = tx.send(Input::HotkeyReleased { at });
-                        }
-                    }
-                    HotkeyEvent::Released => {
-                        let _ = tx.send(Input::HotkeyReleased { at });
-                    }
-                    HotkeyEvent::Cancelled => {
-                        e.cancel_workers();
-                        // Before the session work, and unconditional: Escape
-                        // means "back out of whatever this is", and when nothing
-                        // is recording the thing to back out of is the open menu.
-                        e.shell.on_cancel_key();
-                        e.latch.lock().expect("latch").forget();
-                        e.shell.set_latched(false);
-                        let _ = tx.send(Input::Cancelled { at });
-                    }
+                if event == HotkeyEvent::Cancelled {
+                    e.cancel_workers();
+                    e.shell.on_cancel_key();
                 }
+                let app = e.apps.foreground().unwrap_or_default();
+                let profile = e.profile_for(&app.exe);
+                let _ = tx.0.send(crate::taplatch::Command::Hotkey {
+                    event,
+                    at: e.now(),
+                    app,
+                    profile,
+                });
             }))
             .map_err(|e| e.to_string())?;
     }
@@ -938,14 +816,25 @@ pub fn start(
             // wrote a value to disk that nothing ever read, so choosing 5 minutes
             // still cut the recording off at 2.
             let mut machine = SessionMachine::with_activation(limits, activation);
-            for input in rx {
-                let (effects, partial) =
-                    crate::audio_effects::handle_input(&mut machine, &e.audio, input);
-                if let Some((session, pcm)) = partial {
-                    e.keep_recovery(session, pcm, true);
+            let mut controls = crate::taplatch::Controls::new(activation);
+            for command in rx {
+                let was_latched = controls.is_latched();
+                for input in controls.inputs(command) {
+                    let at = input.at();
+                    let (mut effects, partial) =
+                        crate::audio_effects::handle_input(&mut machine, &e.audio, input.clone());
+                    if controls.observe(&input, &effects) {
+                        effects.extend(machine.handle(Input::HotkeyReleased { at }));
+                    }
+                    if let Some((session, pcm)) = partial {
+                        e.keep_recovery(session, pcm, true);
+                    }
+                    for effect in effects {
+                        execute(&e, &tx2, effect);
+                    }
                 }
-                for effect in effects {
-                    execute(&e, &tx2, effect);
+                if was_latched != controls.is_latched() {
+                    e.shell.set_latched(controls.is_latched());
                 }
             }
         });
@@ -957,7 +846,7 @@ pub fn start(
 /// Perform one effect. Anything slow moves to a worker thread so the machine loop
 /// keeps responding — a blocking decode here would make Escape unusable during the
 /// half-second when the user most wants it.
-fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
+fn execute(e: &Arc<Engine>, tx: &InputSender, effect: Effect) {
     match effect {
         Effect::StartCapture { session } => {
             e.cancelled
@@ -1015,11 +904,16 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
 
         Effect::StopCapture { session } => {
             e.begin_trace(session);
+            let stopped = e.audio.request_stop();
             let e = e.clone();
             let tx = tx.clone();
             std::thread::spawn(move || {
                 let at = e.now();
-                let stopped = e.audio.stop();
+                let stopped = stopped.and_then(|wait| {
+                    wait.recv().map_err(|_| {
+                        ov_core::error::Error::Audio("audio thread died while stopping".into())
+                    })?
+                });
                 e.stamp(session, |c, now| c.captured = Some(now));
                 match stopped {
                     Ok(pcm) => {
@@ -1050,11 +944,9 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
             });
         }
 
-        // Cancelling drains the whole machine — the live capture and every queued
-        // session — so every buffer goes with it.
-        Effect::AbortCapture { .. } => {
+        Effect::AbortCapture { session } => {
             let _ = e.audio.abort();
-            e.captured.lock().expect("capture mutex").clear();
+            e.captured.lock().expect("capture mutex").remove(&session);
         }
 
         Effect::Transcribe { session } => {
@@ -1177,10 +1069,7 @@ fn execute(e: &Arc<Engine>, tx: &Sender<Input>, effect: Effect) {
                         });
                     }
                     Err(err) => {
-                        // Not lost: the injector leaves the text on the clipboard. This
-                        // used to be invisible in the log entirely -- the only trace
-                        // was an in-app notice and a history badge, neither of which
-                        // helps once the moment has passed.
+                        // Recovery stays in OpenVoice until the user chooses Copy.
                         tracing::warn!(
                             error = %err,
                             target = %target.exe,
