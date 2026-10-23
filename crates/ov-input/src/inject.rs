@@ -710,6 +710,10 @@ mod tests {
     use super::*;
 
     fn isolated_clipboard(test: &str, run: impl FnOnce()) {
+        // Unnamed window stations are shared per logon session, even across
+        // child processes. Keep these fixtures from borrowing each other's clipboard.
+        static SERIAL: Mutex<()> = Mutex::new(());
+        let _serial = SERIAL.lock().unwrap();
         const CHILD: &str = "OV_ISOLATED_CLIPBOARD_TEST";
         if std::env::var_os(CHILD).is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())

@@ -245,6 +245,8 @@ mod tests {
     use super::*;
     use ov_core::config::Key;
 
+    static SERIAL: Mutex<()> = Mutex::new(());
+
     /// The bug this guards: `rebind` existed, worked, and had no callers, so a new
     /// shortcut reached `settings.toml` and never reached the hook. The hook went
     /// on matching the key it was given at launch.
@@ -253,6 +255,7 @@ mod tests {
     /// the value on disk -- is what decides whether a keystroke is the chord.
     #[test]
     fn rebind_changes_the_key_the_callback_matches() {
+        let _serial = SERIAL.lock().unwrap();
         let listener = WinHotkeyListener::new(Chord {
             key: Key::RightCtrl,
             exclusive: false,
@@ -291,6 +294,7 @@ mod tests {
     /// -- leaving the new key dead until something released the old one.
     #[test]
     fn rebind_clears_a_stale_held_flag() {
+        let _serial = SERIAL.lock().unwrap();
         let listener = WinHotkeyListener::new(Chord {
             key: Key::F13,
             exclusive: false,
