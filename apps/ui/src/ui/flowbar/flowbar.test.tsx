@@ -1,23 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { FlowBar } from "./FlowBar";
 
 const bar = (c: HTMLElement) => c.querySelector<HTMLElement>(".flowbar")!;
 
 describe("FlowBar at rest", () => {
-  it("shows the logo's seven bars and no instruction text", () => {
+  it("shows a quiet microphone and no instruction text", () => {
     const { container } = render(<FlowBar live={false} elapsed="0:00" />);
-    expect(container.querySelectorAll(".flowbar-mark i")).toHaveLength(7);
+    expect(container.querySelector(".flowbar-ready svg")).toBeTruthy();
     expect(container.textContent).not.toMatch(/hold/i);
     expect(container.querySelector(".kbd")).toBeNull();
-  });
-
-  it("draws the mark at the logo's own proportions", () => {
-    const { container } = render(<FlowBar live={false} elapsed="0:00" />);
-    const hs = [...container.querySelectorAll<HTMLElement>(".flowbar-mark i")].map((i) =>
-      Number(i.style.getPropertyValue("--h")),
-    );
-    expect(hs).toEqual([0.22, 0.46, 0.88, 0.62, 1, 0.38, 0.18]);
   });
 
   it("is a button named for its shortcut, only when it can start a dictation", () => {
@@ -36,33 +28,33 @@ describe("FlowBar at rest", () => {
   it("keeps the mark when docked to a side edge", () => {
     const { container } = render(<FlowBar live={false} elapsed="0:00" edge="left" />);
     expect(bar(container).dataset.column).toBe("true");
-    expect(container.querySelectorAll(".flowbar-mark i")).toHaveLength(7);
+    expect(container.querySelector(".flowbar-ready svg")).toBeTruthy();
   });
 
   it("keeps the mark when compact", () => {
     const { container } = render(<FlowBar live={false} mini elapsed="0:00" />);
-    expect(container.querySelectorAll(".flowbar-mark i")).toHaveLength(7);
+    expect(container.querySelector(".flowbar-ready svg")).toBeTruthy();
   });
 });
 
 describe("FlowBar while listening", () => {
-  it("renders a 26-bar wave, the timer and discard", () => {
+  it("renders ten responsive bars and keeps the held-session surface minimal", () => {
     let cancelled = 0;
     const { container } = render(
-      <FlowBar live level={0.5} elapsed="0:04" onCancel={() => cancelled++} />,
+      <FlowBar live latched level={0.5} elapsed="0:04" onCancel={() => cancelled++} />,
     );
-    expect(container.querySelectorAll(".flowbar-wave .wave-bar")).toHaveLength(26);
-    expect(screen.getByText("0:04")).toBeTruthy();
+    expect(container.querySelectorAll(".flowbar-wave .wave-bar")).toHaveLength(10);
+    expect(container.querySelector(".flowbar-time")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Discard this dictation" }));
     expect(cancelled).toBe(1);
     expect(container.querySelector(".flowbar-mark")).toBeNull();
   });
 
-  it("compact: nine bars, no timer, no discard", () => {
+  it("compact: ten bars, no timer, no discard", () => {
     const { container } = render(
       <FlowBar live mini level={0.5} elapsed="0:04" onCancel={() => {}} />,
     );
-    expect(container.querySelectorAll(".wave-bar")).toHaveLength(9);
+    expect(container.querySelectorAll(".wave-bar")).toHaveLength(10);
     expect(screen.queryByText("0:04")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
   });
@@ -76,15 +68,22 @@ describe("FlowBar while listening", () => {
 });
 
 describe("FlowBar between and after", () => {
-  it("working says Writing over a running thread", () => {
+  it("distinguishes local transcription from text delivery", () => {
+    const { rerender } = render(<FlowBar live={false} working workingPhase="transcribing" elapsed="0:00" />);
+    expect(screen.getByRole("status", { name: "Transcribing" })).toBeTruthy();
+    rerender(<FlowBar live={false} working workingPhase="injecting" elapsed="0:00" />);
+    expect(screen.getByRole("status", { name: "Pasting" })).toBeTruthy();
+    expect(screen.queryByText("Transcribing")).toBeNull();
+  });
+  it("processing retains the waveform with an eight-tick spinner", () => {
     const { container } = render(<FlowBar live={false} working elapsed="0:00" />);
-    expect(screen.getByText("Writing")).toBeTruthy();
-    expect(container.querySelector(".flowbar-thread")).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Writing" })).toBeTruthy();
+    expect(container.querySelectorAll(".flowbar-spinner i")).toHaveLength(8);
   });
 
-  it("working, compact: the mark alone", () => {
+  it("working, compact: the same informative spinner", () => {
     const { container } = render(<FlowBar live={false} working mini elapsed="0:00" />);
-    expect(container.querySelectorAll(".flowbar-mark i")).toHaveLength(7);
+    expect(container.querySelectorAll(".flowbar-spinner i")).toHaveLength(8);
     expect(screen.queryByText("Writing")).toBeNull();
   });
 
@@ -157,5 +156,26 @@ describe("FlowBar progress rail", () => {
     const { container } = render(<FlowBar live={false} status="loading" progress={0.4} elapsed="0:00" />);
     const rail = container.querySelector(".flowbar-rail")!;
     expect(rail.parentElement?.classList.contains("flowbar")).toBe(true);
+  });
+});
+
+describe("Wispr recording controls", () => {
+  it("keeps ten bars and distinct stop/discard actions in hands-free mode", () => {
+    const stop = vi.fn();
+    const cancel = vi.fn();
+    const bubble = vi.fn();
+    const { container } = render(<div onClick={bubble}><FlowBar live latched elapsed="0:04" onToggle={stop} onCancel={cancel} /></div>);
+    expect(container.querySelectorAll(".flowbar-wave .wave-bar")).toHaveLength(10);
+    fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+    expect(stop).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(bubble).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Discard this dictation" }));
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+  it.each(["left", "right"] as const)("makes hands-free recording explicit on %s dock", (edge) => {
+    render(<FlowBar live latched edge={edge} elapsed="0:04" onToggle={() => {}} />);
+    expect(screen.getByRole("button", { name: "Stop dictation" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Hands-free" })).toBeTruthy();
   });
 });

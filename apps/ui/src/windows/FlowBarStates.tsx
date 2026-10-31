@@ -17,7 +17,7 @@
  * misrepresents the component. See `useSpokenEnvelope`.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FlowBar } from "../ui";
 import { FlowIcon } from "../ui/flowbar/icons";
 import { geometry } from "./geometry";
@@ -56,7 +56,7 @@ function useSpokenEnvelope(active: boolean) {
       const phrase = Math.max(0, Math.sin(t * 0.42) * 0.7 + 0.45);
       const syllable = 0.5 + 0.5 * Math.sin(t * 3.6 * Math.PI * 2 * 0.5);
       const jitter = 0.85 + 0.15 * Math.sin(t * 11.3);
-      level.current = Math.min(1, phrase * syllable * jitter);
+      level.current = Math.min(1, phrase * syllable * jitter) * .1;
     };
 
     raf = requestAnimationFrame(tick);
@@ -86,7 +86,7 @@ const PLATES = [
 function Row({
   label,
   width,
-  height = 40,
+  height = 30,
   freeze,
   hover,
   children,
@@ -152,10 +152,11 @@ export function FlowBarStates() {
         <h1 className="fbs-title">The Flow Bar</h1>
         <p className="fbs-deck">
           Every state, over the surfaces it actually floats above, each at the size the real
-          window is clipped to. The bar is the same in every Hub theme: colour appears only
-          while the microphone is open.
+          window is clipped to. The bar is the same in every Hub theme: the live waveform responds to speech and the controls distinguish held and hands-free recording.
         </p>
       </header>
+
+      <FlowBarDemo />
 
       {PLATES.map((plate) => (
         <section key={plate.id} className="fbs-plate-section">
@@ -173,12 +174,12 @@ export function FlowBarStates() {
               <FlowBar live={false} elapsed="0:00" onToggle={noop} />
             </Row>
             <Row label="Listening" {...size(box({ mode: "live" }))}>
-              <FlowBar live levelRef={live} elapsed="0:04" onCancel={noop} />
+              <FlowBar live levelRef={live} elapsed="0:04" onCancel={noop} onToggle={noop} />
             </Row>
             {/* Hands-free and held must never read the same: only one of them
                 keeps recording when you let go. */}
-            <Row label="Hands-free" {...size(box({ mode: "live" }))}>
-              <FlowBar live latched levelRef={live} elapsed="1:12" onCancel={noop} />
+            <Row label="Hands-free" {...size(box({ mode: "live", latched: true }))}>
+              <FlowBar live latched levelRef={live} elapsed="1:12" onCancel={noop} onToggle={noop} />
             </Row>
             <Row label="Writing" {...size(box({ mode: "working" }))}>
               <FlowBar live={false} working elapsed="0:00" />
@@ -239,7 +240,10 @@ export function FlowBarStates() {
               <FlowBar live={false} edge="left" elapsed="0:00" />
             </Row>
             <Row label="Docked, live" {...size(box({ mode: "live", edge: "left" }))}>
-              <FlowBar live edge="left" levelRef={live} elapsed="0:04" />
+              <FlowBar live edge="left" levelRef={live} elapsed="0:04" onToggle={noop} />
+            </Row>
+            <Row label="Docked, hands-free" {...size(box({ mode: "live", edge: "left", latched: true }))}>
+              <FlowBar live latched edge="left" levelRef={live} elapsed="0:04" onToggle={noop} onCancel={noop} />
             </Row>
             <Row label="Docked, writing" {...size(box({ mode: "working", edge: "left" }))}>
               <FlowBar live={false} edge="left" working elapsed="0:00" />
@@ -268,7 +272,7 @@ export function FlowBarStates() {
                 </div>
               ))}
             </div>
-            <div style={{ width: 280, height: 40 }}>
+            <div style={{ width: 280, height: 30 }}>
               <FlowBar live={false} elapsed="0:00" onToggle={noop} />
             </div>
           </div>
@@ -280,7 +284,7 @@ export function FlowBarStates() {
         <div className="fbs-plate-head">
           <span className="fbs-plate-label">Actual size</span>
           <span className="fbs-plate-hint">
-            everything above is magnified; this is what you glance at
+            the same capsule over a document, at its actual size
           </span>
         </div>
         <div className="fbs-truth">
@@ -290,12 +294,34 @@ export function FlowBarStates() {
             know if you would like the underlying figures as well.
           </p>
           <div className="fbs-truth-bar">
-            <div style={{ width: 240, height: 40 }}>
-              <FlowBar live levelRef={live} elapsed="0:04" onCancel={noop} />
+            <div style={{ width: 73, height: 30 }}>
+              <FlowBar live levelRef={live} elapsed="0:04" onCancel={noop} onToggle={noop} />
             </div>
           </div>
         </div>
       </section>
     </div>
   );
+}
+
+/** Interactive fixture for interrupted morphs, controls and keyboard checks. */
+function FlowBarDemo() {
+  const [state, setState] = useState("rest");
+  const live = state === "held" || state === "handsfree";
+  const level = useSpokenEnvelope(live);
+  const working = state === "working";
+  const message = state === "clipboard" ? "Copied to clipboard" : state === "failed" ? "No text was produced" : undefined;
+  const geo = geometry({ mode: live ? "live" : working ? "working" : message ? "notice" : "idle", mini: false, edge: "bottom", menu: false, collapsed: state === "rest", latched: state === "handsfree", text: message });
+  return <section className="fbs-demo" data-demo-state={state} aria-label="Interactive flow bar preview">
+    <div className="fbs-demo-controls">{["rest", "ready", "held", "handsfree", "working", "delivered", "clipboard", "failed"].map(value =>
+      <button type="button" key={value} data-state={value} aria-pressed={state === value} onClick={() => setState(value)}>{value}</button>)}</div>
+    <div className="fbs-demo-stage">
+      <div className="overlay-hit" data-collapsed={state === "rest"} style={{ width: geo.w, height: geo.h }}>
+        <span className="flowbar-line" aria-hidden />
+        <FlowBar live={live} latched={state === "handsfree"} working={working} elapsed="0:04" levelRef={level}
+          confirm={state === "delivered"} failed={state === "failed"} message={message}
+          onCancel={() => setState("ready")} onToggle={() => setState(live ? "working" : "handsfree")} />
+      </div>
+    </div>
+  </section>;
 }

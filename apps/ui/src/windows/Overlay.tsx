@@ -14,7 +14,8 @@ import { FlowBar, flowMode, flowSpeaks, flowText } from "../ui";
 import type { FlowEdge, FlowStatus } from "../ui";
 import { FlowIcon } from "../ui/flowbar/icons";
 import { PILL_H, geometry } from "./geometry";
-import { playCompletionChime, playStartTone } from "../ui/sound";
+import { useFlowSounds } from "./useFlowSounds";
+import { useFlowConfirmation } from "./useFlowConfirmation";
 import { elapsed, useLiveEngine } from "../engine/useLiveEngine";
 import { useSettings } from "../screens/Settings";
 import {
@@ -649,7 +650,7 @@ export function Overlay() {
 
   const live = view.state === "listening";
   const working = view.state === "transcribing" || view.state === "injecting";
-  const soundEnabled = settings?.config.sound_enabled ?? true;
+  const soundEnabled = settings?.config.sound_enabled === true;
 
   /**
    * Whether the speech engine is actually up, which this window used to have no
@@ -669,54 +670,8 @@ export function Overlay() {
       ? view.download.done / view.download.total
       : undefined;
 
-  // Two tones: one when the hotkey engages, one when a dictation finishes and
-  // actually landed. Tracked off the raw state transition rather than the
-  // `live`/`working` booleans above so a clipboard-fallback completion --
-  // which settles to "idle" exactly the same way a real success does, per
-  // `useLiveEngine`'s reducer -- doesn't get the success chime just because it
-  // isn't a hard failure. `view.notice` is set the moment that fallback
-  // happens and nothing in this window clears it, so its presence at the
-  // instant of the idle transition is a reliable signal the completion wasn't
-  // clean, independent of exactly when the Notice and Finished events arrive
-  // relative to each other.
-  const prevState = useRef(view.state);
-  const [confirm, setConfirm] = useState(false);
-  useEffect(() => {
-    const prev = prevState.current;
-    prevState.current = view.state;
-
-    // "Delivered" specifically, not "reached idle without complaining". A
-    // dictation cancelled mid-transcribe settles to idle exactly like a
-    // successful one, so without the outcome this congratulated the user on
-    // landing text they had just thrown away.
-    // The outcome alone decides this now. It used to also require no notice,
-    // as a proxy for "nothing went wrong" — but a notice from a *previous*
-    // queued session arrives after this one started and is never cleared, so a
-    // clean dictation following a clipboard fallback silently lost both its
-    // ring and its chime. `lastOutcome` only ever reflects the current session.
-    const landed =
-      (prev === "transcribing" || prev === "injecting") &&
-      view.state === "idle" &&
-      view.lastOutcome === "delivered";
-
-    // The visual half of the same moment the chime already marks. It runs even
-    // with sound off — muting the app should not cost the confirmation.
-    if (landed) {
-      setConfirm(true);
-      // Outlives the 420ms ring, so the animation is never cut off mid-flight.
-      const t = window.setTimeout(() => setConfirm(false), 480);
-      return () => window.clearTimeout(t);
-    }
-
-    if (!soundEnabled) return;
-    if (prev !== "listening" && view.state === "listening") playStartTone();
-  }, [view.state, view.notice, view.lastOutcome, soundEnabled]);
-
-  // The chime, kept on its own so the effect above can return a cleanup for the
-  // confirm timer without swallowing it.
-  useEffect(() => {
-    if (confirm && soundEnabled) playCompletionChime();
-  }, [confirm, soundEnabled]);
+  useFlowSounds(soundEnabled, latched);
+  const confirm = useFlowConfirmation(view.state, view.lastOutcome, view.session);
 
   /**
    * The two endings that are not silent success, and the one thing this window
@@ -1175,6 +1130,7 @@ export function Overlay() {
   // shape, and this stays what it always meant: where the window is going.
   const geo = geometry({
     mode,
+    latched,
     mini: compact,
     collapsed,
     edge,
@@ -1493,6 +1449,7 @@ export function Overlay() {
           elapsed={elapsed(view.elapsedMs)}
           hint={hint}
           working={working}
+          workingPhase={view.state === "transcribing" || view.state === "injecting" ? view.state : undefined}
           failed={failed && alerting}
           message={messageText}
           action={pasteAction}

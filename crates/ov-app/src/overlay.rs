@@ -58,7 +58,7 @@ pub const OVERLAY_H: f64 = 640.0;
 pub const PILL_TOP: f64 = 300.0;
 /// The pill's height. Must equal `PILL_H` in `Overlay.tsx` and `--pill-h` in
 /// `overlay.css`; the three are one identity split across three languages.
-pub const PILL_H: f64 = 40.0;
+pub const PILL_H: f64 = 30.0;
 
 /// The window origin that puts the pill's anchor where it belongs.
 ///
@@ -2305,7 +2305,7 @@ mod placement_tests {
     fn the_bar_sits_one_gap_above_the_taskbar() {
         let (_, top) = center_anchor(WORK.0, WORK.1);
         assert_eq!(top + PILL_H, 1032.0 - BOTTOM_GAP, "pill bottom");
-        assert_eq!(top, 976.0);
+        assert_eq!(top, 986.0);
     }
 
     /// A taskbar set to auto-hide leaves the work area equal to the whole screen.

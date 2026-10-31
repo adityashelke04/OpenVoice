@@ -100,3 +100,6 @@ Desktop.ini
 # (scripts/render-reference.mjs, scripts/twin-check.mjs) and run to ~30 MB each.
 docs/redesign/reference/png/
 docs/redesign/twin/
+
+# Optional user-supplied reference recordings; repository builds synthesize cues.
+/apps/ui/public/flow-sounds/

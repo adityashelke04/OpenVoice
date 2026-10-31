@@ -362,7 +362,7 @@ export function checkContentCentering(
       // Every top-level piece of content the bar can show, in any mode. Keep in
       // step with FlowBar.tsx: a name missing here is content this check cannot
       // see, and a bar whose content it cannot see is a check that never fires.
-      ".flowbar-mark, .flowbar-lock, .flowbar-wave, .flowbar-time, .flowbar-cancel, " +
+      ".flowbar-ready, .flowbar-go, .flowbar-wave, .flowbar-stop, .flowbar-cancel, .flowbar-spinner, " +
         ".flowbar-thread-wrap, .flowbar-icon, .flowbar-msg, .flowbar-pct, .flowbar-action",
     ),
   ).filter((e) => {

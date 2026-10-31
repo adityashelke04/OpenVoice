@@ -21,7 +21,7 @@ function lay(root: HTMLElement, boxes: Record<string, [number, number]>) {
 describe("checkContentCentering", () => {
   it("finds the resting mark", () => {
     const { container } = render(<FlowBar live={false} elapsed="0:00" />);
-    lay(container, { ".flowbar": [0, 88], ".flowbar-mark": [24, 63] });
+    lay(container, { ".flowbar": [0, 88], ".flowbar-ready": [24, 63] });
     const r = checkContentCentering(container as HTMLElement);
     expect(r).not.toBeNull();
     expect(r!.leftGap).toBe(24);
@@ -38,7 +38,7 @@ describe("checkContentCentering", () => {
 
   it("finds the writing thread", () => {
     const { container } = render(<FlowBar live={false} working elapsed="0:00" />);
-    lay(container, { ".flowbar": [0, 156], ".flowbar-thread-wrap": [13, 143] });
+    lay(container, { ".flowbar": [0, 156], ".flowbar-wave": [13, 143] });
     expect(checkContentCentering(container as HTMLElement)?.centered).toBe(true);
   });
 });

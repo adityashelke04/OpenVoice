@@ -74,8 +74,8 @@ describe("flowbar.css", () => {
     }
   });
 
-  it("draws the approved spectrum", () => {
-    for (const hex of ["#44d62c", "#52e3b0", "#5ad7f0", "#8aa8ff"]) {
+  it("uses the measured neutral capsule and lavender processing indicator", () => {
+    for (const hex of ["#000", "#30302f", "#a394c7"]) {
       expect(css.toLowerCase()).toContain(hex);
     }
   });
