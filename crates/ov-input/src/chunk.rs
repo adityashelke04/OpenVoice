@@ -22,6 +22,7 @@
 /// mid-run, because the alternative is overflowing the limit.
 #[must_use]
 pub fn paste_chunks(text: &str, max_chars: usize, max_line_breaks: usize) -> Vec<&str> {
+    // A zero-sized chunk would leave `rest` unchanged and prevent the loop from advancing.
     let max_chars = max_chars.max(1);
     let mut pieces = Vec::new();
     let mut rest = text;
