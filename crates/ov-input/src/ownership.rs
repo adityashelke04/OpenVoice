@@ -9,6 +9,7 @@ pub(crate) struct Lease<T> {
 
 impl<T> Lease<T> {
     pub fn take_for_restore(&mut self, generation: u64, current: u32) -> Option<T> {
+        // A stale restore must not consume the snapshot retained by a newer dictation.
         if generation != self.generation {
             return None;
         }
