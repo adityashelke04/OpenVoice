@@ -99,6 +99,7 @@ pub fn import_jsonl(store: &SqliteStore, path: impl AsRef<Path>) -> Result<usize
         imported += 1;
     }
 
+    // Commit the marker with the rows: if archiving fails, a retry must not import them twice.
     tx.execute(
         "INSERT OR IGNORE INTO history_import(source) VALUES (?1)",
         [&source],
