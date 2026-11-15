@@ -133,6 +133,7 @@ impl StreamingResampler {
             out.extend_from_slice(&self.block[0][..produced]);
             self.emitted += produced;
         }
+        // Flushing feeds padded silence; discard only its excess output, not earlier audio in out.
         if self.emitted > expected {
             out.truncate(out.len() - (self.emitted - expected));
             self.emitted = expected;
