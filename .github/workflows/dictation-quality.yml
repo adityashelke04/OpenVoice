@@ -10,7 +10,7 @@ jobs:
   real-quality:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -22,7 +22,7 @@ jobs:
           if (-not $manifest.approved -or $manifest.personal -or $manifest.clips.Count -eq 0) {
             throw 'BLOCKED: approved redistributable real dictation fixtures are missing. Empty quality data cannot pass.'
           }
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: models/parakeet-tdt-0.6b-v2
           key: parakeet-v2-157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad
