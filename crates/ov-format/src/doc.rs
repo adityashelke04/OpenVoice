@@ -184,6 +184,8 @@ impl Doc {
     #[must_use]
     pub fn window(&self, i: usize, n: usize) -> Option<Vec<String>> {
         let mut out = Vec::with_capacity(n);
+        // Match contiguous words only: a literal or line break is a boundary, not
+        // something to skip while assembling a multi-word command or dictionary phrase.
         for tok in self.toks.get(i..)?.iter().take(n) {
             out.push(tok.as_word_lower()?);
         }
